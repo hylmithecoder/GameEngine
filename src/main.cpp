@@ -1,7 +1,7 @@
 #define _WIN32_WINNT 0x0A00
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
-#include <SDL_syswm.h>
+// #include <SDL_syswm.h>
 #include <SDL_ttf.h>
 #include "header/MainWindow.hpp"
 #include "scripts/Check_Environment.cpp"
@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
 
     MainWindow window("GameEngine SDL", 800, 600);
 
-    window.assets.load_assets();
+    // window.assets.load_assets();
 
     while (window.running()) {
         window.handleEvents();
@@ -34,3 +34,7 @@ int main(int argc, char* argv[]) {
     SDL_Quit();
     return 0;
 }
+
+// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+//     return main(__argc, __argv);
+// }

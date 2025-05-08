@@ -8,11 +8,13 @@
 #include <fstream>
 #include <libavformat/avformat.h>
 #include <stb_image.h>
-// #include <backends/imgui_impl_opengl3.h> // Include the OpenGL3 backend header
+#include <SDL_opengl.h>
+#include "assets.hpp"
+#include <backends/imgui_impl_opengl3.h> // Include the OpenGL3 backend header
 using namespace std;
 
 MainWindow::MainWindow(const char* title, int width, int height)
-    : window(nullptr), renderer(nullptr), font(nullptr),
+    : window(nullptr), renderer(nullptr), glContext(nullptr), font(nullptr),
       isRunning(false), windowWidth(width), windowHeight(height),
       fullscreen(false), showSecondary(false), 
       darkTheme(true), currentTab(0), videoPlayer(new VideoPlayer()) {
@@ -40,51 +42,51 @@ void MainWindow::set_window_icon() {
     }
 }
 
-void MainWindow::set_mainbackground() {
-    // Load image using stb_image
-    int width, height, channels;
-    unsigned char* imageData = stbi_load("assets/images/backgrounds/shiroko_bluearchive.jpg", 
-                                       &width, &height, &channels, STBI_rgb);
+// void MainWindow::set_mainbackground() {
+//     // Load image using stb_image
+//     int width, height, channels;
+//     unsigned char* imageData = stbi_load("assets/images/backgrounds/shiroko_bluearchive.jpg", 
+//                                        &width, &height, &channels, STBI_rgb);
     
-    if (!imageData) {
-        cerr << "Failed to load background image: " << stbi_failure_reason() << endl;
-        return;
-    }
+//     if (!imageData) {
+//         cerr << "Failed to load background image: " << stbi_failure_reason() << endl;
+//         return;
+//     }
 
-    // Create SDL texture directly from the loaded pixels
-    SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(imageData, width, height, 
-                                                   24, width * 3,
-                                                   0x0000FF, 0x00FF00, 0xFF0000, 0);
+//     // Create SDL texture directly from the loaded pixels
+//     SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(imageData, width, height, 
+//                                                    24, width * 3,
+//                                                    0x0000FF, 0x00FF00, 0xFF0000, 0);
     
-    if (!surface) {
-        cerr << "Failed to create surface: " << SDL_GetError() << endl;
-        stbi_image_free(imageData);
-        return;
-    }
+//     if (!surface) {
+//         cerr << "Failed to create surface: " << SDL_GetError() << endl;
+//         stbi_image_free(imageData);
+//         return;
+//     }
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (!texture) {
-        cerr << "Failed to create texture: " << SDL_GetError() << endl;
-        SDL_FreeSurface(surface);
-        stbi_image_free(imageData);
-        return;
-    }
+//     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+//     if (!texture) {
+//         cerr << "Failed to create texture: " << SDL_GetError() << endl;
+//         SDL_FreeSurface(surface);
+//         stbi_image_free(imageData);
+//         return;
+//     }
 
-    // Get window size
-    int windowWidth, windowHeight;
-    SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+//     // Get window size
+//     int windowWidth, windowHeight;
+//     SDL_GetWindowSize(window, &windowWidth, &windowHeight);
 
-    // Create destination rectangle
-    SDL_Rect dstRect = {0, 0, windowWidth, windowHeight};
+//     // Create destination rectangle
+//     SDL_Rect dstRect = {0, 0, windowWidth, windowHeight};
 
-    // Render the background
-    SDL_RenderCopy(renderer, texture, NULL, &dstRect);
+//     // Render the background
+//     SDL_RenderCopy(renderer, texture, NULL, &dstRect);
 
-    // Cleanup
-    SDL_DestroyTexture(texture);
-    SDL_FreeSurface(surface);
-    stbi_image_free(imageData);
-}
+//     // Cleanup
+//     SDL_DestroyTexture(texture);
+//     SDL_FreeSurface(surface);
+//     stbi_image_free(imageData);
+// }
 
 bool MainWindow::init(const char* title) {
     // Inisialisasi SDL dengan dukungan video dan audio
@@ -102,20 +104,31 @@ bool MainWindow::init(const char* title) {
     window = SDL_CreateWindow(title ? title : "GameEngine Studio",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         windowWidth, windowHeight, 
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     
     if (!window) {
         cerr << "Window could not be created! SDL Error: " << SDL_GetError() << endl;
         return false;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // if (!renderer) {
+    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+    //     SDL_DestroyWindow(window);
+    //     SDL_Quit();
+    //     return false;
+    // }
+
+    // Aktifkan OpenGL
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    glContext = SDL_GL_CreateContext(window);
+    if (!glContext) {
+        std::cerr << "OpenGL context could not be created! SDL Error: " << SDL_GetError() << std::endl;
         return false;
     }
+    SDL_GL_SetSwapInterval(1);  // VSync
 
     // Set window icon
     set_window_icon();
@@ -146,10 +159,23 @@ bool MainWindow::init(const char* title) {
     #endif
     
     // Set theme
+    // ImGui::StyleColorsDark();
     setTheme(darkTheme);
     
-    ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
-    ImGui_ImplSDLRenderer2_Init(renderer);
+    // ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
+    cout << glContext << MainWindow::glContext << endl;
+    ImGui_ImplSDL2_InitForOpenGL(window, glContext);
+    ImGui_ImplOpenGL3_Init("#version 130");
+
+    Assets assets;
+    TextureData backgroundTexture;
+    if (!assets.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &backgroundTexture)) {
+        cerr << "Failed to load background image!" << endl;
+    }
+    else {
+        cout << "Background image loaded successfully!" << endl;
+    }
+    // ImGui_ImplSDLRenderer2_Init(renderer);
     // set_mainbackground();
 
     return true;
@@ -1052,9 +1078,15 @@ void MainWindow::handleEvents() {
 }
 
 void MainWindow::update() {
-    ImGui_ImplSDLRenderer2_NewFrame();
+    // ImGui_ImplSDLRenderer2_NewFrame();
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+        if (event.type == SDL_QUIT)
+            isRunning = false;
+    }
+    ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
-    // ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();
 
     // Dockspace
@@ -1347,26 +1379,35 @@ void MainWindow::update() {
 
 void MainWindow::render() {
     // Clear screen
-    SDL_SetRenderDrawColor(renderer, 24, 25, 34, 255);
-    SDL_RenderClear(renderer);
+    // SDL_SetRenderDrawColor(renderer, 24, 25, 34, 255);
+    // SDL_RenderClear(renderer);
+    glViewport(0, 0, windowWidth, windowHeight);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-    set_mainbackground();
+    // set_mainbackground();
     // Render ImGui
     ImGui::Render();
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
+    // ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    SDL_GL_SwapWindow(window);
 
     // set_mainbackground();
 
     // Present renderer
-    SDL_RenderPresent(renderer);
+    // SDL_RenderPresent(renderer);
 }
 
 void MainWindow::clean() {
-    ImGui_ImplSDLRenderer2_Shutdown();
+    // ImGui_ImplSDLRenderer2_Shutdown();
+    ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
 
-    SDL_DestroyRenderer(renderer);
+    if (glContext)
+    SDL_GL_DeleteContext(glContext);
+
+    // SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
 
     if (audioDeviceID) {

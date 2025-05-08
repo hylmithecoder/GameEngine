@@ -1,12 +1,34 @@
-#include <stb_image.h>
-#include <GL/gl.h> // Include OpenGL header
+#pragma once
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_opengl3.h"
+#include <stdio.h>
+#include <SDL_main.h>
+#include <SDL.h>
+#include <windows.h>
+// Untuk OpenGL 3
+#if defined(IMGUI_IMPL_OPENGL_ES2)
+#include <SDL_opengles2.h>
+#else
 #include <SDL_opengl.h>
-#include <GL/glext.h>
-#include <iostream>
+#endif
 
-class Assets
-{
-    public:
-        void load_assets();
-        GLuint backgroundTexture;
+
+struct TextureData {
+    GLuint TextureID = 0;
+    int Width = 0;
+    int Height = 0;
+};
+
+class Assets {
+public:
+    // Assets();
+    // ~Assets();
+
+    bool LoadTextureFromFile(const char* filename, TextureData* out_texture);
+
+    // Variabel
+    // GLuint TextureID = 0;
+    // int Width = 0;
+    // int Height = 0;
 };

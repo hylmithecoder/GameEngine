@@ -29,6 +29,7 @@ private:
 
     SDL_Window* window;
     SDL_Renderer* renderer;
+    SDL_GLContext glContext;
     TTF_Font* font;
 
     bool isRunning;

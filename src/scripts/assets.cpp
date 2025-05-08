@@ -1,166 +1,177 @@
-#include "imgui.h"
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
-#include <stdio.h>
-#include <GL/gl3w.h>    // atau #include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#include "assets.hpp"
 
 // Untuk memuat gambar
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
-// Struktur untuk menyimpan data tekstur
-struct TextureData {
-    GLuint TextureID = 0;  // ID tekstur OpenGL
-    int Width = 0;         // Lebar gambar
-    int Height = 0;        // Tinggi gambar
-};
-
-// Fungsi untuk memuat gambar sebagai tekstur
-bool LoadTextureFromFile(const char* filename, TextureData* out_texture)
+// Fungsi untuk memuat tekstur dari file gambar
+bool Assets::LoadTextureFromFile(const char* filename, TextureData* out_texture)
 {
     // Memuat gambar dari file
-    int image_width = 0;
-    int image_height = 0;
-    int channels = 0;
-    
-    // Memuat gambar dengan stb_image
-    unsigned char* image_data = stbi_load(filename, &image_width, &image_height, &channels, 4);
-    if (image_data == NULL)
+    int width, height, channels;
+    unsigned char* data = stbi_load(filename, &width, &height, &channels, 4);
+    if (data == NULL) {
+        fprintf(stderr, "Error: Failed to load image: %s\n", filename);
         return false;
+    }
 
-    // Membuat tekstur OpenGL
-    GLuint image_texture;
-    glGenTextures(1, &image_texture);
-    glBindTexture(GL_TEXTURE_2D, image_texture);
-
-    // Setup parameter filtering tekstur
+    // Buat tekstur OpenGL
+    GLuint texture_id;
+    glGenTextures(1, &texture_id);
+    glBindTexture(GL_TEXTURE_2D, texture_id);
+    
+    // Setup parameter tekstur
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // Upload data gambar ke tekstur
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
     
-    // Bebaskan memori gambar setelah dikonversi ke tekstur
-    stbi_image_free(image_data);
-
-    // Simpan data tekstur
-    out_texture->TextureID = image_texture;
-    out_texture->Width = image_width;
-    out_texture->Height = image_height;
-
+    // Upload data gambar ke GPU
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    
+    // Simpan informasi tekstur dan bebaskan memori gambar
+    *out_texture = {texture_id, width, height};
+    stbi_image_free(data);
+    
     return true;
 }
 
-int main(int, char**)
-{
-    // Setup window GLFW
-    if (!glfwInit())
-        return 1;
-    
-    // Setting versi OpenGL
-    const char* glsl_version = "#version 130";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-    
-    // Buat window dengan GLFW
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "ImGui dengan Background Image", NULL, NULL);
-    if (window == NULL)
-        return 1;
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
-    
-    // Initialize OpenGL loader
-    bool err = gl3wInit() != 0;
-    if (err)
-    {
-        fprintf(stderr, "Failed to initialize OpenGL loader!\n");
-        return 1;
-    }
+// int main(int argc, char* argv[])
+// {
+//     // Setup SDL
+//     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
+//         printf("Error: %s\n", SDL_GetError());
+//         return -1;
+//     }
 
-    // Setup Dear ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    
-    // Setup ImGui style
-    ImGui::StyleColorsDark();
-    
-    // Setup Platform/Renderer bindings
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init(glsl_version);
+//     // Decide GL+GLSL versions
+// #if defined(IMGUI_IMPL_OPENGL_ES2)
+//     // GL ES 2.0
+//     const char* glsl_version = "#version 100";
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+// #elif defined(__APPLE__)
+//     // GL 3.2 Core + GLSL 150
+//     const char* glsl_version = "#version 150";
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+// #else
+//     // GL 3.0 + GLSL 130
+//     const char* glsl_version = "#version 130";
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+//     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+// #endif
 
-    // Memuat gambar background
-    TextureData background_texture;
-    bool ret = LoadTextureFromFile("background.jpg", &background_texture);
-    if (!ret) {
-        fprintf(stderr, "Gagal memuat gambar background!\n");
-        return 1;
-    }
+//     // Create window with graphics context
+//     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+//     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+//     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+//     SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+//     SDL_Window* window = SDL_CreateWindow("Dear ImGui SDL2+OpenGL3 example", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
+//     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+//     SDL_GL_MakeCurrent(window, gl_context);
+//     SDL_GL_SetSwapInterval(1); // Enable vsync
 
-    // Main loop
-    while (!glfwWindowShouldClose(window))
-    {
-        // Poll dan handle events
-        glfwPollEvents();
+//     // Setup Dear ImGui context
+//     IMGUI_CHECKVERSION();
+//     ImGui::CreateContext();
+//     ImGuiIO& io = ImGui::GetIO(); (void)io;
+//     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+//     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 
-        // Start ImGui frame
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+//     // Setup Dear ImGui style
+//     ImGui::StyleColorsDark();
 
-        // Buat fullscreen window untuk background
-        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::Begin("Background", nullptr, 
-            ImGuiWindowFlags_NoDecoration | 
-            ImGuiWindowFlags_NoInputs | 
-            ImGuiWindowFlags_NoNav | 
-            ImGuiWindowFlags_NoBringToFrontOnFocus | 
-            ImGuiWindowFlags_NoFocusOnAppearing | 
-            ImGuiWindowFlags_NoMove);
-        
-        // Menggambar gambar background sebagai tekstur
-        // Mendapatkan ukuran window
-        ImVec2 window_size = ImGui::GetContentRegionAvail();
-        
-        // Menampilkan gambar yang telah dimuat sebagai background
-        ImGui::Image((void*)(intptr_t)background_texture.TextureID, window_size);
-        
-        ImGui::End();
-        ImGui::PopStyleVar(2);
+//     // Setup Platform/Renderer backends
+//     ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
+//     ImGui_ImplOpenGL3_Init(glsl_version);
 
-        // Buat window ImGui normal di atas background
-        ImGui::Begin("Window dengan Background");
-        ImGui::Text("Ini adalah contoh window ImGui dengan gambar background");
-        ImGui::End();
+//     // Load background image
+//     TextureData background_texture;
+//     Assets asset;
+//     bool ret = asset.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &background_texture);
+//     if (!ret) {
+//         fprintf(stderr, "Failed to load background image!\n");
+//         // Continue anyway, just won't have a background
+//     }
 
-        // Rendering
-        ImGui::Render();
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
-        glViewport(0, 0, display_w, display_h);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+//     // Main loop
+//     bool done = false;
+//     while (!done)
+//     {
+//         // Poll and handle events
+//         SDL_Event event;
+//         while (SDL_PollEvent(&event))
+//         {
+//             ImGui_ImplSDL2_ProcessEvent(&event);
+//             if (event.type == SDL_QUIT)
+//                 done = true;
+//             if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
+//                 done = true;
+//         }
 
-        glfwSwapBuffers(window);
-    }
+//         // Start the Dear ImGui frame
+//         ImGui_ImplOpenGL3_NewFrame();
+//         ImGui_ImplSDL2_NewFrame();
+//         ImGui::NewFrame();
 
-    // Cleanup
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+//         // Background window
+//         if (background_texture.TextureID != 0) {
+//             ImGui::SetNextWindowPos(ImVec2(0, 0));
+//             ImGui::SetNextWindowSize(io.DisplaySize);
+//             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+//             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+//             ImGui::Begin("Background", nullptr, 
+//                 ImGuiWindowFlags_NoDecoration | 
+//                 ImGuiWindowFlags_NoInputs | 
+//                 ImGuiWindowFlags_NoNav | 
+//                 ImGuiWindowFlags_NoBringToFrontOnFocus | 
+//                 ImGuiWindowFlags_NoFocusOnAppearing | 
+//                 ImGuiWindowFlags_NoMove);
+            
+//             // Display the background image - Perbaikan untuk typedef ImTextureID
+//             ImGui::Image((ImTextureID)(intptr_t)background_texture.TextureID, io.DisplaySize);
+            
+//             ImGui::End();
+//             ImGui::PopStyleVar(2);
+//         }
 
-    // Hapus tekstur
-    glDeleteTextures(1, &background_texture.TextureID);
+//         // Demo window
+//         ImGui::Begin("Hello, world!");
+//         ImGui::Text("This is a window with background image.");
+//         ImGui::Button("Click me");
+//         ImGui::End();
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
+//         // Rendering
+//         ImGui::Render();
+//         glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+//         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+//         glClear(GL_COLOR_BUFFER_BIT);
+//         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+//         SDL_GL_SwapWindow(window);
+//     }
 
-    return 0;
-}
+//     // Cleanup
+//     if (background_texture.TextureID != 0)
+//         glDeleteTextures(1, &background_texture.TextureID);
+
+//     ImGui_ImplOpenGL3_Shutdown();
+//     ImGui_ImplSDL2_Shutdown();
+//     ImGui::DestroyContext();
+
+//     SDL_GL_DeleteContext(gl_context);
+//     SDL_DestroyWindow(window);
+//     SDL_Quit();
+
+//     return 0;
+// }
+
+// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+// {
+//     return main(__argc, __argv); // atau langsung taruh isi main() di sini
+// }
