@@ -144,6 +144,7 @@ if(WIN32)
             "${LIBRARY}/avutil-60.dll"
             "${LIBRARY}/swresample-6.dll"
             "${LIBRARY}/swscale-9.dll"
+            "${GLFW}/lib-static-ucrt/glfw3.dll"
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
     )
     # add_custom_command(TARGET TestBackground POST_BUILD

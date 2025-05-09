@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    MainWindow window("GameEngine SDL", 800, 600);
+    MainWindow window("GameEngine SDL", 1280, 720);
 
     // window.assets.load_assets();
 

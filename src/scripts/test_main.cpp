@@ -2,7 +2,7 @@
 #include <iostream>
 #include <SDL.h>
 #include <SDL_opengl.h>
-
+using namespace std;
 // Untuk memuat gambar
 // #define STB_IMAGE_IMPLEMENTATION
 // #include "stb_image.h"
@@ -11,12 +11,12 @@ int main(int argc, char* argv[])
 {
     // Inisialisasi SDL
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
-        std::cerr << "SDL gagal diinisialisasi: " << SDL_GetError() << std::endl;
+        cerr << "SDL gagal diinisialisasi: " << SDL_GetError() << endl;
         return -1;
     }
 
     // Membuat window SDL dengan OpenGL
-    SDL_Window* window = SDL_CreateWindow("ImGui dengan Background Gambar", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = SDL_CreateWindow("ImGui dengan Background Gambar", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
     SDL_GL_SetSwapInterval(1); // Enable VSync
 
@@ -34,12 +34,13 @@ int main(int argc, char* argv[])
     // Memuat tekstur menggunakan Assets
     Assets assetManager;
     TextureData backgroundTexture;
-    if (!assetManager.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &backgroundTexture)) {
-        std::cerr << "Gagal memuat gambar background!" << std::endl;
+    if (!assetManager.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture)) {
+        cerr << "Gagal memuat gambar background!" << endl;
     }
     else {
-        std::cout << "Gambar background berhasil dimuat!" << std::endl;
+        cout << "Gambar background berhasil dimuat!" << endl;
     }
+    cout << assetManager.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture) << endl;
 
     bool done = false;
     while (!done)

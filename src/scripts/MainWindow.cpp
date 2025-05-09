@@ -111,13 +111,13 @@ bool MainWindow::init(const char* title) {
         return false;
     }
 
-    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    // if (!renderer) {
-    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-    //     SDL_DestroyWindow(window);
-    //     SDL_Quit();
-    //     return false;
-    // }
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer) {
+        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return false;
+    }
 
     // Aktifkan OpenGL
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -163,19 +163,21 @@ bool MainWindow::init(const char* title) {
     setTheme(darkTheme);
     
     // ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
-    cout << glContext << MainWindow::glContext << endl;
+    // ImGui_ImplSDLRenderer2_Init(renderer);
+    cout << glContext << endl;
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    Assets assets;
-    TextureData backgroundTexture;
-    if (!assets.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &backgroundTexture)) {
+    // Assets assets;
+    // TextureData backgroundTexture;
+    if (!assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture) /*| !assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture)*/) {
         cerr << "Failed to load background image!" << endl;
     }
     else {
         cout << "Background image loaded successfully!" << endl;
     }
-    // ImGui_ImplSDLRenderer2_Init(renderer);
+    cout << assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture) << endl;
+    
     // set_mainbackground();
 
     return true;
@@ -1078,6 +1080,9 @@ void MainWindow::handleEvents() {
 }
 
 void MainWindow::update() {
+    static float volume = 1.0f;
+    static bool shirokoBackground = false;
+    static bool shunBackground = false;
     // ImGui_ImplSDLRenderer2_NewFrame();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -1088,6 +1093,28 @@ void MainWindow::update() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
+
+    if (shirokoBackground == true)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        // Menggambar background (sebelum menu bar dan UI lainnya)
+        if (backgroundTexture.TextureID != 0) {
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::SetNextWindowBgAlpha(volume); // <--- Bikin window background jadi transparan
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::Begin("Background", nullptr,
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_NoInputs |
+                // ImGuiWindowFlags_NoBringToFrontOnFocus |
+                ImGuiWindowFlags_NoNavFocus);
+            
+            ImGui::Image((ImTextureID)(intptr_t)backgroundTexture.TextureID, io.DisplaySize);
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+        }
+    }    
 
     // Dockspace
     #ifdef ImGuiConfigFlags_DockingEnable
@@ -1114,7 +1141,7 @@ void MainWindow::update() {
     #else
         ImGui::Text("Docking is not enabled in this build of Dear ImGui.");
     #endif
-
+    
     // Menu bar
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -1159,7 +1186,13 @@ void MainWindow::update() {
             if (ImGui::MenuItem("About")) {}
             ImGui::EndMenu();
         }
-        
+
+        if (ImGui::BeginMenu("Background")) {
+            ImGui::Checkbox("Shun Small", &shirokoBackground);
+            // ImGui::Checkbox("Shun Small", &shunBackground);
+            ImGui::EndMenu();
+        }
+        // cout << volume << endl;
         // Status bar di menu kanan
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -1381,7 +1414,7 @@ void MainWindow::render() {
     // Clear screen
     // SDL_SetRenderDrawColor(renderer, 24, 25, 34, 255);
     // SDL_RenderClear(renderer);
-    glViewport(0, 0, windowWidth, windowHeight);
+    // glViewport(0, 0, windowWidth, windowHeight);
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 

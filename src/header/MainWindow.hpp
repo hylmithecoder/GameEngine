@@ -62,6 +62,7 @@ public:
     MainWindow(const char* title, int width = 1280, int height = 720);
     ~MainWindow();
         
+    TextureData backgroundTexture;
     SwrContext* swrContext = nullptr;
     bool isOnlyAudio = false;
     bool isOnlyRenderImage = false;
