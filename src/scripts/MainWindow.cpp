@@ -16,7 +16,7 @@ using namespace std;
 MainWindow::MainWindow(const char* title, int width, int height)
     : window(nullptr), renderer(nullptr), glContext(nullptr), font(nullptr),
       isRunning(false), windowWidth(width), windowHeight(height),
-      fullscreen(false), showSecondary(false), 
+      fullscreen(false), showSecondary(false),
       darkTheme(true), currentTab(0), videoPlayer(new VideoPlayer()) {
     
     if (init(title)) {
@@ -41,52 +41,6 @@ void MainWindow::set_window_icon() {
         cerr << "Warning: Could not load icon: " << SDL_GetError() << endl;
     }
 }
-
-// void MainWindow::set_mainbackground() {
-//     // Load image using stb_image
-//     int width, height, channels;
-//     unsigned char* imageData = stbi_load("assets/images/backgrounds/shiroko_bluearchive.jpg", 
-//                                        &width, &height, &channels, STBI_rgb);
-    
-//     if (!imageData) {
-//         cerr << "Failed to load background image: " << stbi_failure_reason() << endl;
-//         return;
-//     }
-
-//     // Create SDL texture directly from the loaded pixels
-//     SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(imageData, width, height, 
-//                                                    24, width * 3,
-//                                                    0x0000FF, 0x00FF00, 0xFF0000, 0);
-    
-//     if (!surface) {
-//         cerr << "Failed to create surface: " << SDL_GetError() << endl;
-//         stbi_image_free(imageData);
-//         return;
-//     }
-
-//     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-//     if (!texture) {
-//         cerr << "Failed to create texture: " << SDL_GetError() << endl;
-//         SDL_FreeSurface(surface);
-//         stbi_image_free(imageData);
-//         return;
-//     }
-
-//     // Get window size
-//     int windowWidth, windowHeight;
-//     SDL_GetWindowSize(window, &windowWidth, &windowHeight);
-
-//     // Create destination rectangle
-//     SDL_Rect dstRect = {0, 0, windowWidth, windowHeight};
-
-//     // Render the background
-//     SDL_RenderCopy(renderer, texture, NULL, &dstRect);
-
-//     // Cleanup
-//     SDL_DestroyTexture(texture);
-//     SDL_FreeSurface(surface);
-//     stbi_image_free(imageData);
-// }
 
 bool MainWindow::init(const char* title) {
     // Inisialisasi SDL dengan dukungan video dan audio
@@ -130,6 +84,11 @@ bool MainWindow::init(const char* title) {
     }
     SDL_GL_SetSwapInterval(1);  // VSync
 
+    // AVHWDeviceType type = av_hwdevice_find_type_by_name("cuda");
+    // av_hwdevice_ctx_create(&videoPlayer->hw_device_ctx, type, NULL, NULL, 0);
+    // videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
+
+
     // Set window icon
     set_window_icon();
 
@@ -168,19 +127,35 @@ bool MainWindow::init(const char* title) {
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    // Assets assets;
-    // TextureData backgroundTexture;
-    if (!assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture) /*| !assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture)*/) {
-        cerr << "Failed to load background image!" << endl;
-    }
-    else {
-        cout << "Background image loaded successfully!" << endl;
-    }
-    cout << assets.LoadTextureFromFile("assets/images/backgrounds/shun_small.webp", &backgroundTexture) << endl;
-    
+    CurrentBackground currentBg = Shiroko;
+    // HandleBackground(currentBg);
+    assets.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &backgroundTexture);
     // set_mainbackground();
 
     return true;
+}
+
+void MainWindow::HandleUpdateBackground(CurrentBackground currentBg)
+{
+    const char* path = nullptr;
+
+    switch (currentBg)
+    {
+        case Shiroko:
+            path = "assets/images/backgrounds/shiroko_bluearchive.jpg";
+            cout << "Current Background is: Shiroko" << endl;
+            break;
+        case Shun_Small:
+            path = "assets/images/backgrounds/shun_small.webp";
+            cout << "Current Background is: Shun" << endl;
+            break;
+        default:
+            cout << "Unknown Background" << endl;
+            return;
+    }
+
+    if (path)
+        assets.LoadTextureFromFile(path, &backgroundTexture);
 }
 
 void MainWindow::setTheme(bool dark) {
@@ -270,6 +245,9 @@ bool MainWindow::openVideo(const char* filePath) {
     }
     
     videoPlayer->filePath = filePath;
+    // AVHWDeviceType type = av_hwdevice_find_type_by_name("cuda");
+    // av_hwdevice_ctx_create(&videoPlayer->hw_device_ctx, type, NULL, NULL, 0);
+    // videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
     
     // Buka file video
     if (avformat_open_input(&videoPlayer->formatContext, filePath, NULL, NULL) != 0) {
@@ -287,7 +265,7 @@ bool MainWindow::openVideo(const char* filePath) {
         return false;
     }
     else {
-        cout << "[MainWindow] Video stream information found" << endl;
+        cout << "[MainWindow] Video stream information found " << videoPlayer->formatContext << endl;
     }
     
     // Cari video stream
@@ -316,6 +294,34 @@ bool MainWindow::openVideo(const char* filePath) {
         videoPlayer->cleanup();
         return false;
     }
+
+    // Mendapatkan codec dengan prioritas mendapatkan codec CUDA untuk GTX 1070
+    // cout << "[MainWindow] Getting codec with GPU acceleration" << endl;
+    // const AVCodec *codec = nullptr;
+    // void *iter = nullptr;
+    // // Cari decoder hardware CUDA yang kompatibel dengan GTX 1070
+    // while (const AVCodec *c = av_codec_iterate(&iter)) {
+    //     if (av_codec_is_decoder(c) && c->id == videoPlayer->formatContext->streams[videoPlayer->videoStream]->codecpar->codec_id) {
+    //         if (strstr(c->name, "_cuvid")) { // cari decoder NVIDIA CUDA/NVDEC
+    //             codec = c;
+    //             cout << "[MainWindow] Found CUDA decoder: " << c->name << endl;
+    //             break;
+    //         }
+    //     }
+    // }
+    
+    // // Fallback ke decoder software jika tidak ditemukan decoder CUDA
+    // if (!codec) {
+    //     cout << "[MainWindow] CUDA decoder not found, falling back to software decoder" << endl;
+    //     codec = avcodec_find_decoder(
+    //         videoPlayer->formatContext->streams[videoPlayer->videoStream]->codecpar->codec_id);
+    //     if (!codec) {
+    //         cerr << "Unsupported codec" << endl;
+    //         videoPlayer->cleanup();
+    //         return false;
+    //     }
+    // }
+    // cout << "Using Devices: " << codec->name << endl;
     
     // Alokasi context codec
     cout << "[MainWindow] Allocating codec context" << endl;
@@ -342,12 +348,20 @@ bool MainWindow::openVideo(const char* filePath) {
         videoPlayer->cleanup();
         return false;
     }
+
+    // Atur context untuk hardware acceleration
+    // if (videoPlayer->hw_device_ctx) {
+    //     videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
+    //     cout << "[MainWindow] Hardware acceleration context set" << endl;
+    // }
     
     // Alokasi frame
     cout << "[MainWindow] Allocating frames" << endl;
     videoPlayer->frame = av_frame_alloc();
     videoPlayer->frameRGB = av_frame_alloc();
-    if (!videoPlayer->frame || !videoPlayer->frameRGB) {
+    // videoPlayer->hw_frame = av_frame_alloc();
+
+    if (!videoPlayer->frame || !videoPlayer->frameRGB /*|| !videoPlayer->hw_frame*/) {
         cerr << "Could not allocate frames" << endl;
         videoPlayer->cleanup();
         return false;
@@ -397,6 +411,14 @@ bool MainWindow::openVideo(const char* filePath) {
         return false;
     }
     
+    glGenTextures(1, &videoPlayer->glTextureID);
+    glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, videoPlayer->width, videoPlayer->height,
+                0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    
+    
     // Baca frame rate
     AVRational frameRate = videoPlayer->formatContext->streams[videoPlayer->videoStream]->avg_frame_rate;
     videoPlayer->fps = (double)frameRate.num / (double)frameRate.den;
@@ -415,6 +437,14 @@ bool MainWindow::openVideo(const char* filePath) {
         videoPlayer->cleanup();
         return false;
     }
+
+    // glGenTextures(1, &videoPlayer->glTextureID);
+    // glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, videoPlayer->width, videoPlayer->height,
+    //             0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+
 
     // Note Kalau Asal Ubah bisa error tanpa Log
     cout << "[MainWindow] Opening audio" << endl;
@@ -439,6 +469,71 @@ bool MainWindow::openVideo(const char* filePath) {
     videoPlayer->isPlaying = true;
     cout << "[MainWindow]Video player ready\n";
     return true;
+}
+
+bool MainWindow::updateVideoFrameWithOpenGL() {
+    if (!videoPlayer->isPlaying) return false;
+
+    int frameFinished = 0;
+    int readAttempts = 0;
+    const int MAX_READ_ATTEMPTS = 10;
+
+    while (!frameFinished && readAttempts < MAX_READ_ATTEMPTS) {
+        readAttempts++;
+        int readResult = av_read_frame(videoPlayer->formatContext, videoPlayer->packet);
+        if (readResult < 0) {
+            if (readResult == AVERROR_EOF) {
+                av_seek_frame(videoPlayer->formatContext, videoPlayer->videoStream, 0, AVSEEK_FLAG_BACKWARD);
+                continue;
+            } else {
+                SDL_Delay(5);
+                continue;
+            }
+        }
+
+        if (videoPlayer->packet->stream_index == videoPlayer->videoStream) {
+            int sendResult = avcodec_send_packet(videoPlayer->codecContext, videoPlayer->packet);
+            av_packet_unref(videoPlayer->packet);
+
+            if (sendResult < 0) continue;
+
+            int receiveResult = avcodec_receive_frame(videoPlayer->codecContext, videoPlayer->frame);
+            if (receiveResult < 0) {
+                if (receiveResult == AVERROR(EAGAIN)) continue;
+                else if (receiveResult == AVERROR_EOF) break;
+                else continue;
+            } else {
+                frameFinished = 1;
+                break;
+            }
+        } else {
+            av_packet_unref(videoPlayer->packet);
+        }
+    }
+
+    if (frameFinished) {
+        sws_scale(videoPlayer->swsContext, (uint8_t const* const*)videoPlayer->frame->data,
+                  videoPlayer->frame->linesize, 0, videoPlayer->height,
+                  videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
+
+        SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
+                          videoPlayer->frameRGB->linesize[0]);
+
+        glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
+                GL_RGB, GL_UNSIGNED_BYTE, videoPlayer->frameRGB->data[0]);
+
+
+        // Update current time using frame PTS
+        if (videoPlayer->frame->pts != AV_NOPTS_VALUE) {
+            AVRational timeBase = videoPlayer->formatContext->streams[videoPlayer->videoStream]->time_base;
+            videoPlayer->currentTime = videoPlayer->frame->pts * av_q2d(timeBase);
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 bool MainWindow::updateVideoFrame() {
@@ -830,6 +925,10 @@ void MainWindow::updateMedia() {
                     SDL_UpdateTexture(videoPlayer->texture, NULL, 
                                     videoPlayer->frameRGB->data[0],
                                     videoPlayer->frameRGB->linesize[0]);
+                                    
+                    glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
+                            GL_RGB, GL_UNSIGNED_BYTE, videoPlayer->frameRGB->data[0]);
 
                     // Update current time using frame PTS
                     if (videoPlayer->frame->pts != AV_NOPTS_VALUE) {
@@ -984,7 +1083,8 @@ void MainWindow::renderVideoPlayer() {
         // Update frame dan audio jika tidak paused
         if (!paused) {
             if (isOnlyRender == true && isOnlyAd == false) {
-                updateVideoFrame();
+                // updateVideoFrame();
+                updateVideoFrameWithOpenGL();
             }
             else if (isOnlyRender == false && isOnlyAd == true) {
                 updateAudio();
@@ -1014,9 +1114,12 @@ void MainWindow::renderVideoPlayer() {
         // Informasi video
         ImGui::Text("Resolution: %dx%d | FPS: %.2f", 
                     videoPlayer->width, videoPlayer->height, videoPlayer->fps);
-        ImGui::Separator();
-        ImGui::Text("Frequency: %d | Channels: %d", 
+        if (!isOnlyRender | isOnlyAd) {
+            ImGui::Separator();
+            ImGui::Text("Frequency: %d | Channels: %d", 
                     videoPlayer->audioCodecContext->sample_rate, videoPlayer->audioCodecContext->ch_layout.nb_channels);
+        }
+        
     } else {
         ImGui::Text("No video loaded. Please open a video file.");
     }
@@ -1047,7 +1150,8 @@ void MainWindow::renderVideoFrame() {
         ImGui::SetCursorPos(ImVec2(posX, posY));
 
         // Render frame video
-        ImGui::Image(reinterpret_cast<ImTextureID>(videoPlayer->texture), ImVec2(displayWidth, displayHeight));
+        ImGui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
+             ImVec2(displayWidth, displayHeight));
     }
 }
 
@@ -1079,11 +1183,18 @@ void MainWindow::handleEvents() {
     }
 }
 
+// Method Update Like Unity too
 void MainWindow::update() {
     static float volume = 1.0f;
-    static bool shirokoBackground = false;
-    static bool shunBackground = false;
-    // ImGui_ImplSDLRenderer2_NewFrame();
+    static bool isBackgroundChanged = false;
+    static bool isBackgroundActived = false;
+    CurrentBackground currentBg = static_cast<CurrentBackground>(currentBgInt);
+    
+    const char* backgroundOptions[] = {
+        "Shiroko",
+        "Shun (Small)"
+    };
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
@@ -1093,28 +1204,6 @@ void MainWindow::update() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
-
-    if (shirokoBackground == true)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        // Menggambar background (sebelum menu bar dan UI lainnya)
-        if (backgroundTexture.TextureID != 0) {
-            ImGui::SetNextWindowPos(ImVec2(0, 0));
-            ImGui::SetNextWindowSize(io.DisplaySize);
-            ImGui::SetNextWindowBgAlpha(volume); // <--- Bikin window background jadi transparan
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::Begin("Background", nullptr,
-                ImGuiWindowFlags_NoDecoration |
-                ImGuiWindowFlags_NoInputs |
-                // ImGuiWindowFlags_NoBringToFrontOnFocus |
-                ImGuiWindowFlags_NoNavFocus);
-            
-            ImGui::Image((ImTextureID)(intptr_t)backgroundTexture.TextureID, io.DisplaySize);
-            ImGui::End();
-            ImGui::PopStyleVar(2);
-        }
-    }    
 
     // Dockspace
     #ifdef ImGuiConfigFlags_DockingEnable
@@ -1141,6 +1230,41 @@ void MainWindow::update() {
     #else
         ImGui::Text("Docking is not enabled in this build of Dear ImGui.");
     #endif
+    
+    // Render background SETELAH DockSpace tetapi SEBELUM semua window UI lainnya
+    // Ini memastikan background ada di belakang semua window UI
+    if (isBackgroundActived)
+    {
+        if (isBackgroundChanged)
+        {
+            HandleUpdateBackground(currentBg);
+            isBackgroundChanged = false;
+        }
+
+        ImGuiIO& io = ImGui::GetIO();
+        // Menggunakan ImGui::GetBackgroundDrawList untuk menggambar di lapisan paling belakang
+        if (backgroundTexture.TextureID != 0) {
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::SetNextWindowBgAlpha(volume); // <--- Bikin window background jadi transparan
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::Begin("Background", nullptr,
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_NoInputs |
+                // ImGuiWindowFlags_NoBringToFrontOnFocus |
+                ImGuiWindowFlags_NoNavFocus);
+            
+            ImGui::Image((ImTextureID)(intptr_t)backgroundTexture.TextureID, io.DisplaySize);
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+        }
+    } 
+    else if (isBackgroundChanged)
+    {
+        HandleUpdateBackground(currentBg);
+        isBackgroundChanged = false;
+    }    
     
     // Menu bar
     if (ImGui::BeginMenuBar()) {
@@ -1187,12 +1311,20 @@ void MainWindow::update() {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Background")) {
-            ImGui::Checkbox("Shun Small", &shirokoBackground);
-            // ImGui::Checkbox("Shun Small", &shunBackground);
+        if (ImGui::BeginMenu("Background")){
+            ImGui::Checkbox("Use Background", &isBackgroundActived);
+            if (ImGui::Combo(" ", &currentBgInt, backgroundOptions, Background_Count)) {
+                currentBg = static_cast<CurrentBackground>(currentBgInt);
+                cout << currentBg << endl;
+                isBackgroundChanged = true;
+                isBackgroundActived = true;
+            }
+            
+            // Tambahan pengaturan background opacity
+            ImGui::SliderFloat("Opacity", &volume, 0.1f, 1.0f);
             ImGui::EndMenu();
         }
-        // cout << volume << endl;
+
         // Status bar di menu kanan
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -1435,6 +1567,8 @@ void MainWindow::clean() {
     // ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
+    glDeleteTextures(1, &videoPlayer->glTextureID);
+
     ImGui::DestroyContext();
 
     if (glContext)

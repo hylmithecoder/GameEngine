@@ -7,6 +7,10 @@
 #include <SDL_ttf.h>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp>
+#include <SDL_opengl.h>
+#include <GLFW/glfw3.h>
+#include <GLES2/gl2.h>
+#include <list>
 // #include "SimpleRenderer.hpp"
 
 class MainWindow {
@@ -19,6 +23,7 @@ private:
     void setTheme(bool dark);
     bool openVideo(const char* filePath);
     bool updateVideoFrame();
+    bool updateVideoFrameWithOpenGL();
     bool openAudio();
     void updateAudio();
     void updateMedia();
@@ -38,6 +43,14 @@ private:
     int windowHeight;
     bool darkTheme;
     int currentTab;
+
+    // Opengl 
+    GLuint textureID;
+    GLuint vertexArrayID;
+    GLuint vertexBufferID;
+    GLuint uvBufferID;
+    GLuint programID;
+    GLuint textureUniformID;
     
     // Object properties for Inspector
     char objectName[64] = "Player";
@@ -67,10 +80,21 @@ public:
     bool isOnlyAudio = false;
     bool isOnlyRenderImage = false;
     bool init(const char* title);
+    bool running() const { return isRunning; }    
+    int currentBgInt = 0;
+    Assets assets;
+    // list<string> currentName = {"Shiroko", "Shun_Small"};
+
+    enum CurrentBackground 
+    {
+        Shiroko, 
+        Shun_Small,
+        Background_Count
+    };
+   
+    void HandleUpdateBackground(CurrentBackground currentBg);
     void handleEvents();
     void update();
     void render();
     void clean();
-    bool running() const { return isRunning; }
-    Assets assets;
 };

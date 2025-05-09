@@ -1,6 +1,10 @@
 #pragma once
 #include <string>
 #include <SDL.h>
+#include <GLFW/glfw3.h>
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdlrenderer2.h"
+#include <SDL_opengl.h>
 
 // FFmpeg includes
 extern "C" {
@@ -24,6 +28,7 @@ public:
     SwsContext* swsContext = nullptr;
     AVFrame* frame = nullptr;
     AVFrame* frameRGB = nullptr;
+    AVFrame* hw_frame = nullptr;
     AVPacket* packet = nullptr;
     AVFrame* lastGoodFrameRGB;
     bool hasValidFrame = false;
@@ -42,11 +47,13 @@ public:
 
     // Audio-related members
     AVCodecContext* audioCodecContext = nullptr;
+    // AVBufferRef* hw_device_ctx;
     int audioStream = -1;
     SDL_AudioDeviceID audioDeviceID = 0;
     SwrContext* swrContext = nullptr;
     SDL_AudioSpec audioSpec;
-    SDL_Texture* videoTexture = nullptr;
+    SDL_Texture* videoTexture = nullptr;    
+    GLuint glTextureID;
     
     VideoPlayer();
     ~VideoPlayer();
