@@ -27,7 +27,7 @@ bool Assets::LoadTextureFromFile(const char* filename, TextureData* out_texture)
     
     // Upload data gambar ke GPU
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-    
+    // glDeleteTextures(1, &texture_id);
     // Simpan informasi tekstur dan bebaskan memori gambar
     *out_texture = {texture_id, width, height};
     stbi_image_free(data);

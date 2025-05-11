@@ -11,6 +11,8 @@
 #include <GLFW/glfw3.h>
 #include <GLES2/gl2.h>
 #include <list>
+#include "IconsFontAwesome6.h"
+#include <HandlerProject.hpp>
 // #include "SimpleRenderer.hpp"
 
 class MainWindow {
@@ -70,6 +72,7 @@ private:
     // void InitRocket();
     // void LoadDocument(const char* url);
     VideoPlayer* videoPlayer; // Assuming VideoPlayer is a class that handles video playback
+    HandlerProject projectHandler;
 
 public:
     MainWindow(const char* title, int width = 1280, int height = 720);
@@ -79,10 +82,14 @@ public:
     SwrContext* swrContext = nullptr;
     bool isOnlyAudio = false;
     bool isOnlyRenderImage = false;
+    bool firstOpenProject;
     bool init(const char* title);
     bool running() const { return isRunning; }    
     int currentBgInt = 0;
     Assets assets;
+    float volume = 1.0f;
+    bool isBackgroundChanged = false;
+    bool isBackgroundActived = false;
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 
@@ -91,10 +98,23 @@ public:
         Shun_Small,
         Background_Count
     };
+    CurrentBackground currentBg = static_cast<CurrentBackground>(currentBgInt);
+    const char* backgroundOptions[2] = {
+        "Shiroko",
+        "Shun (Small)"
+    };
    
     void HandleUpdateBackground(CurrentBackground currentBg);
     void handleEvents();
     void update();
     void render();
     void clean();
+    void log(const char* message);
+    void RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool isOpenProject);
+    void RenderInspectorWindow();
+    void RenderMainViewWindow();
+    void RenderConsoleWindow();
+    void RenderMenuBar();
+    void HandleBackground();
+    void HandleSearch();
 };

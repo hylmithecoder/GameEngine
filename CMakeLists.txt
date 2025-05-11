@@ -13,10 +13,12 @@ set(GLFW "C:/glfw3.4")
 set(FFMPEG_DIR "E:/FFmpeg")
 set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
+set(NFD "E:/nativefiledialog-extended")
 
 # Add source files
 set(SOURCES 
     src/main.cpp
+    src/resources.rc
     src/scripts/MainWindow.cpp
     # src/RocketInterfaces.cpp
     src/SimpleRenderer.cpp
@@ -24,6 +26,8 @@ set(SOURCES
     src/scripts/Check_Environment.cpp
     src/scripts/VideoPlayer.cpp
     src/scripts/assets.cpp
+    src/scripts/HandlerProject.cpp
+    src/scripts/HandlerChildWindow.cpp
 )
 
 # Add header files
@@ -35,6 +39,7 @@ set(HEADERS
     src/header/FFmpegWrapper.hpp
     src/header/VideoPlayer.hpp
     src/header/assets.hpp
+    src/header/HandlerProject.hpp
 )
 
 set(SOURCE_TEST
@@ -42,6 +47,7 @@ set(SOURCE_TEST
     src/header/assets.hpp
     src/scripts/test_main.cpp
 )
+
 
 # Add ImGui source files
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -55,6 +61,14 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+)
+
+set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
+
+set(NFD_SOURCES
+    # ${NFD}/src/nfd_gtk.cpp
+    # ${NFD}/src/nfd_portal.cpp
+    ${NFD}/src/nfd_win.cpp
 )
 
 set(IMGUI_TEST
@@ -73,7 +87,7 @@ set(IMGUI_TEST
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
 # Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES})
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE})
 target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_TEST})
 target_link_options(TestBackground PRIVATE -mconsole)
@@ -82,10 +96,12 @@ find_package(OpenGL REQUIRED)
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${SDL2_DIR}/include
+    ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/src/header
     ${FFMPEG_DIR}
+    ${NFD}/src/include
     ${STB}
     # GL
     ${GLFW}/include

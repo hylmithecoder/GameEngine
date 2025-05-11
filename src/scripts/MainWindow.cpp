@@ -131,9 +131,14 @@ bool MainWindow::init(const char* title) {
     // HandleBackground(currentBg);
     assets.LoadTextureFromFile("assets/images/backgrounds/shiroko_bluearchive.jpg", &backgroundTexture);
     // set_mainbackground();
-
+    projectHandler.fileWatcherRunning = false;
+    projectHandler.fileWatcherInterval = std::chrono::milliseconds(1000);
+    projectHandler.fileChangesDetected = false;
+    projectHandler.StartFileWatcher();
     return true;
 }
+
+
 
 void MainWindow::HandleUpdateBackground(CurrentBackground currentBg)
 {
@@ -476,7 +481,7 @@ bool MainWindow::updateVideoFrameWithOpenGL() {
 
     int frameFinished = 0;
     int readAttempts = 0;
-    const int MAX_READ_ATTEMPTS = 10;
+    const float MAX_READ_ATTEMPTS = 1.0f;
 
     while (!frameFinished && readAttempts < MAX_READ_ATTEMPTS) {
         readAttempts++;
@@ -839,10 +844,18 @@ void MainWindow::updateAudio() {
             avcodec_flush_buffers(audioCodecContext);
         }
     }
-
+    const int AUDIO_QUEUE_SIZE = SDL_GetQueuedAudioSize(audioDeviceID);
+    cout << "AUDIO_QUEUE_SIZE: " << AUDIO_QUEUE_SIZE << endl;
+    // log("Audio Queue Size: "+AUDIO_QUEUE_SIZE);
     // Clean up
     av_frame_free(&frame);
     av_packet_free(&pkt);
+}
+
+void MainWindow::log(const char* message)
+{
+    // string currentMessage = message;
+    cout << message << endl;
 }
 
 void MainWindow::updateMedia() {
@@ -950,19 +963,25 @@ void MainWindow::updateMedia() {
                 av_packet_free(&pkt);
                 cerr << "Could not allocate audio frame" << endl;
                 continue;
+                // return;
             }
             
             int sendResult = avcodec_send_packet(audioCodecContext, pkt);
-            
+            cout << "Send Result: " << sendResult << endl;
             if (sendResult >= 0) {
                 // Try to receive multiple frames from this packet if available
                 bool frameReceived = false;
                 
                 while (true) {
                     int receiveResult = avcodec_receive_frame(audioCodecContext, audioFrame);
-                    
-                    if (receiveResult < 0) {
+                    cout << "Terima Hasil: " << receiveResult << endl;
+                    if (receiveResult == AVERROR_EOF || receiveResult == AVERROR(EAGAIN)) {
                         // No more frames or error
+                        break;
+                    } else if (receiveResult < 0){
+                        char errbuf[256];
+                        av_strerror(receiveResult, errbuf, sizeof(errbuf));
+                        cerr << "Error receiving audio frame: " << errbuf << endl;
                         break;
                     }
                     
@@ -987,6 +1006,7 @@ void MainWindow::updateMedia() {
                         outSamples,
                         AV_SAMPLE_FMT_S16, 0
                     );
+                    cout << "allocresult: " << allocResult << endl;
                     
                     if (allocResult >= 0) {
                         int convertedSamples = swr_convert(
@@ -1033,6 +1053,7 @@ void MainWindow::updateMedia() {
         
         // Check if we have enough audio data now
         if (hasAudio && !needMoreAudio && videoFrameProcessed) {
+            cout << "Break Audio !!!" << endl;
             // We've both filled audio and processed a video frame
             break;
         }
@@ -1077,8 +1098,8 @@ void MainWindow::renderVideoPlayer() {
     ImGui::Checkbox("Only Audio", &isOnlyAd);
 
     if (videoPlayer->isPlaying) {     
-        cout << "Is Audio Play " << isOnlyAd << endl;   
-        cout << "Is Image Play " << isOnlyRender << endl;
+        // cout << "Is Audio Play " << isOnlyAd << endl;   
+        // cout << "Is Image Play " << isOnlyRender << endl;
         // updateAudio();
         // Update frame dan audio jika tidak paused
         if (!paused) {
@@ -1165,14 +1186,19 @@ void MainWindow::handleEvents() {
         else if (event.type == SDL_KEYDOWN) {
             if (event.key.keysym.sym == SDLK_ESCAPE)
                 isRunning = false;
-            else if (event.key.keysym.sym == SDLK_f) {
-                fullscreen = !fullscreen;
-                SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-            } 
-            else if (event.key.keysym.sym == SDLK_t) {
-                darkTheme = !darkTheme;
-                setTheme(darkTheme);
-            }
+            // else if (event.key.keysym.sym == SDLK_LCTRL) {
+                else if (event.key.keysym.sym == SDLK_f) {
+                    fullscreen = !fullscreen;
+                    SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                } 
+                else if (event.key.keysym.sym == SDLK_t) {                    
+                    darkTheme = !darkTheme;
+                    setTheme(darkTheme);
+                }
+                else if (event.key.keysym.sym == SDLK_o) {
+                    projectHandler.OpenFolder();
+                }
+            // } 
         }
         else if (event.type == SDL_WINDOWEVENT) {
             if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
@@ -1185,15 +1211,29 @@ void MainWindow::handleEvents() {
 
 // Method Update Like Unity too
 void MainWindow::update() {
-    static float volume = 1.0f;
-    static bool isBackgroundChanged = false;
-    static bool isBackgroundActived = false;
-    CurrentBackground currentBg = static_cast<CurrentBackground>(currentBgInt);
-    
-    const char* backgroundOptions[] = {
-        "Shiroko",
-        "Shun (Small)"
-    };
+
+    static HandlerProject::AssetFile assetRoot;
+    static char scriptName[256] = "";
+    static bool firstOpenProject = false;
+
+    // Reload Project
+    if (projectHandler.isOpenedProject){
+        assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+        // projectHandler.ScanAssetsFolder(projectHandler.projectPath+"\\assets");
+        projectHandler.isOpenedProject = false;
+    }
+
+    if (!firstOpenProject) {
+        if (MessageBoxA(NULL, 
+            ("You Must Be Open Project First?"),
+            "Confirm Open",
+            MB_YESNO | MB_ICONWARNING) == IDYES)
+        {            
+            projectHandler.OpenFolder();
+            assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+            firstOpenProject = true;
+        }
+    }
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -1233,312 +1273,30 @@ void MainWindow::update() {
     
     // Render background SETELAH DockSpace tetapi SEBELUM semua window UI lainnya
     // Ini memastikan background ada di belakang semua window UI
-    if (isBackgroundActived)
-    {
-        if (isBackgroundChanged)
-        {
-            HandleUpdateBackground(currentBg);
-            isBackgroundChanged = false;
-        }
-
-        ImGuiIO& io = ImGui::GetIO();
-        // Menggunakan ImGui::GetBackgroundDrawList untuk menggambar di lapisan paling belakang
-        if (backgroundTexture.TextureID != 0) {
-            ImGui::SetNextWindowPos(ImVec2(0, 0));
-            ImGui::SetNextWindowSize(io.DisplaySize);
-            ImGui::SetNextWindowBgAlpha(volume); // <--- Bikin window background jadi transparan
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::Begin("Background", nullptr,
-                ImGuiWindowFlags_NoDecoration |
-                ImGuiWindowFlags_NoInputs |
-                // ImGuiWindowFlags_NoBringToFrontOnFocus |
-                ImGuiWindowFlags_NoNavFocus);
-            
-            ImGui::Image((ImTextureID)(intptr_t)backgroundTexture.TextureID, io.DisplaySize);
-            ImGui::End();
-            ImGui::PopStyleVar(2);
-        }
-    } 
-    else if (isBackgroundChanged)
-    {
-        HandleUpdateBackground(currentBg);
-        isBackgroundChanged = false;
-    }    
+    MainWindow::HandleBackground();
     
     // Menu bar
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New Project", "Ctrl+N")) {}
-            if (ImGui::MenuItem("Open Project", "Ctrl+O")) {}
-            if (ImGui::MenuItem("Save", "Ctrl+S")) {}
-            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {}
-            ImGui::Separator();
-            if (ImGui::MenuItem("Exit", "Alt+F4")) isRunning = false;
-            ImGui::EndMenu();
-        }
-        
-        if (ImGui::BeginMenu("Edit")) {
-            if (ImGui::MenuItem("Undo", "Ctrl+Z")) {}
-            if (ImGui::MenuItem("Redo", "Ctrl+Y")) {}
-            ImGui::Separator();
-            if (ImGui::MenuItem("Cut", "Ctrl+X")) {}
-            if (ImGui::MenuItem("Copy", "Ctrl+C")) {}
-            if (ImGui::MenuItem("Paste", "Ctrl+V")) {}
-            ImGui::EndMenu();
-        }
-        
-        if (ImGui::BeginMenu("View")) {
-            if (ImGui::MenuItem("Toggle Dark/Light Theme", "Ctrl+T")) {
-                darkTheme = !darkTheme;
-                setTheme(darkTheme);
-            }
-            if (ImGui::MenuItem("Toggle Fullscreen", "F")) {
-                fullscreen = !fullscreen;
-                SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-            }
-            ImGui::EndMenu();
-        }
-        
-        if (ImGui::BeginMenu("Tools")) {
-            if (ImGui::MenuItem("Secondary Window", nullptr, &showSecondary)) {}
-            ImGui::EndMenu();
-        }
-        
-        if (ImGui::BeginMenu("Help")) {
-            if (ImGui::MenuItem("Documentation")) {}
-            if (ImGui::MenuItem("About")) {}
-            ImGui::EndMenu();
-        }
-
-        if (ImGui::BeginMenu("Background")){
-            ImGui::Checkbox("Use Background", &isBackgroundActived);
-            if (ImGui::Combo(" ", &currentBgInt, backgroundOptions, Background_Count)) {
-                currentBg = static_cast<CurrentBackground>(currentBgInt);
-                cout << currentBg << endl;
-                isBackgroundChanged = true;
-                isBackgroundActived = true;
-            }
-            
-            // Tambahan pengaturan background opacity
-            ImGui::SliderFloat("Opacity", &volume, 0.1f, 1.0f);
-            ImGui::EndMenu();
-        }
-
-        // Status bar di menu kanan
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
-        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-        
-        ImGui::EndMenuBar();
-    }
+    MainWindow::RenderMenuBar();
     
     // Left: Hierarchy with tabs
-    ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
-    
-    if (ImGui::BeginTabBar("ExplorerTabs")) {
-        if (ImGui::BeginTabItem("Hierarchy")) {
-            ImGui::BeginChild("HierarchyTree", ImVec2(0, 0), true);
-            if (ImGui::TreeNode("Scene")) {
-                if (ImGui::TreeNode("Main Camera")) {
-                    ImGui::Text("Properties");
-                    ImGui::TreePop();
-                }
-                if (ImGui::TreeNode("Player")) {
-                    ImGui::Text("Sprite");
-                    ImGui::Text("Collider");
-                    ImGui::TreePop();
-                }
-                if (ImGui::TreeNode("Enemy")) {
-                    ImGui::Text("AI Controller");
-                    ImGui::TreePop();
-                }
-                ImGui::TreePop();
-            }
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
-        
-        if (ImGui::BeginTabItem("Assets")) {
-            ImGui::BeginChild("AssetsList", ImVec2(0, 0), true);
-            if (ImGui::TreeNode("Textures")) {
-                ImGui::Text("player.png");
-                ImGui::Text("enemy.png");
-                ImGui::Text("background.jpg");
-                ImGui::TreePop();
-            }
-            if (ImGui::TreeNode("Audio")) {
-                ImGui::Text("music.mp3");
-                ImGui::Text("effect.wav");
-                ImGui::TreePop();
-            }
-            if (ImGui::TreeNode("Scripts")) {
-                ImGui::Text("Player.cs");
-                ImGui::Text("Enemy.cs");
-                ImGui::TreePop();
-            }
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
-        
-        ImGui::EndTabBar();
-    }
-    
-    ImGui::End();
+    MainWindow::RenderExplorerWindow(assetRoot, firstOpenProject);
 
     // Right: Inspector
-    ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
+    MainWindow::RenderInspectorWindow();
     
-    ImGui::Text("Selected Object");
-    ImGui::Separator();
-    
-    ImGui::InputText("Name", objectName, IM_ARRAYSIZE(objectName));
-    
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat3("Position", position, 0.1f);
-        ImGui::DragFloat3("Rotation", rotation, 0.1f);
-        ImGui::DragFloat3("Scale", scale, 0.1f);
-    }
-    
-    if (ImGui::CollapsingHeader("Material")) {
-        static float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-        ImGui::ColorEdit4("Color", color);
-        
-        const char* items[] = { "Standard", "Transparent", "Emission" };
-        static int item_current = 0;
-        ImGui::Combo("Shader", &item_current, items, IM_ARRAYSIZE(items));
-        
-        static float metallic = 0.0f;
-        static float smoothness = 0.5f;
-        ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
-        ImGui::SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
-    }
-    
-    if (ImGui::CollapsingHeader("Physics")) {
-        static bool useGravity = true;
-        static bool isKinematic = false;
-        static float mass = 1.0f;
-        static float drag = 0.0f;
-        
-        ImGui::Checkbox("Use Gravity", &useGravity);
-        ImGui::Checkbox("Is Kinematic", &isKinematic);
-        ImGui::InputFloat("Mass", &mass, 0.1f);
-        ImGui::InputFloat("Drag", &drag, 0.01f);
-    }
-    
-    if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
-        ImGui::OpenPopup("AddComponentPopup");
-    }
-    
-    if (ImGui::BeginPopup("AddComponentPopup")) {
-        ImGui::Text("Components");
-        if (ImGui::Selectable("Mesh Renderer")) {}
-        if (ImGui::Selectable("Audio Source")) {}
-        if (ImGui::Selectable("Collider")) {}
-        if (ImGui::Selectable("Particle System")) {}
-        if (ImGui::Selectable("Light")) {}
-        if (ImGui::Selectable("Script")) {}
-        ImGui::EndPopup();
-    }
-    
-    ImGui::End();
-
     // Center: Main Tabs (Viewport, Video Player, etc)
-    ImGui::Begin("Main View", nullptr, ImGuiWindowFlags_NoCollapse);
+    MainWindow::RenderMainViewWindow();
     
-    if (ImGui::BeginTabBar("MainTabs")) {
-        if (ImGui::BeginTabItem("Viewport")) {
-            ImVec2 contentSize = ImGui::GetContentRegionAvail();
-            
-            // Add toolbar for viewport
-            ImGui::BeginGroup();
-            if (ImGui::Button("Play")) {}
-            ImGui::SameLine();
-            if (ImGui::Button("Pause")) {}
-            ImGui::SameLine();
-            if (ImGui::Button("Stop")) {}
-            ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
-            const char* viewModes[] = { "3D", "2D", "UI" };
-            static int viewMode = 0;
-            ImGui::SetNextItemWidth(100);
-            ImGui::Combo("View", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
-            ImGui::EndGroup();
-            
-            ImGui::Separator();
-            
-            // Render game viewport
-            static ImVec4 viewportBgColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImGui::GetCursorScreenPos(),
-                ImVec2(ImGui::GetCursorScreenPos().x + contentSize.x, 
-                       ImGui::GetCursorScreenPos().y + contentSize.y - 30),
-                ImGui::ColorConvertFloat4ToU32(viewportBgColor)
-            );
-            
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + contentSize.y - 30);
-            ImGui::Text("Game Viewport (Scene would render here)");
-            
-            ImGui::EndTabItem();
-        }
-        
-        if (ImGui::BeginTabItem("Video Player")) {
-            renderVideoPlayer();
-            ImGui::EndTabItem();
-        }
-        
-        if (ImGui::BeginTabItem("Animation")) {
-            ImGui::Text("Animation editor will be displayed here");
-            ImGui::EndTabItem();
-        }
-        
-        if (ImGui::BeginTabItem("Particle Editor")) {
-            ImGui::Text("Particle system editor will be displayed here");
-            ImGui::EndTabItem();
-        }
-        
-        ImGui::EndTabBar();
-    }
-    
-    ImGui::End();
-
     // Bottom: Console & Output
-    ImGui::Begin("Console", nullptr, ImGuiWindowFlags_NoCollapse);
+    MainWindow::RenderConsoleWindow();
+    projectHandler.CheckAndRefreshAssets();
+    projectHandler.RenderNotifications();
     
-    static int selectedTab = 0;
-    ImGui::BeginTabBar("ConsoleTabs");
-    
-    if (ImGui::BeginTabItem("Output")) {
-        selectedTab = 0;
-        static char consoleBuffer[4096] = "Game initialized successfully.\nAll systems operational.\nReady to start...\n";
-        ImGui::InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer), 
-                                 ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
-        ImGui::EndTabItem();
-    }
-    
-    if (ImGui::BeginTabItem("Errors")) {
-        selectedTab = 1;
-        ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.4f, 1.0f), "No errors found.");
-        ImGui::EndTabItem();
-    }
-    
-    if (ImGui::BeginTabItem("Build")) {
-        selectedTab = 2;
-        ImGui::Text("Build output will be displayed here");
-        ImGui::EndTabItem();
-    }
-    
-    ImGui::EndTabBar();
-    
-    ImGui::End();
-
     // Show secondary window if needed
     if (showSecondary) {
         ShowSecondaryWindow(&showSecondary);
     }
 
-    // videoPlayer->updateAudio();
-    
     ImGui::End(); // DockSpace
 }
 
@@ -1565,6 +1323,7 @@ void MainWindow::render() {
 
 void MainWindow::clean() {
     // ImGui_ImplSDLRenderer2_Shutdown();
+    projectHandler.StopFileWatcher();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     glDeleteTextures(1, &videoPlayer->glTextureID);
