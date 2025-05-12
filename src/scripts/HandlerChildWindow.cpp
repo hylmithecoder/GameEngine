@@ -41,19 +41,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool 
                 
                 // Add toolbar above assets
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-                
-                if (ImGui::Button(ICON_FA_CIRCLE_PLUS " New Folder")) {
-                    // Add functionality for creating a new folder
-                }
-                
-                ImGui::SameLine();
-                
-                if (ImGui::Button(ICON_FA_PLUS " Import")) {
-                    // Add functionality for importing files
-                }
-                
-                ImGui::SameLine();
-
+                                
                 if (ImGui::Button(ICON_FA_SD_CARD " Refresh")) {
                     projectHandler.isOpenedProject = true;
                 }
@@ -223,7 +211,9 @@ void MainWindow::RenderMainViewWindow() {
             
             // Add toolbar for viewport
             ImGui::BeginGroup();
-            if (ImGui::Button("Play")) {}
+            if (ImGui::Button("Play")) {
+                
+            }
             ImGui::SameLine();
             if (ImGui::Button("Pause")) {}
             ImGui::SameLine();
@@ -319,13 +309,7 @@ void MainWindow::RenderMenuBar() {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-                static char newSceneName[64] = "";
-                if (ImGui::InputText("Scene Name", newSceneName, IM_ARRAYSIZE(newSceneName), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    if (strlen(newSceneName) > 0) {
-                        projectHandler.NewScene(newSceneName);
-                        strcpy(newSceneName, "");  // reset
-                    }
-                }
+                projectHandler.NewScene("Untitled");
             }
             if (ImGui::MenuItem("Open Project", "Ctrl+O")) {    
                 projectHandler.isOpenedProject = true;            

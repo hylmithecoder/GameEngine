@@ -109,8 +109,15 @@ public:
     std::condition_variable fileWatcherCV;
     std::unordered_map<std::string, std::time_t> fileTimestamps;
     bool fileChangesDetected;
+    std::string renamingPath = "";
+    char renameBuffer[256] = {};
+    std::string fileExplorerRenameTarget = ""; // Path folder yang sedang direname
+    bool fileExplorerIsRenaming = false; 
+    bool fileExplorerRenameBufferSet = false; // Add this variable to fix the issue
+    std::string fileExplorerCopyTarget = "";
+    std::string fileTargetImport = "";
 
-    
+    void OpenFile();
     void NewProject();
     void OpenFolder();
     void OpenProject(const char* folderPath);
@@ -135,6 +142,12 @@ public:
     }
     void SearchFileOrFolder(const AssetFile& node, const std::string& query, std::vector<AssetFile>& results);
     void NewScene(const std::string& name);
-    void NewFileForExplorer(const std::string& name);
-    void HandleCreateNewFileUI(const std::string &name);
+    void HandleCreateNewFile(const std::string &name);
+    void HandleRename(const AssetFile& node);
+    void DeleteFolder(const std::string& folderPath);
+    void HandleCreateNewFolder(const std::string &targetFolder);
+    void HandleRenameFolder(const AssetFile& node);
+    void HandleCopy(const AssetFile& node);
+    void HandlePaste(const std::string& targetFolder);
+    void HandleImport(const std::string& targetFile);
 };

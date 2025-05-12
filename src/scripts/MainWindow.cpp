@@ -111,11 +111,12 @@ bool MainWindow::init(const char* title) {
     }
 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    #ifdef ImGuiConfigFlags_DockingEnable
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    // #ifdef ImGuiConfigFlags_DockingEnable
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    #else
-        cerr << "Warning: Docking is not supported in this version of Dear ImGui." << endl;
-    #endif
+    // #else
+    //     cerr << "Warning: Docking is not supported in this version of Dear ImGui." << endl;
+    // #endif
     
     // Set theme
     // ImGui::StyleColorsDark();
@@ -1187,17 +1188,17 @@ void MainWindow::handleEvents() {
             if (event.key.keysym.sym == SDLK_ESCAPE)
                 isRunning = false;
             // else if (event.key.keysym.sym == SDLK_LCTRL) {
-                else if (event.key.keysym.sym == SDLK_f) {
+                else if (event.key.keysym.sym == SDLK_F11) {
                     fullscreen = !fullscreen;
                     SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
                 } 
-                else if (event.key.keysym.sym == SDLK_t) {                    
-                    darkTheme = !darkTheme;
-                    setTheme(darkTheme);
-                }
-                else if (event.key.keysym.sym == SDLK_o) {
-                    projectHandler.OpenFolder();
-                }
+                // else if (event.key.keysym.sym == SDLK_t) {                    
+                //     darkTheme = !darkTheme;
+                //     setTheme(darkTheme);
+                // }
+                // else if (event.key.keysym.sym == SDLK_o) {
+                //     projectHandler.OpenFolder();
+                // }
             // } 
         }
         else if (event.type == SDL_WINDOWEVENT) {
@@ -1246,11 +1247,11 @@ void MainWindow::update() {
     ImGui::NewFrame();
 
     // Dockspace
-    #ifdef ImGuiConfigFlags_DockingEnable
+    // #ifdef ImGuiConfigFlags_DockingEnable
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-    #else
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
-    #endif
+    // #else
+    //     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
+    // #endif
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(viewport->Size);
@@ -1265,11 +1266,11 @@ void MainWindow::update() {
     
     // DockSpace
     ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-    #ifdef ImGuiConfigFlags_DockingEnable
+    // #ifdef ImGuiConfigFlags_DockingEnable
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
-    #else
-        ImGui::Text("Docking is not enabled in this build of Dear ImGui.");
-    #endif
+    // #else
+    //     ImGui::Text("Docking is not enabled in this build of Dear ImGui.");
+    // #endif
     
     // Render background SETELAH DockSpace tetapi SEBELUM semua window UI lainnya
     // Ini memastikan background ada di belakang semua window UI
@@ -1297,7 +1298,10 @@ void MainWindow::update() {
         ShowSecondaryWindow(&showSecondary);
     }
 
-    ImGui::End(); // DockSpace
+    ImGui::End();
+    ImGui::EndFrame(); // DockSpace
+    // ImGui::End();
+    ImGui::UpdatePlatformWindows();
 }
 
 void MainWindow::render() {

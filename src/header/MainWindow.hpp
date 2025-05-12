@@ -13,6 +13,8 @@
 #include <list>
 #include "IconsFontAwesome6.h"
 #include <HandlerProject.hpp>
+#define IMGUI_HAS_DOCK
+#define IMGUI_HAS_VIEWPORT
 // #include "SimpleRenderer.hpp"
 
 class MainWindow {

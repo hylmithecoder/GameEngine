@@ -19,6 +19,74 @@ void HandlerProject::OpenFolder() {
         }
 }
 
+void HandlerProject::OpenFile() {
+    NFD::Guard nfdGuard;
+    NFD::UniquePathSet outPaths;
+
+    // Define supported file types
+    nfdfilteritem_t filterItem[4] = {
+        {"Source Files", "c,cpp,h,hpp"},
+        {"Images", "png,jpg,jpeg,gif,bmp"},
+        {"Audio", "mp3,wav,ogg"},
+        {"Video", "mp4,mkv,avi,mov"}
+    };
+
+    // Show the dialog with filters for multiple selection
+    nfdresult_t result = NFD::OpenDialogMultiple(outPaths, filterItem, 4);
+    
+    if (result == NFD_OKAY) {
+        nfdpathsetsize_t numPaths;
+        NFD::PathSet::Count(outPaths, numPaths);
+
+        for (nfdpathsetsize_t i = 0; i < numPaths; ++i) {
+            NFD::UniquePathSetPath path;
+            NFD::PathSet::GetPath(outPaths, i, path);
+            
+            std::string currentFile = path.get();
+            std::cout << "Selected file " << i + 1 << ": " << currentFile << std::endl;
+            
+            // Store the current file path
+            fileTargetImport = currentFile;
+            
+            // Determine appropriate subfolder based on file extension
+            std::string ext = fs::path(currentFile).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            
+            std::string targetFolder;
+            if (ext == ".cpp" || ext == ".h" || ext == ".hpp") {
+                targetFolder = projectPath + "/assets/scripts";
+            } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".bmp") {
+                targetFolder = projectPath + "/assets/textures";
+            } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg") {
+                targetFolder = projectPath + "/assets/audio";
+            } else if (ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov") {
+                targetFolder = projectPath + "/assets/video";
+            } else {
+                targetFolder = projectPath + "/assets"; // Default to main assets folder
+            }
+
+            // Create target folder if it doesn't exist
+            fs::create_directories(targetFolder);
+            
+            // Import the current file
+            HandleImport(targetFolder);
+        }
+
+        // Show summary notification
+        if (numPaths > 0) {
+            ShowNotification("Import Complete", 
+                "Imported " + std::to_string(numPaths) + " file(s)", 
+                ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        }
+        
+    } else if (result == NFD_CANCEL) {
+        std::cout << "User cancelled file selection." << std::endl;
+    } else {
+        std::cout << "Error: " << NFD::GetError() << std::endl;
+        ShowNotification("Error", "Failed to open file dialog", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    }
+}
+
 void HandlerProject::OpenProject(const char* folderPath) {
     // Check if folder path is valid
     isOpenedProject = true;
@@ -102,46 +170,74 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
     ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
     
     if (node.isDirectory) {
-        // Save current text color
-        ImVec4 originalColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        
-        // Set folder color and icon
-        ImGui::PushStyleColor(ImGuiCol_Text, folderColor);
-        
-        DrawIconFromImage("assets/images/fileicons/folder.png");
-        ImGui::SameLine();
-        std::string label = node.name;
-        bool nodeOpen = ImGui::TreeNodeEx(label.c_str(), nodeFlags);
-        
-        // Pop color style
-        ImGui::PopStyleColor();
-        
-        // Generate unique popup ID using file path to avoid conflicts
-        std::string popupId = "context_menu_dir_" + node.fullPath;
-        
-        // Handle right click for directories
-        if (ImGui::BeginPopupContextItem(popupId.c_str())) {
-            
-            if (DrawIconFromImage("assets/images/fileicons/trash.png"), ImGui::MenuItem(" Delete")) {
-                if (MessageBoxA(NULL,
-                    ("Are you sure you want to delete " + node.name + "?").c_str(),
-                    "Confirm Delete",
-                    MB_YESNO | MB_ICONWARNING) == IDYES) {
-                    DeleteFileOrFolder(node.fullPath);
+    // Simpan warna teks awal
+    ImVec4 originalColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+
+    // Atur warna folder dan tampilkan ikon folder
+    ImGui::PushStyleColor(ImGuiCol_Text, folderColor);
+    DrawIconFromImage("assets/images/fileicons/folder.png");
+    ImGui::SameLine();
+    std::string label = node.name;
+
+    if (fileExplorerRenameTarget == node.fullPath) {
+        HandleRenameFolder(node);        
+    }
+    else {
+            bool nodeOpen = ImGui::TreeNodeEx(label.c_str(), nodeFlags);
+                ImGui::PopStyleColor(); // Kembalikan warna teks
+
+                // Generate ID popup context berdasarkan fullPath untuk menghindari konflik
+                std::string popupId = "context_menu_dir_" + node.fullPath;
+
+                // Tampilkan popup context pada folder ketika klik kanan
+                if (ImGui::BeginPopupContextItem(popupId.c_str())) {
+                    if (ImGui::MenuItem(" Copy")) {
+                        HandleCopy(node);
+                    }
+
+                    if (ImGui::MenuItem(" Paste")) {
+                        HandlePaste(node.fullPath);
+                    }
+                    
+                    if (ImGui::MenuItem(" Import")) {
+                        OpenFile();
+                    }
+
+                    if (ImGui::MenuItem(" Create New Folder")) {
+                        fileExplorerRenameBufferSet = true;
+                        HandleCreateNewFolder(node.fullPath);
+                    }
+                    // Opsi Delete
+                    if (ImGui::MenuItem(" Delete")) {
+                        if (MessageBoxA(NULL,
+                            ("Are you sure you want to delete " + node.name + "?").c_str(),
+                            "Confirm Delete",
+                            MB_YESNO | MB_ICONWARNING) == IDYES) {
+                            DeleteFolder(node.fullPath);
+                        }
+                    }
+
+                    // Panggil method untuk membuat file baru di folder yang diklik
+                    HandleCreateNewFile(node.fullPath);
+
+                    if (ImGui::MenuItem(" Rename")) {
+                        fileExplorerRenameTarget = node.fullPath;
+                        strcpy(renameBuffer, node.name.c_str());                
+                        // HandleRename(node.fullPath);
+                    }
+
+                    ImGui::EndPopup();
                 }
+                // ImGui::EndGroup();
+
+                // Jika node terbuka, render child-nya
+                if (nodeOpen) {
+                        for (const auto& child : node.children) {
+                            DrawAssetTree(child);
+                        }
+                        ImGui::TreePop();
+                    }
             }
-            cout << node.fullPath << endl;
-            // cout << node.children[0].fullPath << endl;
-            HandleCreateNewFileUI(node.fullPath);
-            ImGui::EndPopup();
-        }
-        
-        if (nodeOpen) {
-            for (const auto& child : node.children) {
-                DrawAssetTree(child);
-            }
-            ImGui::TreePop();
-        }
     }
     else {
         // Check file extension
@@ -197,6 +293,11 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
         
         // Create label with icon
         std::string label = node.name;
+
+        if (renamingPath == node.fullPath) {
+            HandleRename(node);
+        } 
+        else {
         // File item as selectable
         if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) {
             if (ImGui::IsMouseDoubleClicked(0)) {
@@ -230,8 +331,17 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
         
         // Context menu for files
         if (ImGui::BeginPopupContextItem(popupId.c_str())) {
-            DrawIconFromImage("assets/images/fileicons/trash.png");
-            if (ImGui::MenuItem(ICON_FA_TRASH " Delete")) {
+            // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+            // DrawIconFromImage("assets/images/fileicons/trash.png");
+            if (ImGui::MenuItem(" Copy")) {
+                HandleCopy(node);
+            }
+
+            if (ImGui::MenuItem(" Paste")) {
+                HandlePaste(fileExplorerCopyTarget);
+            }
+            
+            if (ImGui::MenuItem(" Delete")) {
                 if (MessageBoxA(NULL,
                     ("Are you sure you want to delete " + node.name + "?").c_str(),
                     "Confirm Delete",
@@ -240,7 +350,7 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
                 }
             }
             
-            if (ImGui::MenuItem(ICON_FA_PLUS " Edit")) {
+            if (ImGui::MenuItem(" Edit")) {
                 // Open in appropriate editor based on file type
                 std::string cmd;
 #ifdef _WIN32
@@ -251,8 +361,10 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
                 system(cmd.c_str());
             }
             
-            if (ImGui::MenuItem(ICON_FA_COPY " Duplicate")) {
-                // Add functionality for duplicating file
+            if (ImGui::MenuItem(" Rename")) {
+                renamingPath = node.fullPath;
+                strcpy(renameBuffer, node.name.c_str());                
+                // HandleRename(node.fullPath);
             }
             
             ImGui::EndPopup();
@@ -261,6 +373,7 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
         // Pop color style
         ImGui::PopStyleColor();
         ImGui::EndGroup();
+        }
     }
 }
 
@@ -408,6 +521,7 @@ void HandlerProject::RenderNotifications() {
             
             // Title with color
             ImGui::PushStyleColor(ImGuiCol_Text, notification.color);
+            // DrawIconFromImage("assets/images/fileicons/info.png");
             ImGui::Text("%s", notification.title.c_str());
             ImGui::PopStyleColor();
             
@@ -466,7 +580,7 @@ ImTextureID HandlerProject::GetCachedIcon(const std::string& path) {
 void HandlerProject::StartFileWatcher() {
     // Check if watcher is already running
     if (fileWatcherRunning) {
-        ShowNotification(ICON_FA_INFO " Info", "File watcher is already running", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+        ShowNotification(" Info", "File watcher is already running", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
         return;
     }
     
@@ -482,7 +596,7 @@ void HandlerProject::StartFileWatcher() {
     // Start watcher thread
     fileWatcherThread = std::thread(&HandlerProject::FileWatcherLoop, this);
     
-    ShowNotification(ICON_FA_EYE " File Watcher", "Started monitoring project files", ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
+    ShowNotification(" File Watcher", "Started monitoring project files", ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
     cout << "File watcher started" << endl;
 }
 
@@ -505,7 +619,7 @@ void HandlerProject::StopFileWatcher() {
         fileWatcherThread.join();
     }
     
-    ShowNotification(ICON_FA_EYE_SLASH " File Watcher", "Stopped monitoring project files", ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
+    ShowNotification(" File Watcher", "Stopped monitoring project files", ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
     cout << "File watcher stopped" << endl;
 }
 
@@ -631,7 +745,7 @@ bool HandlerProject::CheckForFileChanges() {
                     message += " files detected";
                 }
                 
-                ShowNotification(ICON_FA_FILE " Files Changed", message, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+                ShowNotification(" Files Changed", message, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
             }
         }
         
@@ -686,7 +800,7 @@ void HandlerProject::SearchFileOrFolder(const AssetFile& node, const std::string
 }
 
 void HandlerProject::NewScene(const std::string& name) {
-    std::string sceneFolder = projectPath + "/scenes";
+    std::string sceneFolder = projectPath + "/assets/scenes";
     fs::create_directories(sceneFolder);  // pastikan foldernya ada
 
     std::string fullPath = sceneFolder + "/" + name + ".scene";
@@ -702,229 +816,277 @@ void HandlerProject::NewScene(const std::string& name) {
     }
 }
 
-void HandlerProject::NewFileForExplorer(const std::string& scriptName) {
-    string scriptPath = projectPath + "/assets/scripts/";
-    string headerPath = projectPath + "/assets/scripts/header/";
-    string fullPath = scriptPath + scriptName + ".cpp";
-    
-    // Create scripts directory if it doesn't exist
-    if (_mkdir(scriptPath.c_str()) != 0 && errno != EEXIST || _mkdir(headerPath.c_str()) != 0 && errno != EEXIST) {
-        cerr << "Error creating scripts directory" << endl;
-        return;
-    }
+void HandlerProject::HandleCreateNewFile(const std::string &targetFolder) {
+    static bool isCreating = false;
+    static bool isScriptFile = false;
+    static std::string createdFilePath;
+    static std::string createdCPPPath;
+    static std::string createdHPPPath;
+    static char renameBuffer[256] = "";
 
-    // Check if file already exists
-    ifstream checkFile(fullPath.c_str());
-    if (checkFile.good()) {
-        cerr << "Script file already exists: " << fullPath << endl;
-        checkFile.close();
-        return;
-    }
-
-    // Create and write the new script file
-    ofstream scriptFile(fullPath);
-    if (scriptFile.is_open()) {
-        // Write template code
-        scriptFile << "#include \"" << scriptName << ".hpp\"\n\n";
-        scriptFile << "class " << scriptName << " {\n";
-        scriptFile << "private:\n";
-        scriptFile << "    // Add private members here\n\n";
-        scriptFile << "public:\n";
-        scriptFile << "    " << scriptName << "() {\n";
-        scriptFile << "        // Constructor\n";
-        scriptFile << "    }\n\n";
-        scriptFile << "    void Start() {\n";
-        scriptFile << "        // Called when script instance is being loaded\n";
-        scriptFile << "    }\n\n";
-        scriptFile << "    void Update() {\n";
-        scriptFile << "        // Called every frame\n";
-        scriptFile << "    }\n\n";
-        scriptFile << "    ~" << scriptName << "() {\n";
-        scriptFile << "        // Destructor\n";
-        scriptFile << "    }\n";
-        scriptFile << "};\n";
-        
-        scriptFile.close();
-
-        // Create corresponding header file
-        string headerFullPath = headerPath + scriptName + ".hpp";
-        ofstream headerFile(headerFullPath);
-        if (headerFile.is_open()) {
-            headerFile << "#pragma once\n\n";
-            headerFile << "class " << scriptName << " {\n";
-            headerFile << "public:\n";
-            headerFile << "    " << scriptName << "();\n";
-            headerFile << "    void Start();\n";
-            headerFile << "    void Update();\n";
-            headerFile << "    ~" << scriptName << "();\n";
-            headerFile << "};\n";
-            headerFile.close();
+    if (ImGui::BeginMenu(" Create New File")) {
+        if (ImGui::MenuItem("Empty File")) {
+            std::string defaultName = "NewFile.txt";
+            createdFilePath = targetFolder + "/" + defaultName;
+            std::ofstream ofs(createdFilePath); ofs.close();
+            strncpy(renameBuffer, "NewFile", sizeof(renameBuffer));
+            isCreating = true;
+            isScriptFile = false;
         }
 
-        cout << "Created script: " << fullPath << endl;
-        cout << "Created Header: " << headerFullPath << endl;
-        if (MessageBoxA(NULL, 
-            ("New script created successfully. Do you want to open the file?"),
-            "GameEngine SDL",
-            MB_YESNO | MB_ICONINFORMATION) == IDYES)
-        {
-            OpenFile(projectPath);
-        }
-    } else {
-        cerr << "Error creating script file: " << fullPath << endl;
-    }
-}
+        if (ImGui::BeginMenu("Scripts")) {
+            if (ImGui::MenuItem("C++ Script")) {
+                std::string baseName = "NewScript";
+                createdCPPPath = targetFolder + "/" + baseName + ".cpp";
+                createdHPPPath = targetFolder + "/" + baseName + ".hpp";
 
-void HandlerProject::HandleCreateNewFileUI(const std::string &targetFolder) {
-    // --- Variabel static untuk menyimpan state pembuatan file baru ---
-    static bool showRenamePopup = false;
-    static bool isScriptFile = false;  // false: file kosong, true: script (C++ => .cpp + .hpp)
-    static std::string createdFilePath; // Untuk file kosong
-    static std::string createdCPPPath;  // Untuk file script *.cpp*
-    static std::string createdHPPPath;  // Untuk file script *.hpp*
-    static char newFileNameBuffer[256] = "";
-
-    // Tampilkan context menu pada folder target
-    if (ImGui::BeginPopupContextItem("FolderContextMenu")) {
-        if (ImGui::BeginMenu("Create New File")) {
-            // Opsi: File Kosong
-            if (ImGui::MenuItem("Empty File")) {
-                createdFilePath = targetFolder + "/NewFile.txt";
-                std::ofstream ofs(createdFilePath);
-                ofs.close();
-
-                // Set default nama file di buffer (pastikan memuat ekstensi)
-                std::string defaultName = "NewFile.txt";
-                strncpy(newFileNameBuffer, defaultName.c_str(), sizeof(newFileNameBuffer));
-                isScriptFile = false;
-                showRenamePopup = true;
-            }
-            // Opsi: Submenu Scripts
-            if (ImGui::BeginMenu("Scripts")) {
-                // Opsi: C++ Script
-                if (ImGui::MenuItem("C++ Script")) {
-                    // Default base name untuk script
-                    std::string scriptBaseName = "NewScript";
-                    createdCPPPath = targetFolder + "/" + scriptBaseName + ".cpp";
-                    createdHPPPath = targetFolder + "/" + scriptBaseName + ".hpp";
-
-                    // Buat file .cpp dengan template
-                    std::ofstream scriptFile(createdCPPPath);
-                    if (scriptFile.is_open()) {
-                        scriptFile << "#include \"" << scriptBaseName << ".hpp\"\n\n";
-                        scriptFile << "class " << scriptBaseName << " {\n";
-                        scriptFile << "private:\n";
-                        scriptFile << "    // Add private members here\n\n";
-                        scriptFile << "public:\n";
-                        scriptFile << "    " << scriptBaseName << "() {\n";
-                        scriptFile << "        // Constructor\n";
-                        scriptFile << "    }\n\n";
-                        scriptFile << "    void Start() {\n";
-                        scriptFile << "        // Called when script instance is being loaded\n";
-                        scriptFile << "    }\n\n";
-                        scriptFile << "    void Update() {\n";
-                        scriptFile << "        // Called every frame\n";
-                        scriptFile << "    }\n\n";
-                        scriptFile << "    ~" << scriptBaseName << "() {\n";
-                        scriptFile << "        // Destructor\n";
-                        scriptFile << "    }\n";
-                        scriptFile << "};\n";
-                        scriptFile.close();
-                    }
-
-                    // Buat file header (.hpp) yang sesuai
-                    std::ofstream headerFile(createdHPPPath);
-                    if (headerFile.is_open()) {
-                        headerFile << "#pragma once\n\n";
-                        headerFile << "class " << scriptBaseName << " {\n";
-                        headerFile << "public:\n";
-                        headerFile << "    " << scriptBaseName << "();\n";
-                        headerFile << "    void Start();\n";
-                        headerFile << "    void Update();\n";
-                        headerFile << "    ~" << scriptBaseName << "();\n";
-                        headerFile << "};\n";
-                        headerFile.close();
-                    }
-                    
-                    // Set default base name ke buffer (tanpa ekstensi)
-                    strncpy(newFileNameBuffer, scriptBaseName.c_str(), sizeof(newFileNameBuffer));
-                    isScriptFile = true;
-                    showRenamePopup = true;
+                // .cpp template
+                std::ofstream cpp(createdCPPPath);
+                if (cpp.is_open()) {
+                // Write template code
+                cpp << "#include \"" << baseName << ".hpp\"\n\n";
+                cpp << "class " << baseName << " {\n";
+                cpp << "private:\n";
+                cpp << "    // Add private members here\n\n";
+                cpp << "public:\n";
+                cpp << "    " << baseName << "() {\n";
+                cpp << "        // Constructor\n";
+                cpp << "    }\n\n";
+                cpp << "    void Start() {\n";
+                cpp << "        // Called when script instance is being loaded\n";
+                cpp << "    }\n\n";
+                cpp << "    void Update() {\n";
+                cpp << "        // Called every frame\n";
+                cpp << "    }\n\n";
+                cpp << "    ~" << baseName << "() {\n";
+                cpp << "        // Destructor\n";
+                cpp << "    }\n";
+                cpp << "};\n";
+                cpp.close();
                 }
-                ImGui::EndMenu();
+
+                // .hpp template
+                std::ofstream hpp(createdHPPPath);
+                if (hpp.is_open()) {
+                    hpp << "#pragma once\n\n";
+                    hpp << "class " << baseName << " {\n";
+                    hpp << "public:\n";
+                    hpp << "    " << baseName << "();\n";
+                    hpp << "    void Start();\n";
+                    hpp << "    void Update();\n";
+                    hpp << "    ~" << baseName << "();\n";
+                    hpp << "};\n";
+                    hpp.close();
+                }
+
+                strncpy(renameBuffer, "NewScript", sizeof(renameBuffer));
+                isCreating = true;
+                isScriptFile = true;
             }
             ImGui::EndMenu();
         }
-        ImGui::EndPopup();
+
+        ImGui::EndMenu();
     }
 
-    // Tampilkan popup untuk mengganti nama file baru
-    if (showRenamePopup) {
-        if (isScriptFile) {
-            ImGui::OpenPopup("Rename New Script");
-            if (ImGui::BeginPopupModal("Rename New Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Masukkan nama script (tanpa ekstensi):");
-                ImGui::InputText("Script Base Name", newFileNameBuffer, IM_ARRAYSIZE(newFileNameBuffer));
-                if (ImGui::Button("Rename", ImVec2(120, 0))) {
-                    std::string baseName = newFileNameBuffer;
-                    std::string newCPPPath = targetFolder + "/" + baseName + ".cpp";
-                    std::string newHPPPath = targetFolder + "/" + baseName + ".hpp";
-                    try {
-                        std::filesystem::rename(createdCPPPath, newCPPPath);
-                        std::filesystem::rename(createdHPPPath, newHPPPath);
-                        createdCPPPath = newCPPPath;
-                        createdHPPPath = newHPPPath;
-                    } catch (const std::exception &e) {
-                        std::cerr << "Error renaming script files: " << e.what() << std::endl;
-                    }
-                    showRenamePopup = false;
-                    ImGui::CloseCurrentPopup();
+    // Menampilkan InputText jika file sedang dibuat
+    if (isCreating) {
+        ImGui::PushID("CreateNewFileRename");
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::InputText("##newfilename", renameBuffer, IM_ARRAYSIZE(renameBuffer),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+
+            std::string newBaseName = renameBuffer[0] ? renameBuffer : (isScriptFile ? "NewScript" : "NewFile");
+
+            if (isScriptFile) {
+                std::string newCPPPath = targetFolder + "/" + newBaseName + ".cpp";
+                std::string newHPPPath = targetFolder + "/" + newBaseName + ".hpp";
+                if (!std::filesystem::exists(newCPPPath) && !std::filesystem::exists(newHPPPath)) {
+                    std::filesystem::rename(createdCPPPath, newCPPPath);
+                    std::filesystem::rename(createdHPPPath, newHPPPath);
+                    ShowNotification("Created", "Script created: " + newBaseName, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                } else {
+                    ShowNotification("Rename Failed", "File already exists.", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                    try {
-                        if (std::filesystem::exists(createdCPPPath))
-                            std::filesystem::remove(createdCPPPath);
-                        if (std::filesystem::exists(createdHPPPath))
-                            std::filesystem::remove(createdHPPPath);
-                    } catch (const std::exception &e) {
-                        std::cerr << "Error removing script files: " << e.what() << std::endl;
-                    }
-                    showRenamePopup = false;
-                    ImGui::CloseCurrentPopup();
+            } else {
+                std::string newPath = targetFolder + "/" + newBaseName + ".txt";
+                if (!std::filesystem::exists(newPath)) {
+                    std::filesystem::rename(createdFilePath, newPath);
+                    ShowNotification("Created", "File created: " + newBaseName, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                } else {
+                    ShowNotification("Rename Failed", "File already exists.", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 }
-                ImGui::EndPopup();
             }
-        } else {
-            ImGui::OpenPopup("Rename New File");
-            if (ImGui::BeginPopupModal("Rename New File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Masukkan nama file baru:");
-                ImGui::InputText("File Name", newFileNameBuffer, IM_ARRAYSIZE(newFileNameBuffer));
-                if (ImGui::Button("Rename", ImVec2(120, 0))) {
-                    std::string newPath = targetFolder + "/" + std::string(newFileNameBuffer);
-                    try {
-                        std::filesystem::rename(createdFilePath, newPath);
-                        createdFilePath = newPath;
-                    } catch (const std::exception &e) {
-                        std::cerr << "Error renaming file: " << e.what() << std::endl;
-                    }
-                    showRenamePopup = false;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                    try {
-                        if (std::filesystem::exists(createdFilePath))
-                            std::filesystem::remove(createdFilePath);
-                    } catch (const std::exception &e) {
-                        std::cerr << "Error removing file: " << e.what() << std::endl;
-                    }
-                    showRenamePopup = false;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
+
+            isCreating = false;
         }
+
+        // Batal rename jika klik di luar input
+        if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
+            isCreating = false;
+        }
+        ImGui::PopID();
+    }
+}
+
+void HandlerProject::HandleRename(const AssetFile& node) {
+    ImGui::PushID(node.fullPath.c_str());
+    ImGui::SetNextItemWidth(200);
+
+        if (ImGui::InputText("##rename", renameBuffer, IM_ARRAYSIZE(renameBuffer),
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+                std::string newPath = fs::path(node.fullPath).parent_path().string() + "/" + renameBuffer;
+                if (!fs::exists(newPath)) {
+                    fs::rename(node.fullPath, newPath);
+                    ShowNotification("Renamed", node.name + " renamed to " + renameBuffer, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                } else {
+                    ShowNotification("Rename Failed", "File already exists.", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                }
+                renamingPath.clear();
+            }
+
+            if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
+                renamingPath.clear();
+            }
+
+            ImGui::PopID();
+            ImGui::PopStyleColor();
+            ImGui::EndGroup();
+}
+
+void HandlerProject::HandleCreateNewFolder(const std::string &targetFolder) {
+    static char newFolderNameBuffer[256] = "New Folder";
+
+    std::string newFolderPath = targetFolder + "/" + std::string(newFolderNameBuffer);
+            try {
+            // Membuat folder baru secara rekursif, jika belum ada
+            bool created = std::filesystem::create_directory(newFolderPath);
+            if (created) {
+                std::cout << "Folder created: " << newFolderPath << std::endl;
+            } else {
+                        // Jika folder sudah ada atau gagal dibuat tanpa exception
+                std::cerr << "Failed to create folder (may already exist): " << newFolderPath << std::endl;
+            }
+            } catch (const std::filesystem::filesystem_error &e) {
+                std::cerr << "Error creating folder: " << e.what() << std::endl;
+            }
+}
+
+void HandlerProject::DeleteFolder(const std::string& folderPath) {
+    // Menggunakan std::error_code untuk menangani error tanpa melempar exception
+    std::error_code ec;
+    // Hapus folder beserta isinya secara rekursif
+    std::uintmax_t numRemoved = std::filesystem::remove_all(folderPath, ec);
+
+    if (ec) {
+        std::cerr << "Error deleting folder: " << folderPath << " - " 
+                  << ec.message() << std::endl;
+    } else {
+        std::cout << "Deleted folder: " << folderPath 
+                  << " (" << numRemoved << " items removed)" << std::endl;
+        // Refresh atau update status proyek
+        isOpenedProject = true;
+    }
+}
+
+void HandlerProject::HandleRenameFolder(const AssetFile& node) {
+    ImGui::PushID(node.fullPath.c_str());
+    ImGui::SetNextItemWidth(200);
+
+        if (ImGui::InputText("##rename", renameBuffer, IM_ARRAYSIZE(renameBuffer),
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+                std::string newPath = fs::path(node.fullPath).parent_path().string() + "/" + renameBuffer;
+                if (!fs::exists(newPath)) {
+                    fs::rename(node.fullPath, newPath);
+                    ShowNotification("Renamed", node.name + " renamed to " + renameBuffer, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                } else {
+                    ShowNotification("Rename Failed", "Folder already exists.", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                }
+                fileExplorerRenameTarget.clear();
+            }
+
+            if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
+                fileExplorerRenameTarget.clear();
+            }
+
+            ImGui::PopID();
+            ImGui::PopStyleColor();
+            // ImGui::EndGroup();
+}
+
+void HandlerProject::HandleCopy(const AssetFile& node) {
+    fileExplorerCopyTarget = node.fullPath;
+    ShowNotification("Copy", "Copied: " + node.name, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+}
+
+void HandlerProject::HandlePaste(const std::string& targetFolder) {
+    if (fileExplorerCopyTarget.empty()) {
+        ShowNotification("Paste Failed", "No item in clipboard!", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        return;
     }
 
+    try {
+        fs::path sourcePath = fileExplorerCopyTarget;
+        fs::path targetPath = fs::path(targetFolder) / sourcePath.filename();
+
+        // Check if target already exists
+        if (fs::exists(targetPath)) {
+            string newName = sourcePath.stem().string() + "_copy" + sourcePath.extension().string();
+            targetPath = fs::path(targetFolder) / newName;
+        }
+
+        if (fs::is_directory(sourcePath)) {
+            // Copy directory recursively
+            fs::copy(sourcePath, targetPath, fs::copy_options::recursive);
+        } else {
+            // Copy file
+            fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
+        }
+
+        ShowNotification("Paste Complete", "Pasted: " + targetPath.filename().string(), 
+            ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        
+        // Clear copy target after successful paste
+        fileExplorerCopyTarget.clear();
+        
+        // Refresh project
+        isOpenedProject = true;
+
+    } catch (const fs::filesystem_error& e) {
+        ShowNotification("Paste Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    }
+}
+
+void HandlerProject::HandleImport(const std::string& targetFolder) {
+    if (fileTargetImport.empty()) {
+        ShowNotification("Import Failed", "No file selected!", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        return;
+    }
+
+    try {
+        fs::path sourcePath = fileTargetImport;
+        fs::path targetPath = fs::path(targetFolder) / sourcePath.filename();
+
+        // Check if target already exists
+        if (fs::exists(targetPath)) {
+            string newName = sourcePath.stem().string() + "_copy" + sourcePath.extension().string();
+            targetPath = fs::path(targetFolder) / newName;
+        }
+
+        // Copy file
+        fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
+
+        ShowNotification("Import Successful", 
+            "Imported: " + sourcePath.filename().string() + "\nTo: " + targetFolder, 
+            ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        
+        // Clear import target
+        fileTargetImport.clear();
+        
+        // Refresh project
+        isOpenedProject = true;
+
+    } catch (const fs::filesystem_error& e) {
+        ShowNotification("Import Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    }
 }
