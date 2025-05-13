@@ -11,8 +11,13 @@ extern "C" {
     // Sesuaikan path sesuai dengan instalasi FFmpeg Anda
     #include <libavcodec/avcodec.h>
     #include <libavformat/avformat.h>
-    #include <libavutil/imgutils.h>
     #include <libswscale/swscale.h>
+    #include <libavutil/imgutils.h>
+    #include <libswresample/swresample.h>
+    #include <libavutil/channel_layout.h>   // untuk av_get_default_channel_layout
+    #include <libavutil/samplefmt.h> 
+    #include <libavutil/opt.h>
+    #include <libavutil/time.h>
 }
 
 #ifdef _MSC_VER

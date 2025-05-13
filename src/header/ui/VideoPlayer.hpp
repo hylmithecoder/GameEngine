@@ -1,10 +1,13 @@
 #pragma once
 #include <string>
 #include <SDL.h>
-#include <GLFW/glfw3.h>
+// #include <GLFW/glfw3.h>
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
-#include <SDL_opengl.h>
+#include "imgui_impl_opengl3.h"
+// #include <SDL_opengl.h>
+// #include <TextureManager.hpp>
+#include <glad/glad.h>
 #include <SDL_audio.h>
 
 // FFmpeg includes

@@ -1,5 +1,8 @@
-#include "HandlerProject.hpp"
+// #include "HandlerProject.hpp"
 #include "MainWindow.hpp"
+
+// HandlerProject::HandlerProject() :
+//     sceneRenderer(800, 600){}
 
 void HandlerProject::OpenFolder() {
     NFD::Guard nfdGuard;

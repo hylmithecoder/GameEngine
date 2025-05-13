@@ -5,14 +5,19 @@
 #include <SDL_ttf.h>
 #include "header/ui/MainWindow.hpp"
 #include "scripts/ui/Check_Environment.cpp"
+#include "SceneRenderer2D.hpp"
 
 int main(int argc, char* argv[]) {
     // Check environment
+    
     Environment env;
     env.detectDriveInfo();
     env.printEnvironment();
     env.printDriveInfo();
     av_log_set_level(AV_LOG_ERROR);
+    
+    // SceneRenderer2D renderer(1280, 720);
+
 
     // assets.load_assets();
     // Init SDL
@@ -22,6 +27,10 @@ int main(int argc, char* argv[]) {
     }
 
     MainWindow window("GameEngine SDL", 1280, 720);
+
+    char cwd[512];
+    _getcwd(cwd, sizeof(cwd));
+    std::cout << "Working Directory: " << cwd << std::endl;
 
     // window.assets.load_assets();
 

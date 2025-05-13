@@ -29,7 +29,6 @@
 #include <windows.h>
 #include <shellapi.h>
 #endif
-// #include "MainWindow.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
@@ -56,13 +55,12 @@ private:
 
 public:
     HandlerProject()
-        : sceneRenderer(800, 600) 
     {}
     // Class
     Scene currentScene;    
     SceneSerializer serializer;
     std::string currentScenePath;
-    SceneRenderer2D sceneRenderer;
+    SceneRenderer2D* sceneRenderer;
     bool isSceneLoaded = false;
     // Color
     ImVec4 redColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);

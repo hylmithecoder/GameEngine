@@ -43,7 +43,9 @@ void MainWindow::set_window_icon() {
 }
 
 bool MainWindow::init(const char* title) {
+    // SceneRenderer2D viewport(800, 600);
     // Inisialisasi SDL dengan dukungan video dan audio
+    cout << "Init Main Window" << endl;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         cerr << "SDL could not initialize! SDL Error: " << SDL_GetError() << endl;
         return false;
@@ -65,17 +67,17 @@ bool MainWindow::init(const char* title) {
         return false;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return false;
-    }
+    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // if (!renderer) {
+    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+    //     SDL_DestroyWindow(window);
+    //     SDL_Quit();
+    //     return false;
+    // }
 
     // Aktifkan OpenGL
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     glContext = SDL_GL_CreateContext(window);
     if (!glContext) {
@@ -84,11 +86,13 @@ bool MainWindow::init(const char* title) {
     }
     SDL_GL_SetSwapInterval(1);  // VSync
 
-    // AVHWDeviceType type = av_hwdevice_find_type_by_name("cuda");
-    // av_hwdevice_ctx_create(&videoPlayer->hw_device_ctx, type, NULL, NULL, 0);
-    // videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
-
-
+    if(!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        cerr << "Failed to initialize GLAD!" << endl;
+        return false;
+    }
+    cout << "Open GL version: " << glGetString(GL_VERSION) << endl;
+    sceneRenderer2D = new SceneRenderer2D(800, 600);
+    // sceneRenderer2D->Init(); // ✅ OpenGL call aman di sini
     // Set window icon
     set_window_icon();
 
@@ -1348,7 +1352,7 @@ void MainWindow::renderVideoPlayer() {
                 updateAudio();
             }
             else {
-                if (videoPlayer->fps < 60) {
+                if (videoPlayer->fps < 59) {
                     cout << "Handle Video below 60 fps" << endl;
                     updateMedia();
                 }
@@ -1467,6 +1471,7 @@ void MainWindow::update() {
         projectHandler.isOpenedProject = false;
     }
 
+    // assetRoot = projectHandler.BuildAssetTree("E:/Game Engine Folder/My First Project/");
     if (!firstOpenProject) {
         if (MessageBoxA(NULL, 
             ("You Must Be Open Project First?"),
@@ -1475,6 +1480,7 @@ void MainWindow::update() {
         {            
             projectHandler.OpenFolder();
             assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+            // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;
         }
     }

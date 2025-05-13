@@ -2,7 +2,6 @@
 #include "Scene.hpp"
 #include <json.hpp>
 #include <fstream>
-// #include <HandlerProject.hpp>
 
 using json = nlohmann::json;
 

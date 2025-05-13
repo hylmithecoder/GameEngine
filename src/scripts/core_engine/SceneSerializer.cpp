@@ -2,6 +2,7 @@
 #include <fstream>
 #include <json.hpp>
 #include <iostream>
+#include <string>
 using namespace std;
 
 using json = nlohmann::json;
@@ -38,11 +39,11 @@ Scene SceneSerializer::LoadScene(const std::string& path) {
         obj.y = jObj["y"];
         obj.spritePath = jObj["spritePath"];
         scene.objects.push_back(obj);
+        string info = "Name: " + obj.name + " Position x: " + std::to_string(obj.x) + " Position y: " + std::to_string(obj.y) + " Sprite Path: " + obj.spritePath;
         cout << obj.name << endl;
         cout << obj.x << endl;
         cout << obj.y << endl;
-        cout << obj.spritePath << endl;
-        // HandlerProject::ShowNotification("Load Scene", obj.name + " Loaded" + obj.spritePath + " Path", ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        cout << obj.spritePath << endl;        
     }
     cout << "Load Scene" << endl;
     cout << scene.sceneName << endl;

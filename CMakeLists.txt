@@ -14,6 +14,7 @@ set(FFMPEG_DIR "E:/FFmpeg")
 set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
 set(NFD "E:/nativefiledialog-extended")
+set(GLM "E:/glm")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -48,6 +49,7 @@ set(HEADERS
     src/header/core_engine/SceneSerializer.hpp
     src/header/core_engine/SceneRenderer2D.hpp
     src/header/core_engine/TextureManager.hpp
+    src/header/core_engine/GLHeader.hpp
 )
 
 set(SOURCE_TEST
@@ -56,6 +58,9 @@ set(SOURCE_TEST
     src/scripts/ui/test_main.cpp
 )
 
+set(SOURCE_TEST_GLEW
+    src/scripts/test_glew.cpp
+)
 
 # Add ImGui source files
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -96,18 +101,30 @@ set(JSON
     ${JSON_DIR}/json.hpp
 )
 
+set(GLAD_DIR ${CMAKE_SOURCE_DIR}/vendor/glad/)
+set(GLAD
+    ${GLAD_DIR}/src/glad.c
+)
+
+set(GLAD_4_DIR ${CMAKE_SOURCE_DIR}/vendor/glad4.4)
+set(GLAD_4
+    ${GLAD_4_DIR}/src/glad.c
+)
+
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON})
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_TEST})
 target_link_options(TestBackground PRIVATE -mconsole)
+add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_TEST} ${GLAD_4})
+target_link_options(TestGLEW PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
-# find_package(GLEW REQUIRED)
+find_package(GLEW REQUIRED)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -121,12 +138,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${NFD}/src/include
     ${JSON_DIR}
     ${STB}
+    ${GLM}
     # GL
     # ${GLEW}/include/GL
     ${GLFW}/include
     ${GLES2}
     opengl32
     gdi32
+    ${GLAD_4_DIR}/include
 )
 
 target_include_directories(TestBackground PRIVATE
@@ -141,6 +160,24 @@ target_include_directories(TestBackground PRIVATE
     opengl32
     gdi32
     # GLES2
+    # GLEW
+    
+)
+
+target_include_directories(TestGLEW PRIVATE
+    ${SDL2_DIR}/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${FFMPEG_DIR}
+    ${STB}
+    ${GLFW}/include
+    ${GLES2}
+    opengl32
+    gdi32
+    ${GLAD_4_DIR}/include
+    # GLES2
+    # GLEW
 )
 
 # Link libraries
@@ -168,6 +205,20 @@ target_link_libraries(TestBackground PRIVATE
     ${LIBRARY}/swresample.lib
     ${LIBRARY}/swscale.lib
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # GLEW::GLEW
+)
+
+target_link_libraries(TestGLEW PRIVATE
+    ${SDL2_DIR}/lib/x64/SDL2.lib
+    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    OpenGL::GL
+    ${LIBRARY}/avformat.lib
+    ${LIBRARY}/avcodec.lib 
+    ${LIBRARY}/avutil.lib 
+    ${LIBRARY}/swresample.lib
+    ${LIBRARY}/swscale.lib
+    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # GLEW::GLEW
 )
 
 # Copy DLL files to output directory

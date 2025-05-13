@@ -1,18 +1,21 @@
 #pragma once
+// #include <glad/glad.h>
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include <SDL_ttf.h>
+#include "SceneRenderer2D.hpp"
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
-#include <assets.hpp>
-#include <SDL_opengl.h>
-#include <GLFW/glfw3.h>
-#include <GLES2/gl2.h>
+#include <assets.hpp> // Include the header file for assets
+// #include <SDL_opengl.h>
+// #include <GLFW/glfw3.h>
+// #include <GLES2/gl2.h>
+// #include <FFmpegWrapper.hpp>
 #include <list>
 #include "IconsFontAwesome6.h"
-#include <HandlerProject.hpp>
+#include <HandlerProject.hpp> // Include the header file for HandlerProject
 #define IMGUI_HAS_DOCK
 #define IMGUI_HAS_VIEWPORT
 // #include "SimpleRenderer.hpp"
@@ -75,12 +78,13 @@ private:
     // void InitRocket();
     // void LoadDocument(const char* url);
     VideoPlayer* videoPlayer; // Assuming VideoPlayer is a class that handles video playback
-    HandlerProject projectHandler;
 
 public:
     MainWindow(const char* title, int width = 1280, int height = 720);
     ~MainWindow();
         
+    SceneRenderer2D* sceneRenderer2D = nullptr;
+    HandlerProject projectHandler;
     TextureData backgroundTexture;
     SwrContext* swrContext = nullptr;
     bool isOnlyAudio = false;
@@ -122,4 +126,7 @@ public:
     void RenderMenuBar();
     void HandleBackground();
     void HandleSearch();
+    void RenderViewportToolbar();
+    void RenderGameViewport();
+    void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
 };
