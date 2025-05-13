@@ -1,6 +1,6 @@
 #include <windows.h>
 #include <iostream>
-#include <string>
+// #include <string>
 #include <vector>
 #include <tchar.h>
 #include <sysinfoapi.h>
@@ -13,7 +13,6 @@
 #include <cstdint>
 
 using namespace std;
-
 class Environment {
 public:
     void detectDriveInfo();

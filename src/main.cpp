@@ -3,8 +3,8 @@
 #include <SDL.h>
 // #include <SDL_syswm.h>
 #include <SDL_ttf.h>
-#include "header/MainWindow.hpp"
-#include "scripts/Check_Environment.cpp"
+#include "header/ui/MainWindow.hpp"
+#include "scripts/ui/Check_Environment.cpp"
 
 int main(int argc, char* argv[]) {
     // Check environment

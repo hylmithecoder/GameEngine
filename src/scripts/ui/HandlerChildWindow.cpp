@@ -230,6 +230,7 @@ void MainWindow::RenderMainViewWindow() {
             ImGui::Separator();
             
             // Render game viewport
+            // projectHandler.sceneRenderer.RenderSceneToTexture(projectHandler.currentScene);
             static ImVec4 viewportBgColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
             ImGui::GetWindowDrawList()->AddRectFilled(
                 ImGui::GetCursorScreenPos(),
@@ -309,13 +310,15 @@ void MainWindow::RenderMenuBar() {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-                projectHandler.NewScene("Untitled");
+                projectHandler.SaveNewScene();
             }
             if (ImGui::MenuItem("Open Project", "Ctrl+O")) {    
                 projectHandler.isOpenedProject = true;            
                 projectHandler.OpenFolder();
             }
-
+            if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
+                projectHandler.OpenScene();
+            }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {}
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {}
             ImGui::Separator();

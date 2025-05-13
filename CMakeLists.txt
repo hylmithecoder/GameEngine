@@ -14,38 +14,46 @@ set(FFMPEG_DIR "E:/FFmpeg")
 set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
 set(NFD "E:/nativefiledialog-extended")
+# set(GLEW "C:/glew-2.1.0")
 
 # Add source files
 set(SOURCES 
     src/main.cpp
     src/resources.rc
-    src/scripts/MainWindow.cpp
+    src/scripts/ui/MainWindow.cpp
     # src/RocketInterfaces.cpp
-    src/SimpleRenderer.cpp
-    src/scripts/SecondaryWindow.cpp
-    src/scripts/Check_Environment.cpp
-    src/scripts/VideoPlayer.cpp
-    src/scripts/assets.cpp
-    src/scripts/HandlerProject.cpp
-    src/scripts/HandlerChildWindow.cpp
+    # src/SimpleRenderer.cpp
+    src/scripts/ui/SecondaryWindow.cpp
+    src/scripts/ui/Check_Environment.cpp
+    src/scripts/ui/VideoPlayer.cpp
+    src/scripts/ui/assets.cpp
+    src/scripts/ui/HandlerProject.cpp
+    src/scripts/ui/HandlerChildWindow.cpp
+    src/scripts/core_engine/SceneSerializer.cpp
+    src/scripts/core_engine/SceneRenderer2D.cpp
+    src/scripts/core_engine/TextureManager.cpp
 )
 
 # Add header files
 set(HEADERS
-    src/header/MainWindow.hpp
+    src/header/ui/MainWindow.hpp
     # src/header/RocketInterfaces.hpp
-    src/header/SimpleRenderer.hpp
-    src/header/SecondaryWindow.hpp
-    src/header/FFmpegWrapper.hpp
-    src/header/VideoPlayer.hpp
-    src/header/assets.hpp
-    src/header/HandlerProject.hpp
+    src/header/ui/SimpleRenderer.hpp
+    src/header/ui/SecondaryWindow.hpp
+    src/header/ui/FFmpegWrapper.hpp
+    src/header/ui/VideoPlayer.hpp
+    src/header/ui/assets.hpp
+    src/header/ui/HandlerProject.hpp
+    src/header/core_engine/Scene.hpp
+    src/header/core_engine/SceneSerializer.hpp
+    src/header/core_engine/SceneRenderer2D.hpp
+    src/header/core_engine/TextureManager.hpp
 )
 
 set(SOURCE_TEST
-    src/scripts/assets.cpp
-    src/header/assets.hpp
-    src/scripts/test_main.cpp
+    src/scripts/ui/assets.cpp
+    src/header/ui/assets.hpp
+    src/scripts/ui/test_main.cpp
 )
 
 
@@ -83,15 +91,23 @@ set(IMGUI_TEST
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
 )
 
+set(JSON_DIR ${CMAKE_SOURCE_DIR}/vendor/nlohmann)
+set(JSON
+    ${JSON_DIR}/json.hpp
+)
+
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
 # Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE})
+# add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+# add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON})
 target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_TEST})
 target_link_options(TestBackground PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
+# find_package(GLEW REQUIRED)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -99,11 +115,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header
+    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
     ${FFMPEG_DIR}
     ${NFD}/src/include
+    ${JSON_DIR}
     ${STB}
     # GL
+    # ${GLEW}/include/GL
     ${GLFW}/include
     ${GLES2}
     opengl32
@@ -114,7 +133,7 @@ target_include_directories(TestBackground PRIVATE
     ${SDL2_DIR}/include
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header
+    ${CMAKE_SOURCE_DIR}/src/header/ui
     ${FFMPEG_DIR}
     ${STB}
     ${GLFW}/include
@@ -135,6 +154,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LIBRARY}/swresample.lib
     ${LIBRARY}/swscale.lib    
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # ${GLEW}/lib/Release/x64/glew32.lib
+    # GLEW::GLEW
 )
 
 target_link_libraries(TestBackground PRIVATE
@@ -161,6 +182,7 @@ if(WIN32)
             "${LIBRARY}/swresample-6.dll"
             "${LIBRARY}/swscale-9.dll"
             "${GLFW}/lib-static-ucrt/glfw3.dll"
+            # "${GLEW}/bin/Release/x64/glew32.dll"
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
     )
     # add_custom_command(TARGET TestBackground POST_BUILD

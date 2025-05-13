@@ -1,4 +1,4 @@
-#include "../header/SecondaryWindow.hpp"
+#include "SecondaryWindow.hpp"
 #include <imgui.h>
 
 void ShowSecondaryWindow(bool* isOpen) {

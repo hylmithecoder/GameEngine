@@ -31,6 +31,7 @@ private:
     bool openAudio();
     void updateAudio();
     void updateMedia();
+    void updateMediaFixedGlitch();
     void renderVideoPlayer();
     void set_extension_icon();
     void renderVideoFrame();
@@ -106,6 +107,8 @@ public:
         "Shun (Small)"
     };
    
+    bool processVideoPacket(AVPacket* pkt);
+    void processAudioPacket(AVPacket* pkt);
     void HandleUpdateBackground(CurrentBackground currentBg);
     void handleEvents();
     void update();

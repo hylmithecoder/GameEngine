@@ -19,6 +19,92 @@ void HandlerProject::OpenFolder() {
         }
 }
 
+void HandlerProject::SaveNewScene() {
+    NFD_Init();
+
+    nfdchar_t* savePath;
+
+    // prepare filters for the dialog
+    nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+
+    // show the dialog
+    nfdresult_t result = NFD_SaveDialog(&savePath, filterItem, 1, NULL, "Untitled.ilmeescene");
+    if (result == NFD_OKAY) {
+        // Extract just the filename from the full path
+        std::string fullPath = savePath;
+        std::string filename = fs::path(fullPath).stem().string();
+        
+        // Create the scene with just the filename
+        NewScene(filename);
+        
+        // remember to free the memory
+        NFD_FreePath(savePath);
+        
+        ShowNotification("Scene Created", "Created new scene: " + filename, 
+            ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+    } else if (result == NFD_CANCEL) {
+        puts("User pressed cancel.");
+    } else {
+        printf("Error: %s\n", NFD_GetError());
+        ShowNotification("Error", "Failed to create scene", 
+            ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    }
+
+    NFD_Quit();
+}
+
+void HandlerProject::OpenScene() {
+    NFD::Guard nfdGuard;
+    NFD::UniquePath outPath;
+
+    // Prepare filters for scene files
+    nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+
+    try {
+        // Show open file dialog
+        nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
+        
+        if (result == NFD_OKAY && outPath.get() != nullptr) {
+            std::string scenePath = outPath.get();
+            
+            // Validate file extension
+            if (fs::path(scenePath).extension() != ".ilmeescene") {
+                ShowNotification("Error", "Invalid scene file format", 
+                    ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                return;
+            }
+
+            // Try to load the scene
+            try {
+                currentScene = serializer.LoadScene(scenePath);
+                std::string sceneName = fs::path(scenePath).stem().string();
+                ShowNotification("Scene Loaded", 
+                    "Successfully loaded scene: " + sceneName,
+                    ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                
+                // Update scene state
+                isSceneLoaded = true;
+                currentScenePath = scenePath;
+                
+            } catch (const std::exception& e) {
+                ShowNotification("Load Error", 
+                    "Failed to load scene: " + std::string(e.what()),
+                    ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            }
+        } else if (result == NFD_CANCEL) {
+            // User cancelled - no need for notification
+        } else {
+            ShowNotification("Error", 
+                "Failed to open file dialog: " + std::string(NFD::GetError()),
+                ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        }
+    } catch (const std::exception& e) {
+        ShowNotification("Error", 
+            "Unexpected error: " + std::string(e.what()),
+            ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    }
+}
+
 void HandlerProject::OpenFile() {
     NFD::Guard nfdGuard;
     NFD::UniquePathSet outPaths;
@@ -803,18 +889,32 @@ void HandlerProject::NewScene(const std::string& name) {
     std::string sceneFolder = projectPath + "/assets/scenes";
     fs::create_directories(sceneFolder);  // pastikan foldernya ada
 
-    std::string fullPath = sceneFolder + "/" + name + ".scene";
+    std::string fullPath = sceneFolder + "/" + name + ".ilmeescene";
 
+    // 1. Buat file scene kosong
     std::ofstream outFile(fullPath);
     if (outFile.is_open()) {
-        outFile << "{\n\t\"name\": \"" << name << "\",\n\t\"objects\": []\n}";
+        outFile << "{\n\t\"sceneName\": \"" << name << "\",\n\t\"objects\": []\n}";
         outFile.close();
 
-        ShowNotification("Scene Created", "Scene " + name + " berhasil dibuat.", ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        // 2. Load langsung file ke currentScene (gunakan SceneSerializer)
+        try {
+            // currentScene = serializer.LoadScene(fullPath);
+
+            ShowNotification("Scene Created & Loaded",
+                             "Scene " + name + " berhasil dibuat dan dimuat.",
+                             ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        } catch (const std::exception& e) {
+            ShowNotification("Load Failed",
+                             std::string("Scene dibuat tapi gagal dimuat: ") + e.what(),
+                             ImVec4(1.0f, 0.5f, 0.2f, 1.0f));
+        }
     } else {
-        ShowNotification("Failed", "Gagal membuat scene!", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        ShowNotification("Failed", "Gagal membuat scene!",
+                         ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
 }
+
 
 void HandlerProject::HandleCreateNewFile(const std::string &targetFolder) {
     static bool isCreating = false;

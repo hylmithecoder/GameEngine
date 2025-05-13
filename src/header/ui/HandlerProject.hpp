@@ -22,6 +22,9 @@
 #include <stb_image.h>
 #include <ranges>
 #include <algorithm>
+#include <nfd.h>
+#include <SceneSerializer.hpp>
+#include <SceneRenderer2D.hpp>
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -32,8 +35,6 @@ namespace fs = std::filesystem;
 
 class HandlerProject {
 private:
-    
-
     std::string getCurrentDateTime() {
         time_t now = time(0);
         struct tm tstruct;
@@ -54,7 +55,15 @@ private:
     }
 
 public:
-    HandlerProject() {}
+    HandlerProject()
+        : sceneRenderer(800, 600) 
+    {}
+    // Class
+    Scene currentScene;    
+    SceneSerializer serializer;
+    std::string currentScenePath;
+    SceneRenderer2D sceneRenderer;
+    bool isSceneLoaded = false;
     // Color
     ImVec4 redColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
     ImVec4 greenColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
@@ -150,4 +159,6 @@ public:
     void HandleCopy(const AssetFile& node);
     void HandlePaste(const std::string& targetFolder);
     void HandleImport(const std::string& targetFile);
+    void SaveNewScene();
+    void OpenScene();
 };

@@ -1,4 +1,5 @@
 #pragma once
+// #include <GL/glew.h>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl3.h"
@@ -6,6 +7,8 @@
 #include <SDL_main.h>
 #include <SDL.h>
 #include <windows.h>
+#include <string>
+#include <cstdlib>
 // Untuk OpenGL 3
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <SDL_opengles2.h>

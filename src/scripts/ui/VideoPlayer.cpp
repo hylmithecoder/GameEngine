@@ -1,4 +1,4 @@
-#include "../header/VideoPlayer.hpp"
+#include <VideoPlayer.hpp>
 #include <iostream>
 using namespace std;
 // #include <swresample.h>
@@ -56,7 +56,7 @@ bool VideoPlayer::openAudio() {
 
     // 6. Inisialisasi SwrContext
     if (swr_init(swrContext) < 0) {
-        std::cerr << "Failed to initialize resampling context: " << swrContext << endl;
+        std::cerr << "[Video Player] Failed to initialize resampling context: " << swrContext << endl;
         return false;
     }
     cout << "Resampling context initialized: " << swrContext << endl;
