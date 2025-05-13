@@ -244,6 +244,7 @@ void MainWindow::RenderMainViewWindow() {
             if (offsetY > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
 
             // Tampilkan texture sebagai image di ImGui
+            // TODO : Create A Position x and Position y Grid
             ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
             
             // Handle interaksi viewport
@@ -337,6 +338,8 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
     
     // Jika viewport dihover, tampilkan overlay informasi di pojok kanan bawah
     if (isHovered) {
+        ImGui::Text("Now Hovered View Port");
+        ImGui::SameLine();
         // Hitung posisi mouse relatif terhadap viewport (dalam piksel viewport)
         float viewportX = mousePos.x - viewportPos.x;
         float viewportY = mousePos.y - viewportPos.y;
@@ -358,11 +361,17 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         
         // Handling click untuk seleksi objek
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            ImGui::Text("Select Object");
+            ImGui::SameLine();
+            cout << "Select Object" << endl;
             projectHandler.sceneRenderer->HandleClick(worldPos.x, worldPos.y);
         }
         
         // Handling drag untuk move objek atau pan kamera
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            ImGui::Text("Drag Object");
+            ImGui::SameLine();
+            cout << "Drag Object" << endl;
             ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
             projectHandler.sceneRenderer->HandleDrag(delta.x, delta.y);
             ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
@@ -371,12 +380,14 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         // Handling zoom dengan mouse wheel
         float wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0) {
+            cout << "Handle Zoom" << endl;
             projectHandler.sceneRenderer->HandleZoom(wheel);
         }
         
         // Handling key input untuk precision movement
         ImGuiIO& io = ImGui::GetIO();
         if (projectHandler.sceneRenderer->HasSelectedObject()) {
+            cout << "Receive Input" << endl;
             float moveAmount = io.KeyShift ? 10.0f : 1.0f;
             
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {

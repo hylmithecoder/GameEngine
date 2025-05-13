@@ -156,50 +156,50 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
     // Use a simple shader for grid lines
     // This is simplified - you'd need a shader program for grid lines
     cout << "Draw Grid" << endl;
-    glUseProgram(gridShaderProgram);
+    // glUseProgram(gridShaderProgram);
     
-    // Set uniforms for grid shader
-    glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_Projection"), 
-                      1, GL_FALSE, glm::value_ptr(projection));
-    glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_View"), 
-                      1, GL_FALSE, glm::value_ptr(view));
+    // // Set uniforms for grid shader
+    // glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_Projection"), 
+    //                   1, GL_FALSE, glm::value_ptr(projection));
+    // glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_View"), 
+    //                   1, GL_FALSE, glm::value_ptr(view));
     
-    // Calculate grid boundaries based on viewport and camera
-    float left = cameraPosition.x - width * 0.5f / cameraZoom;
-    float right = cameraPosition.x + width * 0.5f / cameraZoom;
-    float top = cameraPosition.y - height * 0.5f / cameraZoom;
-    float bottom = cameraPosition.y + height * 0.5f / cameraZoom;
+    // // Calculate grid boundaries based on viewport and camera
+    // float left = cameraPosition.x - width * 0.5f / cameraZoom;
+    // float right = cameraPosition.x + width * 0.5f / cameraZoom;
+    // float top = cameraPosition.y - height * 0.5f / cameraZoom;
+    // float bottom = cameraPosition.y + height * 0.5f / cameraZoom;
     
-    // Snap grid boundaries to grid size
-    left = floor(left / gridSize) * gridSize;
-    right = ceil(right / gridSize) * gridSize;
-    top = floor(top / gridSize) * gridSize;
-    bottom = ceil(bottom / gridSize) * gridSize;
+    // // Snap grid boundaries to grid size
+    // left = floor(left / gridSize) * gridSize;
+    // right = ceil(right / gridSize) * gridSize;
+    // top = floor(top / gridSize) * gridSize;
+    // bottom = ceil(bottom / gridSize) * gridSize;
     
-    // Set grid line color (light gray)
-    glUniform4f(glGetUniformLocation(gridShaderProgram, "u_Color"), 0.5f, 0.5f, 0.5f, 0.5f);
+    // // Set grid line color (light gray)
+    // glUniform4f(glGetUniformLocation(gridShaderProgram, "u_Color"), 0.5f, 0.5f, 0.5f, 0.5f);
     
-    // Draw vertical grid lines
-    for (float x = left; x <= right; x += gridSize) {
-        float vertices[] = {
-            x, top,
-            x, bottom
-        };
+    // // Draw vertical grid lines
+    // for (float x = left; x <= right; x += gridSize) {
+    //     float vertices[] = {
+    //         x, top,
+    //         x, bottom
+    //     };
         
-        // Setup VAO/VBO for line
-        // Draw line using separate DrawLine function or direct OpenGL calls
-    }
+    //     // Setup VAO/VBO for line
+    //     // Draw line using separate DrawLine function or direct OpenGL calls
+    // }
     
-    // Draw horizontal grid lines
-    for (float y = top; y <= bottom; y += gridSize) {
-        float vertices[] = {
-            left, y,
-            right, y
-        };
+    // // Draw horizontal grid lines
+    // for (float y = top; y <= bottom; y += gridSize) {
+    //     float vertices[] = {
+    //         left, y,
+    //         right, y
+    //     };
         
-        // Setup VAO/VBO for line
-        // Draw line using separate DrawLine function or direct OpenGL calls
-    }
+    //     // Setup VAO/VBO for line
+    //     // Draw line using separate DrawLine function or direct OpenGL calls
+    // }
 }
 
 void SceneRenderer2D::DrawSelectionGizmo(const GameObject& obj) {
@@ -424,18 +424,6 @@ GLuint SceneRenderer2D::CreateShaderProgram(const std::string& vertPath, const s
     glDeleteShader(fragShader);
     
     return program;
-}
-
-std::string SceneRenderer2D::LoadFileAsString(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << path << std::endl;
-        return "";
-    }
-    
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
 }
 
 GLuint SceneRenderer2D::CreateWhiteTexture() {
