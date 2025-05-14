@@ -19,6 +19,8 @@ SceneRenderer2D::~SceneRenderer2D() {
     
     // Clean up shader and VAO/VBO resources
     if (shaderProgram) glDeleteProgram(shaderProgram);
+    if (gizmoShaderProgram) glDeleteProgram(gizmoShaderProgram);
+    if (gridShaderProgram) glDeleteProgram(gridShaderProgram);
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
     if (quadEBO) glDeleteBuffers(1, &quadEBO);
@@ -31,6 +33,18 @@ void SceneRenderer2D::Init() {
     shaderProgram = CreateShaderProgram("assets/shaders/sprite.vert", "assets/shaders/sprite.frag");
     if (shaderProgram == 0) {
         cerr << "Failed to create shader program!" << endl;
+        return;
+    }
+
+    gizmoShaderProgram = CreateShaderProgram("assets/shaders/gizmo.vert", "assets/shaders/gizmo.frag");
+    if (gizmoShaderProgram == 0) {
+        cerr << "Failed to create gizmo shader program" << endl;
+        return;
+    }
+
+    gridShaderProgram = CreateShaderProgram("assets/shaders/grid.vert", "assets/shaders/grid.frag");
+    if (gridShaderProgram == 0) {
+        cerr << "Failed to create grid shader program" << endl;
         return;
     }
     
@@ -153,56 +167,88 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
 }
 
 void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& view) {
-    // Use a simple shader for grid lines
-    // This is simplified - you'd need a shader program for grid lines
-    cout << "Draw Grid" << endl;
-    // glUseProgram(gridShaderProgram);
+    // Use shader for grid lines
+    glUseProgram(gridShaderProgram);
     
-    // // Set uniforms for grid shader
-    // glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_Projection"), 
-    //                   1, GL_FALSE, glm::value_ptr(projection));
-    // glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_View"), 
-    //                   1, GL_FALSE, glm::value_ptr(view));
+    // Set uniforms for grid shader
+    glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_Projection"), 
+                    1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "u_View"), 
+                    1, GL_FALSE, glm::value_ptr(view));
     
-    // // Calculate grid boundaries based on viewport and camera
-    // float left = cameraPosition.x - width * 0.5f / cameraZoom;
-    // float right = cameraPosition.x + width * 0.5f / cameraZoom;
-    // float top = cameraPosition.y - height * 0.5f / cameraZoom;
-    // float bottom = cameraPosition.y + height * 0.5f / cameraZoom;
+    // Calculate grid boundaries based on viewport and camera
+    float left = cameraPosition.x - width * 0.5f / cameraZoom;
+    float right = cameraPosition.x + width * 0.5f / cameraZoom;
+    float top = cameraPosition.y - height * 0.5f / cameraZoom;
+    float bottom = cameraPosition.y + height * 0.5f / cameraZoom;
     
-    // // Snap grid boundaries to grid size
-    // left = floor(left / gridSize) * gridSize;
-    // right = ceil(right / gridSize) * gridSize;
-    // top = floor(top / gridSize) * gridSize;
-    // bottom = ceil(bottom / gridSize) * gridSize;
+    // Snap grid boundaries to grid size
+    left = floor(left / gridSize) * gridSize;
+    right = ceil(right / gridSize) * gridSize;
+    top = floor(top / gridSize) * gridSize;
+    bottom = ceil(bottom / gridSize) * gridSize;
     
-    // // Set grid line color (light gray)
-    // glUniform4f(glGetUniformLocation(gridShaderProgram, "u_Color"), 0.5f, 0.5f, 0.5f, 0.5f);
+    // Set grid line color (light gray with some transparency)
+    glUniform4f(glGetUniformLocation(gridShaderProgram, "u_Color"), 0.7f, 0.7f, 0.7f, 0.5f);
     
-    // // Draw vertical grid lines
-    // for (float x = left; x <= right; x += gridSize) {
-    //     float vertices[] = {
-    //         x, top,
-    //         x, bottom
-    //     };
+    // Enable line smoothing for better appearance
+    glEnable(GL_LINE_SMOOTH);
+    glLineWidth(1.0f);
+    
+    // Create and bind VAO and VBO for grid lines
+    GLuint gridVAO, gridVBO;
+    glGenVertexArrays(1, &gridVAO);
+    glGenBuffers(1, &gridVBO);
+    
+    glBindVertexArray(gridVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+    
+    // Configure vertex attributes
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    // Draw vertical grid lines
+    for (float x = left; x <= right; x += gridSize) {
+        float vertices[] = {
+            x, top,
+            x, bottom
+        };
         
-    //     // Setup VAO/VBO for line
-    //     // Draw line using separate DrawLine function or direct OpenGL calls
-    // }
-    
-    // // Draw horizontal grid lines
-    // for (float y = top; y <= bottom; y += gridSize) {
-    //     float vertices[] = {
-    //         left, y,
-    //         right, y
-    //     };
+        // Update VBO with new line data
+        glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
         
-    //     // Setup VAO/VBO for line
-    //     // Draw line using separate DrawLine function or direct OpenGL calls
-    // }
+        // Draw line
+        glDrawArrays(GL_LINES, 0, 2);
+    }
+    
+    // Draw horizontal grid lines
+    for (float y = top; y <= bottom; y += gridSize) {
+        float vertices[] = {
+            left, y,
+            right, y
+        };
+        
+        // Update VBO with new line data
+        glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+        
+        // Draw line
+        glDrawArrays(GL_LINES, 0, 2);
+    }
+    
+    // Clean up
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteVertexArrays(1, &gridVAO);
+    glDeleteBuffers(1, &gridVBO);
+    
+    // Disable line smoothing
+    glDisable(GL_LINE_SMOOTH);
 }
 
 void SceneRenderer2D::DrawSelectionGizmo(const GameObject& obj) {
+    cout << "Draw Gizmo Shader" << endl;
     // Use gizmo shader program
     glUseProgram(gizmoShaderProgram);
     
@@ -467,19 +513,21 @@ void SceneRenderer2D::SetCameraZoom(float zoom) {
     cameraZoom = std::max(0.1f, std::min(zoom, 5.0f)); // Clamp zoom between 0.1x and 5x
 }
 
-glm::vec2 SceneRenderer2D::ViewportToWorldPosition(float viewX, float viewY) const {
+glm::vec3 SceneRenderer2D::ViewportToWorldPosition(float viewX, float viewY, float viewZ) const {
     // Konversi dari koordinat viewport ke koordinat world
     // Memperhitungkan zoom dan pan kamera
     float worldX = viewX / cameraZoom + cameraPosition.x;
     float worldY = viewY / cameraZoom + cameraPosition.y;
-    return glm::vec2(worldX, worldY);
+    float worldZ = viewZ / cameraZoom + cameraPosition.z;
+    return glm::vec3(worldX, worldY, worldZ);
 }
 
-glm::vec2 SceneRenderer2D::WorldToViewportPosition(float worldX, float worldY) const {
+glm::vec3 SceneRenderer2D::WorldToViewportPosition(float worldX, float worldY, float worldZ) const {
     // Konversi dari koordinat world ke koordinat viewport
     float viewX = (worldX - cameraPosition.x) * cameraZoom;
     float viewY = (worldY - cameraPosition.y) * cameraZoom;
-    return glm::vec2(viewX, viewY);
+    float viewZ = (worldZ - cameraPosition.z) * cameraZoom;
+    return glm::vec3(viewX, viewY, viewZ);
 }
 
 void SceneRenderer2D::HandleClick(float worldX, float worldY) {

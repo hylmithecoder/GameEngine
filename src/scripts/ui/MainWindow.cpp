@@ -67,13 +67,13 @@ bool MainWindow::init(const char* title) {
         return false;
     }
 
-    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    // if (!renderer) {
-    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-    //     SDL_DestroyWindow(window);
-    //     SDL_Quit();
-    //     return false;
-    // }
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer) {
+        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return false;
+    }
 
     // Aktifkan OpenGL
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
@@ -1480,6 +1480,10 @@ void MainWindow::update() {
         {            
             projectHandler.OpenFolder();
             assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+            string assetFile = projectHandler.projectPath+"\\assets\\scenes\\MyFirstScene.ilmeescene";
+            cout << assetFile << endl;
+            projectHandler.currentScene = projectHandler.serializer.LoadScene(assetFile);
+            isLoadScene = true;
             // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;
         }
@@ -1528,7 +1532,8 @@ void MainWindow::update() {
     // Menu bar
     MainWindow::RenderMenuBar();
     
-    // Left: Hierarchy with tabs
+    // Left: Hierarchy with 
+    MainWindow::RenderHierarchyWindow();
     MainWindow::RenderExplorerWindow(assetRoot, firstOpenProject);
 
     // Right: Inspector

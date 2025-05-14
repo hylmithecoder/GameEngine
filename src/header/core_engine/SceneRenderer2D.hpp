@@ -34,8 +34,8 @@ public:
     void DrawSelectionGizmo(const GameObject& obj);
 
     // Method konversi koordinat
-    glm::vec2 ViewportToWorldPosition(float viewX, float viewY) const;
-    glm::vec2 WorldToViewportPosition(float worldX, float worldY) const;
+    glm::vec3 ViewportToWorldPosition(float viewX, float viewY, float viewZ) const;
+    glm::vec3 WorldToViewportPosition(float worldX, float worldY, float worldZ) const;
     glm::vec3 cameraPosition;
     Scene currentScene;
     
@@ -90,7 +90,7 @@ private:
     float cameraZoom = 1.0f;
     
     // Grid properties
-    bool gridVisible = true;
+    bool gridVisible = false;
     float gridSize = 32.0f;
     bool snapToGrid = true;
     

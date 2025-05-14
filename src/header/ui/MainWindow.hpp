@@ -97,6 +97,7 @@ public:
     float volume = 1.0f;
     bool isBackgroundChanged = false;
     bool isBackgroundActived = false;
+    bool isLoadScene = false;
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 
@@ -129,4 +130,5 @@ public:
     void RenderViewportToolbar();
     void RenderGameViewport();
     void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
+    void RenderHierarchyWindow();
 };

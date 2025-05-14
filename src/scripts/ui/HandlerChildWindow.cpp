@@ -3,49 +3,90 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+void MainWindow::RenderHierarchyWindow() {
+    ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
+
+    ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+
+    if (isLoadScene) {
+        if (ImGui::TreeNodeEx(projectHandler.currentScene.sceneName.c_str(), nodeFlags)) {
+            for (const auto& obj : projectHandler.currentScene.objects) {
+                projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
+                if (ImGui::TreeNodeEx(obj.name.c_str(), nodeFlags)) {
+                    ImGui::TreePop();
+                }
+            }
+            ImGui::TreePop();
+        }
+    } else {
+        struct SceneElement {
+            std::string name;
+            std::vector<std::string> properties;
+        };
+
+        std::vector<SceneElement> elements = {
+            {"Main Camera", {"Properties"}},
+            {"Player", {"Sprite", "Collider"}},
+            {"Enemy", {"AI Controller"}}
+        };
+
+        if (ImGui::TreeNodeEx("Scene", nodeFlags)) {
+            projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
+            for (const auto& element : elements) {
+                if (ImGui::TreeNodeEx(element.name.c_str(), nodeFlags)) {
+                    for (const auto& prop : element.properties) {
+                        ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), prop.c_str());
+                    }
+                    ImGui::TreePop();
+                }
+            }
+            ImGui::TreePop();
+        }
+    }
+    ImGui::End();
+}
+
 void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool firstOpenProject) {
 
-
-    ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
-    
-    if (ImGui::BeginTabBar("ExplorerTabs")) {
-        if (ImGui::BeginTabItem(ICON_FA_ADDRESS_BOOK " Hierarchy")) {
-            ImGui::BeginChild("HierarchyTree", ImVec2(0, 0), true);
+    ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);    
+    // if (ImGui::BeginTabBar("ExplorerTabs")) {
+        // if (ImGui::BeginTabItem("Hierarchy")) {
+        //     ImGui::BeginChild("HierarchyTree", ImVec2(0, 0), true);
             
-            ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+        //     ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
             
-            if (ImGui::TreeNodeEx(ICON_FA_CUBES " Scene", nodeFlags)) {
-                if (ImGui::TreeNodeEx(ICON_FA_CAMERA " Main Camera", nodeFlags)) {
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Properties");
-                    ImGui::TreePop();
-                }
+        //     if (ImGui::TreeNodeEx("Scene", nodeFlags)) {
+        //         if (ImGui::TreeNodeEx("Main Camera", nodeFlags)) {
+        //             ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Properties");
+        //             ImGui::TreePop();
+        //         }
                 
-                if (ImGui::TreeNodeEx(ICON_FA_USER " Player", nodeFlags)) {
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), ICON_FA_IMAGE " Sprite");
-                    ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), ICON_FA_VECTOR_SQUARE " Collider");
-                    ImGui::TreePop();
-                }
+        //         if (ImGui::TreeNodeEx("Player", nodeFlags)) {
+        //             ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "Sprite");
+        //             ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "Collider");
+        //             ImGui::TreePop();
+        //         }
                 
-                if (ImGui::TreeNodeEx(ICON_FA_SKULL " Enemy", nodeFlags)) {
-                    ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.8f, 1.0f), ICON_FA_BRAIN " AI Controller");
-                    ImGui::TreePop();
-                }
+        //         if (ImGui::TreeNodeEx("Enemy", nodeFlags)) {
+        //             ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.8f, 1.0f), "AI Controller");
+        //             ImGui::TreePop();
+        //         }
                 
-                ImGui::TreePop();
-            }
+        //         ImGui::TreePop();
+        //     }
             
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
+        //     ImGui::EndChild();
+        //     ImGui::EndTabItem();
+        // }
         
-        if (ImGui::BeginTabItem(ICON_FA_FOLDER_OPEN " Assets")) {
+        // if (ImGui::BeginTabItem("Assets")) {
             if (firstOpenProject) {
                 ImGui::BeginGroup();
                 
                 // Add toolbar above assets
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
                                 
-                if (ImGui::Button(ICON_FA_SD_CARD " Refresh")) {
+                if (ImGui::Button("Refresh")) {
                     projectHandler.isOpenedProject = true;
                 }
                 
@@ -58,7 +99,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool 
             
                 // Add file watcher toggle button
                 bool watcherRunning = projectHandler.IsFileWatcherRunning();
-                if (ImGui::Button(watcherRunning ? ICON_FA_EYE " Watching" : ICON_FA_EYE_SLASH " Watch Off")) {
+                if (ImGui::Button(watcherRunning ? "Watching" : "Watch Off")) {
                     if (watcherRunning) {
                         projectHandler.StopFileWatcher();
                     } else {
@@ -89,11 +130,11 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool 
                 ImGui::EndGroup();
             }
             
-            ImGui::EndTabItem();
-        }
+            // ImGui::EndTabItem();
+        // }
         
-        ImGui::EndTabBar();
-    }
+        // ImGui::EndTabBar();
+    // }
     
     ImGui::End();
 }
@@ -107,101 +148,138 @@ void MainWindow::RenderInspectorWindow() {
     ImGui::Text("Selected Object");
     ImGui::Separator();
     
-    ImGui::InputText("Name", objectName, IM_ARRAYSIZE(objectName));
+    // if (isLoadScene)
+    // {
+    //     // Still Dummy Inspector Yeah
+    //     for (auto& obj : projectHandler.currentScene.objects) {
+    //             // projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
+    //             // if (ImGui::TreeNodeEx(obj.name.c_str())) {
+    //             //     ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Properties");
+    //             //     ImGui::TreePop();
+    //             // }
+    //             // Use a temporary buffer for editing the name
+    //             char nameBuffer[256];
+    //             char spritePath[256];
+    //             strncpy(nameBuffer, obj.name.c_str(), sizeof(nameBuffer) - 1);
+    //             nameBuffer[sizeof(nameBuffer) - 1] = '\0';
+                
+    //             for (int i = 0; i < obj.name.length(); i++) {
+    //                 ImGui::PushID(i);
+    //                 if (ImGui::InputText("##Name", nameBuffer, IM_ARRAYSIZE(nameBuffer))) {
+    //                     obj.name = nameBuffer;
+    //                 };
+    //                 ImGui::PopID();
+    //                 if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+    //                     // ImGui::DragFloat3("Position", obj.x,obj.y,obj.width, 0.1f);
+    //                     // ImGui::DragFloat3("Rotation", obj.rotation, 0.1f);
+    //                     // ImGui::DragFloat3("Scale", obj.scale, 0.1f);
+    //                 }
+    //                 ImGui::PushID(i);
+    //                 if (ImGui::CollapsingHeader("Sprite"), ImGuiTreeNodeFlags_DefaultOpen) {
+    //                     if (ImGui::InputText("Sprite Path", spritePath, IM_ARRAYSIZE(spritePath))) {
+    //                         obj.spritePath = spritePath;
+    //                     }
+    //                 }
+    //                 ImGui::PopID();
+    //             }            
+    //         }
+    // }
+    // else {
+        ImGui::InputText("Name", objectName, IM_ARRAYSIZE(objectName));
     
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat3("Position", position, 0.1f);
-        ImGui::DragFloat3("Rotation", rotation, 0.1f);
-        ImGui::DragFloat3("Scale", scale, 0.1f);
-    }
-    
-    if (ImGui::CollapsingHeader("Material")) {
-        static float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-        ImGui::ColorEdit4("Color", color);
-        
-        const char* items[] = { "Standard", "Transparent", "Emission" };
-        static int item_current = 0;
-        ImGui::Combo("Shader", &item_current, items, IM_ARRAYSIZE(items));
-        
-        static float metallic = 0.0f;
-        static float smoothness = 0.5f;
-        ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
-        ImGui::SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
-    }
-    
-    if (ImGui::CollapsingHeader("Physics")) {
-        static bool useGravity = true;
-        static bool isKinematic = false;
-        static float mass = 1.0f;
-        static float drag = 0.0f;
-        
-        ImGui::Checkbox("Use Gravity", &useGravity);
-        ImGui::Checkbox("Is Kinematic", &isKinematic);
-        ImGui::InputFloat("Mass", &mass, 0.1f);
-        ImGui::InputFloat("Drag", &drag, 0.01f);
-    }
-    
-    if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
-        ImGui::OpenPopup("AddComponentPopup");
-    }
-    
-    if (ImGui::BeginPopup("AddComponentPopup")) {
-        ImGui::Text("Components");
-        if (ImGui::Selectable("Mesh Renderer")) {}
-        if (ImGui::Selectable("Audio Source")) {}
-        if (ImGui::Selectable("Collider")) {}
-        if (ImGui::Selectable("Particle System")) {}
-        if (ImGui::Selectable("Light")) {}
-        
-        // Script creation section
-        static bool showScriptInput = false;
-        if (ImGui::Selectable("Script")) {
-            showScriptInput = true;
+        if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat3("Position", position, 0.1f);
+            ImGui::DragFloat3("Rotation", rotation, 0.1f);
+            ImGui::DragFloat3("Scale", scale, 0.1f);
         }
         
-        // Show script input UI when Script is selected
-        if (showScriptInput) {
-            ImGui::Separator();
-            ImGui::Text("Create New Script");
+        if (ImGui::CollapsingHeader("Material")) {
+            static float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            ImGui::ColorEdit4("Color", color);
             
-            // Script input field with better styling
-            ImGui::PushItemWidth(-1); // Make input field fill available width
-            bool entered = ImGui::InputText("##ScriptName", currentScriptName, IM_ARRAYSIZE(currentScriptName), 
-                ImGuiInputTextFlags_EnterReturnsTrue);
+            const char* items[] = { "Standard", "Transparent", "Emission" };
+            static int item_current = 0;
+            ImGui::Combo("Shader", &item_current, items, IM_ARRAYSIZE(items));
             
-            // Show placeholder if empty
-            if (strlen(currentScriptName) == 0) {
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetItemRectMin().x + 5);
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Enter script name...");
+            static float metallic = 0.0f;
+            static float smoothness = 0.5f;
+            ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
+            ImGui::SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
+        }
+        
+        if (ImGui::CollapsingHeader("Physics")) {
+            static bool useGravity = true;
+            static bool isKinematic = false;
+            static float mass = 1.0f;
+            static float drag = 0.0f;
+            
+            ImGui::Checkbox("Use Gravity", &useGravity);
+            ImGui::Checkbox("Is Kinematic", &isKinematic);
+            ImGui::InputFloat("Mass", &mass, 0.1f);
+            ImGui::InputFloat("Drag", &drag, 0.01f);
+        }
+        
+        if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
+            ImGui::OpenPopup("AddComponentPopup");
+        }
+        
+        if (ImGui::BeginPopup("AddComponentPopup")) {
+            ImGui::Text("Components");
+            if (ImGui::Selectable("Mesh Renderer")) {}
+            if (ImGui::Selectable("Audio Source")) {}
+            if (ImGui::Selectable("Collider")) {}
+            if (ImGui::Selectable("Particle System")) {}
+            if (ImGui::Selectable("Light")) {}
+            
+            // Script creation section
+            static bool showScriptInput = false;
+            if (ImGui::Selectable("Script")) {
+                showScriptInput = true;
             }
             
-            // Create and Cancel buttons
-            if (ImGui::Button("Create", ImVec2(120, 0)) || entered) {
-                if (strlen(currentScriptName) > 0) {
-                    cout << "Create" << endl;
-                    projectHandler.NewScripts(currentScriptName);
-                    projectHandler.ShowNotification("Script Created", "Script created successfully", projectHandler.blueColor);
-                    // Reload file
-                    projectHandler.isOpenedProject = true;
-                    showScriptInput = false;
-                    memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
-                    ImGui::CloseCurrentPopup();
+            // Show script input UI when Script is selected
+            if (showScriptInput) {
+                ImGui::Separator();
+                ImGui::Text("Create New Script");
+                
+                // Script input field with better styling
+                ImGui::PushItemWidth(-1); // Make input field fill available width
+                bool entered = ImGui::InputText("##ScriptName", currentScriptName, IM_ARRAYSIZE(currentScriptName), 
+                    ImGuiInputTextFlags_EnterReturnsTrue);
+                
+                // Show placeholder if empty
+                if (strlen(currentScriptName) == 0) {
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosX(ImGui::GetItemRectMin().x + 5);
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Enter script name...");
                 }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                showScriptInput = false;
-                projectHandler.ShowNotification("Script Creation Cancelled", "Script creation cancelled", projectHandler.redColor);
-                memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
+                
+                // Create and Cancel buttons
+                if (ImGui::Button("Create", ImVec2(120, 0)) || entered) {
+                    if (strlen(currentScriptName) > 0) {
+                        cout << "Create" << endl;
+                        projectHandler.NewScripts(currentScriptName);
+                        projectHandler.ShowNotification("Script Created", "Script created successfully", projectHandler.blueColor);
+                        // Reload file
+                        projectHandler.isOpenedProject = true;
+                        showScriptInput = false;
+                        memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    showScriptInput = false;
+                    projectHandler.ShowNotification("Script Creation Cancelled", "Script creation cancelled", projectHandler.redColor);
+                    memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
+                }
+                
+                ImGui::PopItemWidth();
             }
             
-            ImGui::PopItemWidth();
-        }
-        
-        ImGui::EndPopup();
-    }
-    
+            ImGui::EndPopup();
+        // }
+    }   
     ImGui::End();
 }
 
@@ -254,7 +332,7 @@ void MainWindow::RenderMainViewWindow() {
         }
 
         if (ImGui::BeginTabItem("Video Player")) {
-            renderVideoPlayer(); // Sudah terpisah dengan baik
+            renderVideoPlayer();
             ImGui::EndTabItem();
         }
 
@@ -291,7 +369,7 @@ void MainWindow::RenderViewportToolbar() {
     
     // Tombol grid
     ImGui::SameLine(0, 15);
-    static bool showGrid = true;
+    static bool showGrid = false;
     if (ImGui::Checkbox("Show Grid", &showGrid)) {
         projectHandler.sceneRenderer->SetGridVisible(showGrid);
     }
@@ -338,18 +416,19 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
     
     // Jika viewport dihover, tampilkan overlay informasi di pojok kanan bawah
     if (isHovered) {
-        ImGui::Text("Now Hovered View Port");
-        ImGui::SameLine();
+        // ImGui::Text("Now Hovered View Port");
+        // ImGui::SameLine();
         // Hitung posisi mouse relatif terhadap viewport (dalam piksel viewport)
         float viewportX = mousePos.x - viewportPos.x;
         float viewportY = mousePos.y - viewportPos.y;
+        float viewportZ = 0.0f;
         
         // Konversi koordinat viewport ke koordinat world (dengan memperhitungkan zoom/pan)
-        glm::vec2 worldPos = projectHandler.sceneRenderer->ViewportToWorldPosition(viewportX, viewportY);
+        glm::vec3 worldPos = projectHandler.sceneRenderer->ViewportToWorldPosition(viewportX, viewportY, viewportZ);
         
         // Tampilkan informasi koordinat di pojok kanan bawah viewport
         char coordText[64];
-        snprintf(coordText, sizeof(coordText), "X: %.1f, Y: %.1f", worldPos.x, worldPos.y);
+        snprintf(coordText, sizeof(coordText), "X: %.1f, Y: %.1f, Z: %.1f", worldPos.x, worldPos.y, worldPos.z);
         
         ImVec2 textSize = ImGui::CalcTextSize(coordText);
         ImVec2 textPos = ImVec2(
@@ -361,17 +440,17 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         
         // Handling click untuk seleksi objek
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            ImGui::Text("Select Object");
-            ImGui::SameLine();
-            cout << "Select Object" << endl;
+            // ImGui::Text("Select Object");
+            // ImGui::SameLine();
+            // cout << "Select Object" << endl;
             projectHandler.sceneRenderer->HandleClick(worldPos.x, worldPos.y);
         }
         
         // Handling drag untuk move objek atau pan kamera
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            ImGui::Text("Drag Object");
-            ImGui::SameLine();
-            cout << "Drag Object" << endl;
+            // ImGui::Text("Drag Object");
+            // ImGui::SameLine();
+            // cout << "Drag Object" << endl;
             ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
             projectHandler.sceneRenderer->HandleDrag(delta.x, delta.y);
             ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
@@ -590,7 +669,7 @@ void MainWindow::HandleSearch() {
     // Atur lebar input sesuai jendela.
     ImGui::PushItemWidth(-1);
     // Menampilkan input text dengan hint. Menunggu Enter untuk trigger pencarian.
-    if (ImGui::InputTextWithHint("##search", ICON_FA_ANGLE_UP " Search assets...", searchBuffer,
+    if (ImGui::InputTextWithHint("##search", "Search assets...", searchBuffer,
                                  IM_ARRAYSIZE(searchBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
         // Jika buffer tidak kosong, lakukan pencarian.
         if (strlen(searchBuffer) > 0) {
