@@ -49,37 +49,6 @@ void MainWindow::RenderHierarchyWindow() {
 void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool firstOpenProject) {
 
     ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);    
-    // if (ImGui::BeginTabBar("ExplorerTabs")) {
-        // if (ImGui::BeginTabItem("Hierarchy")) {
-        //     ImGui::BeginChild("HierarchyTree", ImVec2(0, 0), true);
-            
-        //     ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-            
-        //     if (ImGui::TreeNodeEx("Scene", nodeFlags)) {
-        //         if (ImGui::TreeNodeEx("Main Camera", nodeFlags)) {
-        //             ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Properties");
-        //             ImGui::TreePop();
-        //         }
-                
-        //         if (ImGui::TreeNodeEx("Player", nodeFlags)) {
-        //             ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "Sprite");
-        //             ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "Collider");
-        //             ImGui::TreePop();
-        //         }
-                
-        //         if (ImGui::TreeNodeEx("Enemy", nodeFlags)) {
-        //             ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.8f, 1.0f), "AI Controller");
-        //             ImGui::TreePop();
-        //         }
-                
-        //         ImGui::TreePop();
-        //     }
-            
-        //     ImGui::EndChild();
-        //     ImGui::EndTabItem();
-        // }
-        
-        // if (ImGui::BeginTabItem("Assets")) {
             if (firstOpenProject) {
                 ImGui::BeginGroup();
                 
@@ -128,13 +97,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool 
                 ImGui::EndChild();
                 
                 ImGui::EndGroup();
-            }
-            
-            // ImGui::EndTabItem();
-        // }
-        
-        // ImGui::EndTabBar();
-    // }
+            } 
     
     ImGui::End();
 }
@@ -307,7 +270,7 @@ void MainWindow::RenderMainViewWindow() {
             }
 
             // Render scene ke texture
-            projectHandler.sceneRenderer->RenderSceneToTexture(projectHandler.sceneRenderer->currentScene);
+            projectHandler.sceneRenderer->RenderSceneToTexture(projectHandler.currentScene);
 
             // Dapatkan texture ID dari scene renderer
             GLuint textureID = projectHandler.sceneRenderer->GetViewportTextureID();
@@ -322,7 +285,6 @@ void MainWindow::RenderMainViewWindow() {
             if (offsetY > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
 
             // Tampilkan texture sebagai image di ImGui
-            // TODO : Create A Position x and Position y Grid
             ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
             
             // Handle interaksi viewport
@@ -369,7 +331,7 @@ void MainWindow::RenderViewportToolbar() {
     
     // Tombol grid
     ImGui::SameLine(0, 15);
-    static bool showGrid = false;
+    static bool showGrid = true;
     if (ImGui::Checkbox("Show Grid", &showGrid)) {
         projectHandler.sceneRenderer->SetGridVisible(showGrid);
     }
@@ -421,14 +383,13 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         // Hitung posisi mouse relatif terhadap viewport (dalam piksel viewport)
         float viewportX = mousePos.x - viewportPos.x;
         float viewportY = mousePos.y - viewportPos.y;
-        float viewportZ = 0.0f;
         
         // Konversi koordinat viewport ke koordinat world (dengan memperhitungkan zoom/pan)
-        glm::vec3 worldPos = projectHandler.sceneRenderer->ViewportToWorldPosition(viewportX, viewportY, viewportZ);
+        glm::vec2 worldPos = projectHandler.sceneRenderer->ViewportToWorldPosition(viewportX, viewportY);
         
         // Tampilkan informasi koordinat di pojok kanan bawah viewport
         char coordText[64];
-        snprintf(coordText, sizeof(coordText), "X: %.1f, Y: %.1f, Z: %.1f", worldPos.x, worldPos.y, worldPos.z);
+        snprintf(coordText, sizeof(coordText), "X: %.1f, Y: %.1f", worldPos.x, worldPos.y);
         
         ImVec2 textSize = ImGui::CalcTextSize(coordText);
         ImVec2 textPos = ImVec2(
@@ -442,15 +403,15 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             // ImGui::Text("Select Object");
             // ImGui::SameLine();
-            // cout << "Select Object" << endl;
-            projectHandler.sceneRenderer->HandleClick(worldPos.x, worldPos.y);
+            cout << "Click" << endl;
+            // projectHandler.sceneRenderer->HandleClick(worldPos.x, worldPos.y);
         }
         
         // Handling drag untuk move objek atau pan kamera
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             // ImGui::Text("Drag Object");
             // ImGui::SameLine();
-            // cout << "Drag Object" << endl;
+            cout << "Dragging" << endl;
             ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
             projectHandler.sceneRenderer->HandleDrag(delta.x, delta.y);
             ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
@@ -466,19 +427,23 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         // Handling key input untuk precision movement
         ImGuiIO& io = ImGui::GetIO();
         if (projectHandler.sceneRenderer->HasSelectedObject()) {
-            cout << "Receive Input" << endl;
+            // cout << "Receive Input" << endl;
             float moveAmount = io.KeyShift ? 10.0f : 1.0f;
             
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+                cout << "Left Arrow" << endl;
                 projectHandler.sceneRenderer->MoveSelected(-moveAmount, 0);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+                cout << "Right Arrow" << endl;
                 projectHandler.sceneRenderer->MoveSelected(moveAmount, 0);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+                cout << "Up Arrow" << endl;
                 projectHandler.sceneRenderer->MoveSelected(0, -moveAmount);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                cout << "Down Arrow" << endl;
                 projectHandler.sceneRenderer->MoveSelected(0, moveAmount);
             }
             

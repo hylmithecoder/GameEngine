@@ -3,6 +3,7 @@
 #include <GLHeader.hpp>
 #include <string>
 #include <unordered_map>
+#include <stb_image.h>
 
 class TextureManager {
 public:
@@ -17,8 +18,8 @@ public:
     
     // Clear all loaded textures
     void ClearTextures();
-
-private:
     // Cache of loaded textures (path -> textureID)
     std::unordered_map<std::string, GLuint> textureCache;
+
+private:
 };

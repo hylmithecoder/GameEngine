@@ -10,7 +10,8 @@
 #include <stb_image.h>
 #include <SDL_opengl.h>
 #include "assets.hpp"
-#include <backends/imgui_impl_opengl3.h> // Include the OpenGL3 backend header
+// #include <backends/imgui_impl_opengl3.h>
+#include <Debugger.hpp>
 using namespace std;
 
 MainWindow::MainWindow(const char* title, int width, int height)
@@ -91,7 +92,6 @@ bool MainWindow::init(const char* title) {
         return false;
     }
     cout << "Open GL version: " << glGetString(GL_VERSION) << endl;
-    sceneRenderer2D = new SceneRenderer2D(800, 600);
     // sceneRenderer2D->Init(); // ✅ OpenGL call aman di sini
     // Set window icon
     set_window_icon();
@@ -130,7 +130,7 @@ bool MainWindow::init(const char* title) {
     // ImGui_ImplSDLRenderer2_Init(renderer);
     cout << glContext << endl;
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
-    ImGui_ImplOpenGL3_Init("#version 130");
+    ImGui_ImplOpenGL3_Init("#version 330");
 
     CurrentBackground currentBg = Shiroko;
     // HandleBackground(currentBg);
@@ -140,6 +140,9 @@ bool MainWindow::init(const char* title) {
     projectHandler.fileWatcherInterval = std::chrono::milliseconds(1000);
     projectHandler.fileChangesDetected = false;
     projectHandler.StartFileWatcher();
+    Debug::Logger::Log("Main Window Successfully Initialized");
+    
+    sceneRenderer2D = new SceneRenderer2D(800, 600);
     return true;
 }
 

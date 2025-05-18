@@ -1,8 +1,5 @@
-// #include "HandlerProject.hpp"
+#include <Debugger.hpp>
 #include "MainWindow.hpp"
-
-// HandlerProject::HandlerProject() :
-//     sceneRenderer(800, 600){}
 
 void HandlerProject::OpenFolder() {
     NFD::Guard nfdGuard;
@@ -839,7 +836,7 @@ bool HandlerProject::CheckForFileChanges() {
         }
         
     } catch (const fs::filesystem_error& e) {
-        cerr << "Error in CheckForFileChanges: " << e.what() << endl;
+        Debug::Logger::Log("Error in CheckForFileChanges: " + std::string(e.what()), Debug::LogLevel::CRASH);
     }
     
     return changesDetected;

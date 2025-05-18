@@ -34,9 +34,9 @@ public:
     void DrawSelectionGizmo(const GameObject& obj);
 
     // Method konversi koordinat
-    glm::vec3 ViewportToWorldPosition(float viewX, float viewY, float viewZ) const;
-    glm::vec3 WorldToViewportPosition(float worldX, float worldY, float worldZ) const;
-    glm::vec3 cameraPosition;
+    glm::vec2 ViewportToWorldPosition(float viewX, float viewY) const;
+    glm::vec2 WorldToViewportPosition(float worldX, float worldY) const;
+    glm::vec2 cameraPosition;
     Scene currentScene;
     
     // Method handling interaksi
@@ -51,8 +51,9 @@ public:
     // Method untuk mendapatkan dimensi
     int GetWidth() const { return width; }
     int GetHeight() const { return height; }
-    GLuint gridShaderProgram;
-    GLuint gizmoShaderProgram;
+    void InitGridBuffers();
+
+    float cameraZoom = 1.0f;
 
 private:
     int width, height;
@@ -64,6 +65,10 @@ private:
     
     // Shader program
     GLuint shaderProgram = 0;
+    GLuint gridShaderProgram = 0;
+    GLuint gizmoShaderProgram = 0;
+    GLuint m_GridVAO = 0, m_GridVBO = 0;
+    int m_MaxGridLines = 1000;
     
     // Quad rendering
     GLuint quadVAO = 0, quadVBO = 0, quadEBO = 0;
@@ -76,7 +81,7 @@ private:
     void InitQuad();
     void CreateFramebuffer();
     void DestroyFramebuffer();
-    
+    void InitShaders();
     // Helper functions
     void DrawSprite(GLuint textureID, float x, float y, float width = 64.0f, float height = 64.0f, 
                    float rotation = 0.0f, float scaleX = 1.0f, float scaleY = 1.0f);
@@ -84,13 +89,9 @@ private:
     GLuint CreateShaderProgram(const std::string& vertPath, const std::string& fragPath);
     std::string LoadFileAsString(const std::string& path);
     GLuint CreateWhiteTexture();
-
-    // Camera properties
-    // Removed duplicate declaration of cameraPosition
-    float cameraZoom = 1.0f;
     
     // Grid properties
-    bool gridVisible = false;
+    bool gridVisible = true;
     float gridSize = 32.0f;
     bool snapToGrid = true;
     

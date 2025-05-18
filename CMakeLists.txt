@@ -4,6 +4,7 @@ project(GameEngineSDL)
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 
 # Add SDL2 and SDL2_ttf paths
 set(SDL2_DIR "C:/SDL2")
@@ -50,6 +51,7 @@ set(HEADERS
     src/header/core_engine/SceneRenderer2D.hpp
     src/header/core_engine/TextureManager.hpp
     src/header/core_engine/GLHeader.hpp
+    src/header/core_engine/Debugger.hpp
 )
 
 set(SOURCE_TEST
@@ -60,6 +62,10 @@ set(SOURCE_TEST
 
 set(SOURCE_TEST_GLEW
     src/scripts/test_glew.cpp
+)
+
+set(SOURCE_TEST_GLM
+    src/scripts/test_glm.cpp
 )
 
 # Add ImGui source files
@@ -123,6 +129,8 @@ add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_TEST})
 target_link_options(TestBackground PRIVATE -mconsole)
 add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_TEST} ${GLAD_4})
 target_link_options(TestGLEW PRIVATE -mconsole)
+add_executable(TestGLM ${SOURCE_TEST_GLM})
+target_link_options(TestGLM PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 
@@ -180,6 +188,12 @@ target_include_directories(TestGLEW PRIVATE
     # GLEW
 )
 
+target_include_directories(TestGLM PRIVATE
+    ${GLM}
+    # GLES2
+    # GLEW
+)
+
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
@@ -220,6 +234,32 @@ target_link_libraries(TestGLEW PRIVATE
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
     # GLEW::GLEW
 )
+target_link_libraries(TestGLEW PRIVATE
+    ${SDL2_DIR}/lib/x64/SDL2.lib
+    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    OpenGL::GL
+    ${LIBRARY}/avformat.lib
+    ${LIBRARY}/avcodec.lib 
+    ${LIBRARY}/avutil.lib 
+    ${LIBRARY}/swresample.lib
+    ${LIBRARY}/swscale.lib
+    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # GLEW::GLEW
+)
+
+target_link_libraries(TestGLEW PRIVATE
+    ${SDL2_DIR}/lib/x64/SDL2.lib
+    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    OpenGL::GL
+    ${LIBRARY}/avformat.lib
+    ${LIBRARY}/avcodec.lib 
+    ${LIBRARY}/avutil.lib 
+    ${LIBRARY}/swresample.lib
+    ${LIBRARY}/swscale.lib
+    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # GLEW::GLEW
+)
+
 
 # Copy DLL files to output directory
 if(WIN32)

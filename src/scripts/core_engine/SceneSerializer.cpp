@@ -3,8 +3,10 @@
 #include <json.hpp>
 #include <iostream>
 #include <string>
-using namespace std;
+#include <filesystem>
+#include <algorithm>
 
+using namespace std;
 using json = nlohmann::json;
 
 void SceneSerializer::SaveScene(const Scene& scene, const std::string& path) {
@@ -25,44 +27,84 @@ void SceneSerializer::SaveScene(const Scene& scene, const std::string& path) {
         });
     }
 
-    std::ofstream out(path);
-    out << j.dump(4);
+    try {
+        std::ofstream out(path);
+        if (!out.is_open()) {
+            std::cerr << "Error: Could not open file for writing: " << path << std::endl;
+            return;
+        }
+        out << j.dump(4);
+        std::cout << "Scene saved successfully to: " << path << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error saving scene: " << e.what() << std::endl;
+    }
 }
 
 Scene SceneSerializer::LoadScene(const std::string& path) {
-    std::ifstream in(path);
-    json j;
-    in >> j;
-
     Scene scene;
-    scene.sceneName = j["sceneName"].get<std::string>();
-
-    for (const auto& jObj : j["objects"]) {
-        GameObject obj;
-        obj.name = jObj["name"];
-        obj.x = jObj["x"];
-        obj.y = jObj["y"];
-        obj.width = jObj["width"];
-        obj.height = jObj["height"];
-        obj.spritePath = jObj["spritePath"];
-        obj.rotation = jObj["rotation"];
-        obj.scaleX = jObj["scaleX"];
-        obj.scaleY = jObj["scaleY"];
-
-        scene.objects.push_back(obj);
-        string info = "Name: " + obj.name + " Position x: " + std::to_string(obj.x) + " Position y: " + std::to_string(obj.y) + " Sprite Path: " + obj.spritePath;
-        cout << obj.name << endl;
-        cout << obj.x << endl;
-        cout << obj.y << endl;
-        cout << obj.width << endl;
-        cout << obj.height << endl;
-        cout << obj.spritePath << endl;
-        cout << obj.rotation << endl;
-        cout << obj.scaleX << endl;
-        cout << obj.scaleY << endl;
+    
+    try {
+        // Check if file exists
+        if (!std::filesystem::exists(path)) {
+            std::cerr << "Error: Scene file does not exist: " << path << std::endl;
+            return scene;
+        }
+        
+        std::ifstream in(path);
+        if (!in.is_open()) {
+            std::cerr << "Error: Could not open scene file: " << path << std::endl;
+            return scene;
+        }
+        
+        json j;
+        in >> j;
+        
+        scene.sceneName = j["sceneName"].get<std::string>();
+        
+        std::cout << "Loading scene: " << scene.sceneName << std::endl;
+        
+        for (const auto& jObj : j["objects"]) {
+            GameObject obj;
+            obj.name = jObj["name"];
+            obj.x = jObj["x"];
+            obj.y = jObj["y"];
+            obj.width = jObj["width"];
+            obj.height = jObj["height"];
+            
+            // Handle the sprite path - ensure it's properly formatted
+            if (jObj.contains("spritePath") && !jObj["spritePath"].is_null()) {
+                obj.spritePath = jObj["spritePath"];
+                // Normalize path separators
+                std::replace(obj.spritePath.begin(), obj.spritePath.end(), '\\', '/');
+                
+                // Check if the texture file exists
+                if (!std::filesystem::exists(obj.spritePath)) {
+                    std::cerr << "Warning: Sprite file does not exist: " << obj.spritePath << std::endl;
+                }
+            } else {
+                obj.spritePath = ""; // Set default if missing
+            }
+            
+            obj.rotation = jObj.value("rotation", 0.0f);
+            obj.scaleX = jObj.value("scaleX", 1.0f);
+            obj.scaleY = jObj.value("scaleY", 1.0f);
+            
+            scene.objects.push_back(obj);
+            
+            std::cout << "Loaded object: " << obj.name 
+                      << " (Position: " << obj.x << ", " << obj.y 
+                      << ", Size: " << obj.width << "x" << obj.height 
+                      << ", Sprite: " << obj.spritePath << ")" << std::endl;
+        }
+        
+        std::cout << "Scene loaded successfully with " << scene.objects.size() << " objects" << std::endl;
+    } 
+    catch (const json::exception& e) {
+        std::cerr << "JSON parsing error: " << e.what() << std::endl;
     }
-    cout << "Load Scene" << endl;
-    cout << scene.sceneName << endl;
-    cout << scene.objects.size() << endl;
+    catch (const std::exception& e) {
+        std::cerr << "Error loading scene: " << e.what() << std::endl;
+    }
+    
     return scene;
 }
