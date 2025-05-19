@@ -16,6 +16,9 @@ set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
 set(NFD "E:/nativefiledialog-extended")
 set(GLM "E:/glm")
+set(VULKAN_SDK "C:/msys64/mingw64")
+set(VULKAN_DIR "C:/vulkan")
+set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -36,6 +39,10 @@ set(SOURCES
     src/scripts/core_engine/TextureManager.cpp
 )
 
+set(SOURCE_TEST_VULKAN
+    src/scripts/test_vulkan.cpp
+)
+
 # Add header files
 set(HEADERS
     src/header/ui/MainWindow.hpp
@@ -54,6 +61,14 @@ set(HEADERS
     src/header/core_engine/Debugger.hpp
 )
 
+set(HEADER_GLSL
+    src/header/core_engine/test_glsl.hpp
+)
+
+set(HEADER_VULKAN
+    src/header/core_engine/test_vulkan.hpp
+)
+
 set(SOURCE_TEST
     src/scripts/ui/assets.cpp
     src/header/ui/assets.hpp
@@ -68,6 +83,10 @@ set(SOURCE_TEST_GLM
     src/scripts/test_glm.cpp
 )
 
+set(SOURCE_TEST_GLSL
+    src/scripts/test_glsl.cpp
+)
+
 # Add ImGui source files
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
 set(IMGUI_SOURCES
@@ -80,6 +99,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
@@ -100,6 +120,7 @@ set(IMGUI_TEST
     ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
 set(JSON_DIR ${CMAKE_SOURCE_DIR}/vendor/nlohmann)
@@ -117,6 +138,11 @@ set(GLAD_4
     ${GLAD_4_DIR}/src/glad.c
 )
 
+set(GLAD_VULKAN_DIR ${CMAKE_SOURCE_DIR}/vendor/glad_vulkan)
+set(GLAD_VULKAN
+    ${GLAD_VULKAN_DIR}/src/vulkan.c
+)
+
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
@@ -125,14 +151,19 @@ file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
-add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_TEST})
+add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES})
 target_link_options(TestBackground PRIVATE -mconsole)
-add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_TEST} ${GLAD_4})
+add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestGLEW PRIVATE -mconsole)
 add_executable(TestGLM ${SOURCE_TEST_GLM})
 target_link_options(TestGLM PRIVATE -mconsole)
+add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_GLSL} ${ICON_SOURCE})
+target_link_options(TestGLSL PRIVATE -mconsole)
+add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
+target_link_options(TestVulkan PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
+# set(Vulkan_DIR "${VULKAN_SDK}/lib/cmake/VulkanLoader")
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -194,6 +225,50 @@ target_include_directories(TestGLM PRIVATE
     # GLEW
 )
 
+target_include_directories(TestGLSL PRIVATE
+    ${SDL2_DIR}/include
+    ${ICON_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${FFMPEG_DIR}
+    ${NFD}/src/include
+    ${JSON_DIR}
+    ${STB}
+    ${GLM}
+    # GL
+    # ${GLEW}/include/GL
+    ${GLFW}/include
+    ${GLES2}
+    opengl32
+    gdi32
+    ${GLAD_4_DIR}/include
+)
+
+target_include_directories(TestVulkan PRIVATE
+    ${SDL2_DIR}/include
+    ${ICON_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${FFMPEG_DIR}
+    ${NFD}/src/include
+    ${JSON_DIR}
+    ${STB}
+    ${GLM}
+    # GL
+    # ${GLEW}/include/GL
+    ${GLFW}/include
+    # ${GLES2}
+    opengl32
+    gdi32
+    # ${GLAD_VULKAN_DIR}/include
+    # ${VULKAN_SDK}/include
+    ${VULKAN_DIR}
+)    
+
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
@@ -234,7 +309,8 @@ target_link_libraries(TestGLEW PRIVATE
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
     # GLEW::GLEW
 )
-target_link_libraries(TestGLEW PRIVATE
+
+target_link_libraries(TestGLSL PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
     ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
     OpenGL::GL
@@ -242,24 +318,26 @@ target_link_libraries(TestGLEW PRIVATE
     ${LIBRARY}/avcodec.lib 
     ${LIBRARY}/avutil.lib 
     ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
+    ${LIBRARY}/swscale.lib    
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
 )
 
-target_link_libraries(TestGLEW PRIVATE
+target_link_libraries(TestVulkan PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
     ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    OpenGL::GL
     ${LIBRARY}/avformat.lib
     ${LIBRARY}/avcodec.lib 
     ${LIBRARY}/avutil.lib 
     ${LIBRARY}/swresample.lib
     ${LIBRARY}/swscale.lib
+    ${LIBRARY}/vulkan-1.dll
+    ${VULKAN_LIB}
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
 )
-
 
 # Copy DLL files to output directory
 if(WIN32)
@@ -276,16 +354,10 @@ if(WIN32)
             # "${GLEW}/bin/Release/x64/glew32.dll"
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
     )
-    # add_custom_command(TARGET TestBackground POST_BUILD
-    #     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    #         "${SDL2_DIR}/lib/x64/SDL2.dll"
-    #         "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
-    #         "${LIBRARY}/avformat-62.dll"
-    #         "${LIBRARY}/avcodec-62.dll"
-    #         "${LIBRARY}/avutil-60.dll"
-    #         "${LIBRARY}/swresample-6.dll"
-    #         "${LIBRARY}/swscale-9.dll"
-    #         "${GLFW}/lib-static-ucrt/glfw3.dll"
-    #         $<TARGET_FILE_DIR:TestBackground>
-    # )
+    add_custom_command(TARGET TestVulkan POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LIBRARY}/vulkan-1.dll"
+            "${VULKAN_LIB}"
+            $<TARGET_FILE_DIR:TestVulkan>
+    )
 endif()

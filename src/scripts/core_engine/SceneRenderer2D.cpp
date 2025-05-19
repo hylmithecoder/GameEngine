@@ -10,7 +10,7 @@
 using namespace std;
 
 SceneRenderer2D::SceneRenderer2D(int width, int height)
-    : width(width), height(height) {
+    : width(width), height(height), cameraZoom(1.0f), gridVisible(false), gridSize(10.0f), snapToGrid(false), cameraPosition(0.0f, 0.0f) {
     cout << "Creating SceneRenderer2D: " << width << "x" << height << endl;
     Init();
 }
@@ -66,7 +66,7 @@ void SceneRenderer2D::InitShaders() {
         return;
     }
     
-    cout << shaderProgram << ", " << gizmoShaderProgram << ", " << gridShaderProgram << endl;
+    Debug::Logger::Log("Shader Program: " + std::to_string(shaderProgram) + " Gizmo Shader Program: " + std::to_string(gizmoShaderProgram) + " Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::SUCCESS);
 }
 
 void SceneRenderer2D::Init() {
@@ -210,7 +210,10 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
           + " width: " + std::to_string(width) + " height: " + std::to_string(height)
           + " gridSize: " + std::to_string(gridSize)
           + " VAO: " + std::to_string(m_GridVAO) + " VBO: " + std::to_string(m_GridVBO)
-          + " Max Grid Lines: " + std::to_string(m_MaxGridLines));
+          + "\nMax Grid Lines: " + std::to_string(m_MaxGridLines)
+          + " Current Shader: " + std::to_string(shaderProgram)
+          + " Current Gizmo Shader: " + std::to_string(gizmoShaderProgram)
+          + " Current Grid Shader: " + std::to_string(gridShaderProgram), Debug::LogLevel::INFO);
 
     
     // Disable blending when done
@@ -228,12 +231,12 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
     }
 
     glUseProgram(gridShaderProgram);
-
+    cout << gridShaderProgram << endl;
     // Set uniforms
     GLint projLoc = glGetUniformLocation(gridShaderProgram, "u_Projection");
     GLint viewLoc = glGetUniformLocation(gridShaderProgram, "u_View");
     GLint colorLoc = glGetUniformLocation(gridShaderProgram, "u_Color");
-
+    Debug::Logger::Log("[Debug] projLoc: " + std::to_string(projLoc) + " viewLoc: " + std::to_string(viewLoc) + " colorLoc: " + std::to_string(colorLoc), Debug::LogLevel::SUCCESS);
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
     glUniform4f(colorLoc, 0.7f, 0.7f, 0.7f, 0.5f);
@@ -612,7 +615,7 @@ GLuint SceneRenderer2D::CreateShaderProgram(const std::string& vertPath, const s
     // Once linked, the shader objects can be deleted
     glDeleteShader(vertShader);
     glDeleteShader(fragShader);
-    
+    Debug::Logger::Log("[Debug] Shader Program Successfully Created: " + std::to_string(program), Debug::LogLevel::SUCCESS);
     return program;
 }
 
