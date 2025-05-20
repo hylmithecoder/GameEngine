@@ -4,6 +4,7 @@
 // #define STB_IMAGE_IMPLEMENTATION
 #include <sstream>
 #include <filesystem>
+#include <Debugger.hpp>
 #include <algorithm>
 // #include <assets.hpp>
 
@@ -21,7 +22,7 @@ GLuint TextureManager::LoadTexture(const std::string& path) {
     // Check if texture is already loaded
     auto it = textureCache.find(normalizedPath);
     if (it != textureCache.end()) {
-        cout << "Returning cached texture ID: " << it->second << " for path: " << normalizedPath << endl;
+        Debug::Logger::Log("Texture already loaded: " + normalizedPath, Debug::LogLevel::SUCCESS);
         return it->second;
     }
     

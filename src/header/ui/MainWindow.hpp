@@ -6,7 +6,7 @@
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include <SDL_ttf.h>
-#include "SceneRenderer2D.hpp"
+#include <SceneRenderer2D.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
 // #include <SDL_opengl.h>
@@ -83,6 +83,7 @@ public:
     MainWindow(const char* title, int width = 1280, int height = 720);
     ~MainWindow();
         
+    ViewPort viewPort;
     SceneRenderer2D* sceneRenderer2D = nullptr;
     HandlerProject projectHandler;
     TextureData backgroundTexture;

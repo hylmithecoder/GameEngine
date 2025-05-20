@@ -1,4 +1,4 @@
-#include "SceneRenderer2D.hpp"
+#include <SceneRenderer2D.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -25,111 +25,7 @@ SceneRenderer2D::~SceneRenderer2D() {
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
     if (quadEBO) glDeleteBuffers(1, &quadEBO);
-}
-
-void SceneRenderer2D::InitShaders() {
-    // Create shader program first
-    shaderProgram = CreateShaderProgram("assets/shaders/sprite.vert", "assets/shaders/sprite.frag");
-    if (shaderProgram == 0) {
-        cerr << "Failed to create shader program!" << endl;
-        return;
-    }
-    
-    gizmoShaderProgram = CreateShaderProgram("assets/shaders/gizmo.vert", "assets/shaders/gizmo.frag");
-    if (gizmoShaderProgram == 0) {
-        cerr << "Failed to create gizmo shader program" << endl;
-        return;
-    }
-    
-    gridShaderProgram = CreateShaderProgram("assets/shaders/grid.vert", "assets/shaders/grid.frag");
-    if (gridShaderProgram == 0) {
-        cerr << "Failed to create grid shader program" << endl;
-        return;
-    }
-
-    GLint success;
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-    try {
-        if (!success) 
-        {
-            char infoLog[512];
-            glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
-            throw runtime_error(infoLog);
-        }
-        else 
-        {
-            cout << "Shader program link success" << endl;
-        }
-    }
-    catch (runtime_error& e) {
-        cerr << "Shader program link error: " << e.what() << endl;
-        return;
-    }
-    
-    Debug::Logger::Log("Shader Program: " + std::to_string(shaderProgram) + " Gizmo Shader Program: " + std::to_string(gizmoShaderProgram) + " Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::SUCCESS);
-}
-
-void SceneRenderer2D::Init() {
-    std::cout << "[DEBUG] TextureManager instance created, textureCache size: " << textureManager.textureCache.size() << std::endl;
-
-    cout << "Initializing Scene Renderer" << endl;
-    
-    // Initialize vertex data for rendering quads
-    InitQuad();
-    cout << "Quad initialization complete ✅" << endl;
-    
-    // Initialize grid buffers
-    InitGridBuffers();
-    cout << "Grid buffers initialization complete ✅" << endl;
-    
-    InitShaders();
-    cout << "Shader initialization complete ✅" << endl;
-    
-    // Create framebuffer last
-    CreateFramebuffer();
-    cout << framebuffer << ", " << textureID << ", " << rbo << endl;
-    cout << "Framebuffer creation complete ✅" << endl;
-}
-
-void SceneRenderer2D::SetViewportSize(int newWidth, int newHeight) {
-    if (width == newWidth && height == newHeight) return;
-    
-    width = newWidth;
-    height = newHeight;
-    
-    // Recreate framebuffer with new dimensions
-    DestroyFramebuffer();
-    CreateFramebuffer();
-}
-
-void SceneRenderer2D::CreateFramebuffer() {
-    // Generate and bind a framebuffer object
-    glGenFramebuffers(1, &framebuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-
-    // Create a texture attachment for the framebuffer
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_2D, textureID);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureID, 0);
-
-    // Create a renderbuffer object for depth and stencil attachments
-    glGenRenderbuffers(1, &rbo);
-    glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
-
-    // Check if framebuffer is complete
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        cerr << "Framebuffer is not complete!" << endl;
-    } else {
-        cout << "Framebuffer successfully created with dimensions: " << width << "x" << height << endl;
-    }
-
-    // Unbind the framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    viewPort.Clean();
 }
 
 void SceneRenderer2D::DestroyFramebuffer() {
@@ -160,17 +56,136 @@ void SceneRenderer2D::DestroyFramebuffer() {
     }
 }
 
+void SceneRenderer2D::InitShaders() {
+    // Create shader program first
+    shaderProgram = CreateShaderProgram("assets/shaders/sprite.vert", "assets/shaders/sprite.frag");
+    if (shaderProgram == 0) {
+        cerr << "Failed to create shader program!" << endl;
+        return;
+    }
+    
+    gizmoShaderProgram = CreateShaderProgram("assets/shaders/gizmo.vert", "assets/shaders/gizmo.frag");
+    if (gizmoShaderProgram == 0) {
+        cerr << "Failed to create gizmo shader program" << endl;
+        return;
+    }
+    
+    gridShaderProgram = CreateShaderProgram("assets/shaders/grid.vert", "assets/shaders/grid.frag");
+    if (gridShaderProgram == 0) {
+        cerr << "Failed to create grid shader program" << endl;
+        return;
+    }
+    
+    checkProgramLinking(shaderProgram);
+    checkProgramLinking(gizmoShaderProgram);
+    checkProgramLinking(gridShaderProgram);
+
+    Debug::Logger::Log("[InitShaders] Shader Program: " + std::to_string(shaderProgram) + " Gizmo Shader Program: " + std::to_string(gizmoShaderProgram) + " Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::SUCCESS);
+}
+
+void SceneRenderer2D::checkProgramLinking(GLuint program) {
+    GLint success;
+    GLchar infoLog[1024];
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+        
+    if (!success) {
+        glGetProgramInfoLog(program, 1024, NULL, infoLog);
+        std::cerr << "ERROR::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+    }
+    Debug::Logger::Log("Program " + std::to_string(program) + " linked successfully", Debug::LogLevel::SUCCESS);
+}
+
+void SceneRenderer2D::Init() {
+    // viewPort.getGridShaderProgram();
+    std::cout << "[DEBUG] TextureManager instance created, textureCache size: " << textureManager.textureCache.size() << std::endl;
+
+    cout << "Initializing Scene Renderer" << endl;
+    
+    InitShaders();
+    cout << "Shader initialization complete ✅" << endl;
+
+    // Initialize vertex data for rendering quads
+    InitQuad();
+    cout << "Quad initialization complete ✅" << endl;
+    
+    // Initialize grid buffers
+    InitGridBuffers();
+    cout << "Grid buffers initialization complete ✅" << endl;   
+    
+    // Create framebuffer last
+    CreateFramebuffer();
+    cout << framebuffer << ", " << textureID << ", " << rbo << endl;
+    cout << "Framebuffer creation complete ✅" << endl;
+
+    if (!checkShaderUniforms(gridShaderProgram))
+    {
+        Debug::Logger::Log("[Check Again] Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::WARNING);
+    }
+    Debug::Logger::Log("[Check Again] Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::WARNING);
+    // viewPort.getGridShaderProgram(gridShaderProgram);
+}
+
+void SceneRenderer2D::SetViewportSize(int newWidth, int newHeight) {
+    if (width == newWidth && height == newHeight) return;
+    
+    width = newWidth;
+    height = newHeight;
+    
+    // Recreate framebuffer with new dimensions
+    DestroyFramebuffer();
+    CreateFramebuffer();
+}
+
+void SceneRenderer2D::CreateFramebuffer() {
+    // Generate and bind a framebuffer object
+    
+
+    // Create a texture attachment for the framebuffer
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureID, 0);
+
+    // Create a renderbuffer object for depth and stencil attachments
+    glGenFramebuffers(1, &rbo);
+    glBindFramebuffer(GL_RENDERBUFFER, rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
+
+    // Check if framebuffer is complete
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        cerr << "Framebuffer is not complete!" << endl;
+    } else {
+        cout << "Framebuffer successfully created with dimensions: " << width << "x" << height << endl;
+    }
+
+    // Unbind the framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 // This Method Is Loop Update For Render Scene To Texture And Use in HandleChilWindow.cpp
+void SceneRenderer2D::LastGridShaderProgram()
+{
+    Debug::Logger::Log("Last Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::SUCCESS);
+    GLuint currentGridProgram = gridShaderProgram;
+    cout << to_string(currentGridProgram) << endl;
+    // viewPort.getGridShaderProgram(gridShaderProgram);
+}
 void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
     // Bind our framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    // glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     
     // Set the viewport to match our framebuffer size
-    glViewport(0, 0, width, height);
+    // glViewport(0, 0, width, height);
     
     // Clear the framebuffer
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
     // Enable alpha blending
     glEnable(GL_BLEND);
@@ -187,22 +202,20 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
                                   glm::vec3(-cameraPosition.x, -cameraPosition.y, 0.0f));
     
     // Draw grid if enabled
-    if (gridVisible) {
-        DrawGrid(projection, view);
-    }
+    DrawGrid(projection, view);
     
     // Draw all objects in the scene
     for (const auto& obj : scene.objects) {
-        // GLuint tex = textureManager.LoadTexture(obj.spritePath);
-        // if (tex != 0) {
-        //     DrawSprite(tex, obj.x, obj.y, obj.width, obj.height, 
-        //               obj.rotation, obj.scaleX, obj.scaleY);
-        // }
+        GLuint tex = textureManager.LoadTexture(obj.spritePath);
+        if (tex != 0) {
+            DrawSprite(tex, obj.x, obj.y, obj.width, obj.height, 
+                      obj.rotation, obj.scaleX, obj.scaleY);
+        }
     }
     
     // Draw selection gizmo for selected object
     if (selectedObject != nullptr) {
-        // DrawSelectionGizmo(*selectedObject);
+        DrawSelectionGizmo(*selectedObject);
     }
 
     Debug::Logger::Log("[Debug] camZoom: " + std::to_string(cameraZoom)
@@ -224,109 +237,194 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
 }
 
 void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& view) {
-    cout << "Grid Shader Program: " << gridShaderProgram << " Shader Program: " << shaderProgram << " Gizmo Shader Program: " << gizmoShaderProgram << endl;
-    if (gridShaderProgram == 0) {
-        Debug::Logger::Log("[Debug] Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::CRASH);
-        return;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glViewport(0, 0, width, height);
+        glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
+        glUseProgram(gridShaderProgram);
+
+        string info = to_string(gridShaderProgram);
+        string info2 = to_string(textureID);
+        ImGui::Text("Grid Shader Program: %s | And Texture ID: %s", info.c_str(), info2.c_str());
+
+        if (!checkShaderUniforms(gridShaderProgram)) {
+            Debug::Logger::Log("Missing required uniforms in grid shader!", Debug::LogLevel::CRASH);
+            return;
+        }
+        
+        // Set uniform values
+        glUniform2f(glGetUniformLocation(gridShaderProgram, "uViewport"), width, height);
+        glUniform2f(glGetUniformLocation(gridShaderProgram, "uPan"), pan.x, pan.y);
+        glUniform1f(glGetUniformLocation(gridShaderProgram, "uZoom"), zoom);
+        glUniform3f(glGetUniformLocation(gridShaderProgram, "uGridColor"), gridColor.x, gridColor.y, gridColor.z);
+        glUniform3f(glGetUniformLocation(gridShaderProgram, "uBgColor"), bgColor.x, bgColor.y, bgColor.z);
+        glUniform1f(glGetUniformLocation(gridShaderProgram, "uGridSize"), gridSize);
+        
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+   
+        // Controls
+        if (ImGui::CollapsingHeader("Viewport Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("Zoom", &zoom, 0.1f, 10.0f);
+            ImGui::DragFloat2("Pan", &pan.x, 1.0f);
+            ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
+            ImGui::ColorEdit3("Grid Color", &gridColor.x);
+            ImGui::ColorEdit3("Background Color", &bgColor.x);
+            std::string currentShaderProgram = to_string(shaderProgram);
+            ImGui::Text("Current Shader: %s", currentShaderProgram.c_str());
+            if (ImGui::Button("Reset View")) {
+                zoom = 1.0f;
+                pan = ImVec2(0.0f, 0.0f);
+            }
+        }
+        
+        // Viewport area
+        ImVec2 viewportPos = ImGui::GetCursorScreenPos();
+        ImVec2 viewportSize = ImGui::GetContentRegionAvail();
+        
+        // Ensure square aspect ratio if needed
+        viewportSize.x = viewportSize.y = min(viewportSize.x, viewportSize.y);
+        
+        // Update viewport dimensions if window resized
+        if (width != static_cast<int>(viewportSize.x) || 
+            height != static_cast<int>(viewportSize.y)) {
+            
+            width = static_cast<int>(viewportSize.x);
+            height = static_cast<int>(viewportSize.y);
+            
+            // Resize framebuffer texture
+            glBindTexture(GL_TEXTURE_2D, textureID);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        }
+        
+        // Draw the viewport texture
+        ImGui::Image((ImTextureID)(intptr_t)textureID, viewportSize);
+        
+        // Handle mouse interactions within viewport
+        if (ImGui::IsItemHovered()) {
+            // Mouse wheel for zoom
+            if (ImGui::GetIO().MouseWheel != 0.0f) {
+                // Get mouse position relative to viewport
+                ImVec2 mousePos = ImGui::GetIO().MousePos;
+                ImVec2 mousePosInViewport = ImVec2(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+                
+                // Calculate world position before zoom
+                ImVec2 worldPosBeforeZoom = ImVec2(
+                    (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                    (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+                );
+                
+                // Apply zoom (mouse wheel)
+                float zoomFactor = 1.1f;
+                if (ImGui::GetIO().MouseWheel > 0.0f)
+                    zoom *= zoomFactor;
+                else
+                    zoom /= zoomFactor;
+                    
+                // Clamp zoom
+                zoom = std::max(0.1f, std::min(zoom, 10.0f));
+                
+                // Calculate world position after zoom
+                ImVec2 worldPosAfterZoom = ImVec2(
+                    (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                    (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+                );
+                
+                // Adjust pan to keep mouse over same world position
+                pan.x += (worldPosBeforeZoom.x - worldPosAfterZoom.x);
+                pan.y += (worldPosBeforeZoom.y - worldPosAfterZoom.y);
+            }
+            
+            // Middle mouse button drag for panning
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+                ImVec2 mousePos = ImGui::GetMousePos();
+                
+                if (!isDragging) {
+                    isDragging = true;
+                    lastMousePos = mousePos;
+                } else {
+                    // Calculate delta and apply to pan (adjusted for zoom)
+                    pan.x -= (mousePos.x - lastMousePos.x) / zoom;
+                    pan.y -= (mousePos.y - lastMousePos.y) / zoom;
+                    lastMousePos = mousePos;
+                }
+            } else {
+                isDragging = false;
+            }
+            
+            // Display coordinates under cursor
+            ImVec2 mousePos = ImGui::GetMousePos();
+            ImVec2 mousePosInViewport = ImVec2(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+            ImVec2 worldPos = ImVec2(
+                (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+            );
+            
+            ImGui::SetTooltip("Pos: (%.1f, %.1f)", worldPos.x, worldPos.y);
+        }
+        
+        // Status bar
+        ImGui::Text("Zoom: %.2fx | Pan: (%.1f, %.1f) | Grid Size: %.1f", 
+                    zoom, pan.x, pan.y, gridSize);
+}
+
+bool SceneRenderer2D::checkShaderUniforms(GLuint program) {
+    Debug::Logger::Log("Checking shader uniforms for program: " + std::to_string(program), Debug::LogLevel::INFO);
+    
+    bool allValid = true;
+
+    // Store uniform names and their expected types
+    const std::vector<std::pair<const char*, const char*>> uniforms = {
+        {"uViewport", "vec2"},
+        {"uPan", "vec2"},
+        {"uZoom", "float"},
+        {"uGridColor", "vec3"},
+        {"uBgColor", "vec3"},
+        {"uGridSize", "float"}
+    };
+
+    // Check each uniform
+    for (const auto& uniform : uniforms) {
+        try {
+            validateUniformLocation(program, uniform.first, uniform.second);
+        } catch (const std::runtime_error& e) {
+            Debug::Logger::Log(e.what(), Debug::LogLevel::CRASH);
+            allValid = false;
+        }
     }
 
-    glUseProgram(gridShaderProgram);
-    cout << gridShaderProgram << endl;
-    // Set uniforms
-    GLint projLoc = glGetUniformLocation(gridShaderProgram, "u_Projection");
-    GLint viewLoc = glGetUniformLocation(gridShaderProgram, "u_View");
-    GLint colorLoc = glGetUniformLocation(gridShaderProgram, "u_Color");
-    Debug::Logger::Log("[Debug] projLoc: " + std::to_string(projLoc) + " viewLoc: " + std::to_string(viewLoc) + " colorLoc: " + std::to_string(colorLoc), Debug::LogLevel::SUCCESS);
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-    glUniform4f(colorLoc, 0.7f, 0.7f, 0.7f, 0.5f);
+    return allValid;
+}
 
-    // Disable depth
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_LINE_SMOOTH);
-    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-    glLineWidth(1.0f);
-
-    float halfWidth = width * 0.5f / cameraZoom;
-    float halfHeight = height * 0.5f / cameraZoom;
-
-    float left = cameraPosition.x - halfWidth;
-    float right = cameraPosition.x + halfWidth;
-    float bottom = cameraPosition.y - halfHeight;
-    float top = cameraPosition.y + halfHeight;
-
-    std::cout << "[Grid Area] L:" << left << " R:" << right
-            << " B:" << bottom << " T:" << top << std::endl;
-
-    left = floor(left / gridSize) * gridSize;
-    right = ceil(right / gridSize) * gridSize;
-    bottom = floor(bottom / gridSize) * gridSize;
-    top = ceil(top / gridSize) * gridSize;
-
-    std::vector<float> gridVertices;
-
-    // Test only: 2 lines, X and Y axis
-    gridVertices.push_back(-10.0f); gridVertices.push_back(0.0f);
-    gridVertices.push_back(10.0f);  gridVertices.push_back(0.0f);
-
-    gridVertices.push_back(0.0f);  gridVertices.push_back(-10.0f);
-    gridVertices.push_back(0.0f);  gridVertices.push_back(10.0f);
-
-
-    // float left = cameraPosition.x - width * 0.5f / cameraZoom;
-    // float right = cameraPosition.x + width * 0.5f / cameraZoom;
-    // float top = cameraPosition.y + height * 0.5f / cameraZoom;
-    // float bottom = cameraPosition.y - height * 0.5f / cameraZoom;
-
-    // float visibleWidth = right - left;
-    // float visibleHeight = top - bottom;
-    // int maxLinesX = std::min(static_cast<int>(visibleWidth / gridSize) + 2, 200);
-    // int maxLinesY = std::min(static_cast<int>(visibleHeight / gridSize) + 2, 200);
-
-    // left = floor(left / gridSize) * gridSize;
-    // right = ceil(right / gridSize) * gridSize;
-    // bottom = floor(bottom / gridSize) * gridSize;
-    // top = ceil(top / gridSize) * gridSize;
-
-    // std::vector<float> gridVertices;
-    // gridVertices.reserve((maxLinesX + maxLinesY) * 4);
-
-    // int lineCount = 0;
-    // for (float x = left; x <= right && lineCount < maxLinesX; x += gridSize, lineCount++) {
-    //     // gridVertices.push_back(x); gridVertices.push_back(bottom);
-    //     // gridVertices.push_back(x); gridVertices.push_back(top);
-    //     gridVertices.push_back(-10.0f); gridVertices.push_back(0.0f);
-    //     gridVertices.push_back(10.0f);  gridVertices.push_back(0.0f);
-    // }
-
-    // lineCount = 0;
-    // for (float y = bottom; y <= top && lineCount < maxLinesY; y += gridSize, lineCount++) {
-    //     // gridVertices.push_back(left); gridVertices.push_back(y);
-    //     // gridVertices.push_back(right); gridVertices.push_back(y);
-    //     gridVertices.push_back(0.0f);  gridVertices.push_back(-10.0f);
-    //     gridVertices.push_back(0.0f);  gridVertices.push_back(10.0f);
-    // }
-
-    if (gridVertices.size() > m_MaxGridLines * 4) {
-        Debug::Logger::Log("Grid vertices size is too large, resizing to " + std::to_string(m_MaxGridLines * 4), Debug::LogLevel::WARNING);
-        gridVertices.resize(m_MaxGridLines * 4);
+void SceneRenderer2D::validateUniformLocation(GLuint program, const char* uniformName, const char* uniformType) {
+    GLint location = glGetUniformLocation(program, uniformName);
+    
+    if (location == -1) {
+        throw std::runtime_error("Uniform '" + std::string(uniformName) + 
+                               "' (" + uniformType + ") not found in shader program");
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, gridVertices.size() * sizeof(float), gridVertices.data());
+    // Get uniform info
+    GLint size;
+    GLenum type;
+    GLchar actualName[128];
+    glGetActiveUniform(program, location, sizeof(actualName), nullptr, &size, &type, actualName);
 
-    glBindVertexArray(m_GridVAO);
-    glEnableVertexAttribArray(0); // <- make sure it's enabled
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gridVertices.size() / 2));
-    glBindVertexArray(0);
+    std::string typeStr;
+    switch (type) {
+        case GL_FLOAT: typeStr = "float"; break;
+        case GL_FLOAT_VEC2: typeStr = "vec2"; break;
+        case GL_FLOAT_VEC3: typeStr = "vec3"; break;
+        case GL_FLOAT_VEC4: typeStr = "vec4"; break;
+        default: typeStr = "unknown";
+    }
 
-    Debug::Logger::Log("Grid Line: " + std::to_string(gridVertices.size() / 2), Debug::LogLevel::SUCCESS);
-
-    glDisable(GL_LINE_SMOOTH);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
+    Debug::Logger::Log("Found uniform '" + std::string(uniformName) + 
+                      "' at location " + std::to_string(location) + 
+                      " (type: " + typeStr + ")", Debug::LogLevel::SUCCESS);
 }
 
 void SceneRenderer2D::DrawSelectionGizmo(const GameObject& obj) {
@@ -419,38 +517,15 @@ void SceneRenderer2D::DrawSelectionGizmo(const GameObject& obj) {
     glDeleteBuffers(1, &gizmoVBO);
 }
 
-void SceneRenderer2D::RenderScene() {
-    // Test function to render a simple scene
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glViewport(0, 0, width, height);
-    glClearColor(1.0f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    
-    // Enable blending for transparent textures
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // Draw a test white sprite at position 100,100
-    GLuint testTextureID = CreateWhiteTexture();
-    DrawSprite(testTextureID, 100.0f, 100.0f, 64.0f, 64.0f);
-    
-    // Clean up the test texture
-    glDeleteTextures(1, &testTextureID);
-    
-    glDisable(GL_BLEND);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
 void SceneRenderer2D::InitQuad() {
     cout << "Initializing quad geometry" << endl;
     
     // Vertex data for a quad with positions and texture coordinates
-    float quadVertices[] = {
-        // positions      // texcoords
-        0.0f, 0.0f,       0.0f, 0.0f,  // bottom left
-        1.0f, 0.0f,       1.0f, 0.0f,  // bottom right
-        1.0f, 1.0f,       1.0f, 1.0f,  // top right
-        0.0f, 1.0f,       0.0f, 1.0f   // top left
+    float vertices[] = {
+        -1.0f, -1.0f, // bottom left
+        1.0f, -1.0f, // bottom right
+        -1.0f,  1.0f, // top left
+        1.0f,  1.0f  // top right
     };
     
     // Indices for the quad (using 2 triangles)
@@ -460,29 +535,29 @@ void SceneRenderer2D::InitQuad() {
     };
     
     // Generate and bind VAO
+    glGenBuffers(1, &quadVBO);
     glGenVertexArrays(1, &quadVAO);
-    glBindVertexArray(quadVAO);
     
     // Generate and bind VBO
-    glGenBuffers(1, &quadVBO);
+    glBindVertexArray(quadVAO);
     glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
     
     // Generate and bind EBO
-    glGenBuffers(1, &quadEBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, quadEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    // glGenBuffers(1, &quadEBO);
+    // glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, quadEBO);
+    // glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
     
     // Position attribute (vec2)
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);    
     
     // Texture coordinate attribute (vec2)
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    // glEnableVertexAttribArray(1);
+    // glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     
     // Unbind VAO and VBO
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    // glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 }
 
@@ -544,7 +619,7 @@ GLuint SceneRenderer2D::LoadShaderFromFile(const std::string& path, GLenum type)
     buffer << file.rdbuf();
     std::string source = buffer.str();
     const char* src = source.c_str();
-    
+    Debug::Logger::Log("Shader Source: \n" + source, Debug::LogLevel::WARNING);
     // Create and compile the shader
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, nullptr);
@@ -600,17 +675,17 @@ GLuint SceneRenderer2D::CreateShaderProgram(const std::string& vertPath, const s
     glLinkProgram(program);
     
     // Check for linking errors
-    GLint linked;
-    glGetProgramiv(program, GL_LINK_STATUS, &linked);
-    if (!linked) {
-        char log[512];
-        glGetProgramInfoLog(program, 512, nullptr, log);
-        std::cerr << "Shader linking error: " << log << std::endl;
-        glDeleteShader(vertShader);
-        glDeleteShader(fragShader);
-        glDeleteProgram(program);
-        return 0;
-    }
+    // GLint linked;
+    // glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    // if (!linked) {
+    //     char log[512];
+    //     glGetProgramInfoLog(program, 512, nullptr, log);
+    //     std::cerr << "Shader linking error: " << log << std::endl;
+    //     glDeleteShader(vertShader);
+    //     glDeleteShader(fragShader);
+    //     glDeleteProgram(program);
+    //     return 0;
+    // }
     
     // Once linked, the shader objects can be deleted
     glDeleteShader(vertShader);
@@ -765,4 +840,242 @@ void SceneRenderer2D::DeleteSelected() {
 
 bool SceneRenderer2D::HasSelectedObject() const {
     return selectedObject != nullptr;
+}
+
+void ViewPort::Init()
+{
+        vertexShader = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vertexShader, 1, &vertexSrc, NULL);
+        glCompileShader(vertexShader);
+        checkShaderCompilation(vertexShader, "Vertex Shader");
+
+        // Compile Fragment Shader
+        fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragmentShader, 1, &fragmentSrc, NULL);
+        glCompileShader(fragmentShader);
+        checkShaderCompilation(fragmentShader, "Fragment Shader");
+
+        // Link Shader Program
+        shaderProgram = glCreateProgram();
+        glAttachShader(shaderProgram, vertexShader);
+        glAttachShader(shaderProgram, fragmentShader);
+        glLinkProgram(shaderProgram);
+        checkProgramLinking(shaderProgram);
+        
+        // Cleanup shader objects
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        // Setup rectangle (fullscreen quad)
+        float vertices[] = {
+            -1.0f, -1.0f, // bottom left
+             1.0f, -1.0f, // bottom right
+            -1.0f,  1.0f, // top left
+             1.0f,  1.0f  // top right
+        };
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+
+        glBindVertexArray(0);
+        
+        // Setup framebuffer
+        glGenTextures(1, &renderTex);
+        glBindTexture(GL_TEXTURE_2D, renderTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, viewportWidth, viewportHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderTex, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "Framebuffer not complete!" << std::endl;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        Debug::Logger::Log("[Init] Grid Shader Program: " + std::to_string(shaderProgram), Debug::LogLevel::SUCCESS);
+}
+
+// ViewPort::~ViewPort()
+// {
+//     glDeleteProgram(shaderProgram);
+//     glDeleteBuffers(1, &vbo);
+//     glDeleteVertexArrays(1, &vao);
+//     glDeleteTextures(1, &renderTex);
+//     glDeleteFramebuffers(1, &fbo);
+// }
+
+void ViewPort::checkShaderCompilation(GLuint shader, const char* name) {
+    GLint success;
+    GLchar infoLog[1024];
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+        
+    if (!success) {
+        glGetShaderInfoLog(shader, 1024, NULL, infoLog);
+        std::cerr << "ERROR::SHADER::" << name << "::COMPILATION_FAILED\n" << infoLog << std::endl;
+    }
+}
+
+void ViewPort::checkProgramLinking(GLuint program) {
+    GLint success;
+    GLchar infoLog[1024];
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+        
+    if (!success) {
+        glGetProgramInfoLog(program, 1024, NULL, infoLog);
+        std::cerr << "ERROR::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+    }
+}
+
+void ViewPort::Clean()
+{
+    glDeleteProgram(shaderProgram);
+    glDeleteBuffers(1, &vbo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteTextures(1, &renderTex);
+    glDeleteFramebuffers(1, &fbo);
+}
+
+void ViewPort::drawGrid() {
+    Debug::Logger::Log("Grid Shader Program: " + to_string(shaderProgram), Debug::LogLevel::WARNING);
+        // Render grid to framebuffer
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, viewportWidth, viewportHeight);
+        glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
+        glUseProgram(shaderProgram);
+        
+        // Set uniform values
+        glUniform2f(glGetUniformLocation(shaderProgram, "uViewport"), viewportWidth, viewportHeight);
+        glUniform2f(glGetUniformLocation(shaderProgram, "uPan"), pan.x, pan.y);
+        glUniform1f(glGetUniformLocation(shaderProgram, "uZoom"), zoom);
+        glUniform3f(glGetUniformLocation(shaderProgram, "uGridColor"), gridColor.x, gridColor.y, gridColor.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "uBgColor"), bgColor.x, bgColor.y, bgColor.z);
+        glUniform1f(glGetUniformLocation(shaderProgram, "uGridSize"), gridSize);
+        
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        // Show in ImGui
+        // ImGui::Begin("GLSL Viewport Prototype");
+        
+        // Controls
+        if (ImGui::CollapsingHeader("Viewport Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("Zoom", &zoom, 0.1f, 10.0f);
+            ImGui::DragFloat2("Pan", &pan.x, 1.0f);
+            ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
+            ImGui::ColorEdit3("Grid Color", &gridColor.x);
+            ImGui::ColorEdit3("Background Color", &bgColor.x);
+            
+            if (ImGui::Button("Reset View")) {
+                zoom = 1.0f;
+                pan = ImVec2(0.0f, 0.0f);
+            }
+        }
+        
+        // Viewport area
+        ImVec2 viewportPos = ImGui::GetCursorScreenPos();
+        ImVec2 viewportSize = ImGui::GetContentRegionAvail();
+        
+        // Ensure square aspect ratio if needed
+        // viewportSize.x = viewportSize.y = min(viewportSize.x, viewportSize.y);
+        
+        // Update viewport dimensions if window resized
+        if (viewportWidth != static_cast<int>(viewportSize.x) || 
+            viewportHeight != static_cast<int>(viewportSize.y)) {
+            
+            viewportWidth = static_cast<int>(viewportSize.x);
+            viewportHeight = static_cast<int>(viewportSize.y);
+            
+            // Resize framebuffer texture
+            glBindTexture(GL_TEXTURE_2D, renderTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, viewportWidth, viewportHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        }
+        
+        // Draw the viewport texture
+        ImGui::Image((ImTextureID)(intptr_t)renderTex, viewportSize);
+        
+        // Handle mouse interactions within viewport
+        if (ImGui::IsItemHovered()) {
+            // Mouse wheel for zoom
+            if (ImGui::GetIO().MouseWheel != 0.0f) {
+                // Get mouse position relative to viewport
+                ImVec2 mousePos = ImGui::GetIO().MousePos;
+                ImVec2 mousePosInViewport = ImVec2(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+                
+                // Calculate world position before zoom
+                ImVec2 worldPosBeforeZoom = ImVec2(
+                    (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                    (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+                );
+                
+                // Apply zoom (mouse wheel)
+                float zoomFactor = 1.1f;
+                if (ImGui::GetIO().MouseWheel > 0.0f)
+                    zoom *= zoomFactor;
+                else
+                    zoom /= zoomFactor;
+                    
+                // Clamp zoom
+                zoom = std::max(0.1f, std::min(zoom, 10.0f));
+                
+                // Calculate world position after zoom
+                ImVec2 worldPosAfterZoom = ImVec2(
+                    (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                    (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+                );
+                
+                // Adjust pan to keep mouse over same world position
+                pan.x += (worldPosBeforeZoom.x - worldPosAfterZoom.x);
+                pan.y += (worldPosBeforeZoom.y - worldPosAfterZoom.y);
+            }
+            
+            // Middle mouse button drag for panning
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+                ImVec2 mousePos = ImGui::GetMousePos();
+                
+                if (!isDragging) {
+                    isDragging = true;
+                    lastMousePos = mousePos;
+                } else {
+                    // Calculate delta and apply to pan (adjusted for zoom)
+                    pan.x -= (mousePos.x - lastMousePos.x) / zoom;
+                    pan.y -= (mousePos.y - lastMousePos.y) / zoom;
+                    lastMousePos = mousePos;
+                }
+            } else {
+                isDragging = false;
+            }
+            
+            // Display coordinates under cursor
+            ImVec2 mousePos = ImGui::GetMousePos();
+            ImVec2 mousePosInViewport = ImVec2(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+            ImVec2 worldPos = ImVec2(
+                (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
+                (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
+            );
+            
+            ImGui::SetTooltip("Pos: (%.1f, %.1f)", worldPos.x, worldPos.y);
+        }
+        
+        // Status bar
+        ImGui::Text("Zoom: %.2fx | Pan: (%.1f, %.1f) | Grid Size: %.1f", 
+                    zoom, pan.x, pan.y, gridSize);
+        
+        // ImGui::End();
+    }
+
+void ViewPort::getGridShaderProgram(GLuint& program)
+{
+    Debug::Logger::Log("Current Grid Program: "+to_string(program), Debug::LogLevel::SUCCESS);
 }

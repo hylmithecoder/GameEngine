@@ -78,7 +78,7 @@ bool MainWindow::init(const char* title) {
 
     // Aktifkan OpenGL
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 4);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     glContext = SDL_GL_CreateContext(window);
     if (!glContext) {
@@ -91,12 +91,14 @@ bool MainWindow::init(const char* title) {
         cerr << "Failed to initialize GLAD!" << endl;
         return false;
     }
-    cout << "Open GL version: " << glGetString(GL_VERSION) << endl;
-    // sceneRenderer2D->Init(); // ✅ OpenGL call aman di sini
+    cout << "Open GL version: " << glGetString(GL_VERSION) << endl
+         << "GLSL version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << endl
+         << "OpenGL vendor: " << glGetString(GL_VENDOR) << endl
+         << "OpenGL renderer: " << glGetString(GL_RENDERER) << endl;
+        //  << "OpenGL extensions: " << glGetString(GL_EXTENSIONS) << endl;
+    
     // Set window icon
     set_window_icon();
-
-    // set_mainbackground();
 
     // Inisialisasi ImGui
     IMGUI_CHECKVERSION();
@@ -115,15 +117,8 @@ bool MainWindow::init(const char* title) {
     }
 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    // #ifdef ImGuiConfigFlags_DockingEnable
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // #else
-    //     cerr << "Warning: Docking is not supported in this version of Dear ImGui." << endl;
-    // #endif
-    
-    // Set theme
-    // ImGui::StyleColorsDark();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
     setTheme(darkTheme);
     
     // ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
@@ -143,6 +138,7 @@ bool MainWindow::init(const char* title) {
     Debug::Logger::Log("Main Window Successfully Initialized");
     
     sceneRenderer2D = new SceneRenderer2D(800, 600);
+    // viewPort.Init();
     return true;
 }
 

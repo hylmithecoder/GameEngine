@@ -198,7 +198,8 @@ public:
             ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
             ImGui::ColorEdit3("Grid Color", &gridColor.x);
             ImGui::ColorEdit3("Background Color", &bgColor.x);
-            
+            std::string currentShaderProgram = to_string(shaderProgram);
+            ImGui::Text("Current Shader: %s", currentShaderProgram.c_str());
             if (ImGui::Button("Reset View")) {
                 zoom = 1.0f;
                 pan = ImVec2(0.0f, 0.0f);

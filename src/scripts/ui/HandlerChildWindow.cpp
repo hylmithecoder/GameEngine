@@ -252,44 +252,44 @@ void MainWindow::RenderMainViewWindow() {
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Viewport")) {
             // Render toolbar untuk viewport
-            RenderViewportToolbar();
+            // RenderViewportToolbar();
             
-            // Dapatkan ukuran panel yang tersedia untuk viewport
-            ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+            // // Dapatkan ukuran panel yang tersedia untuk viewport
+            // ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
             
-            // Periksa ukuran minimum
-            float minWidth = 320.0f;
-            float minHeight = 240.0f;
+            // // Periksa ukuran minimum
+            // float minWidth = 320.0f;
+            // float minHeight = 240.0f;
             
-            int newWidth = std::max((int)viewportPanelSize.x, (int)minWidth);
-            int newHeight = std::max((int)viewportPanelSize.y, (int)minHeight);
+            // int newWidth = std::max((int)viewportPanelSize.x, (int)minWidth);
+            // int newHeight = std::max((int)viewportPanelSize.y, (int)minHeight);
 
-            // Resize viewport jika ukuran panel berubah
-            if (newWidth != projectHandler.sceneRenderer->GetWidth() || newHeight != projectHandler.sceneRenderer->GetHeight()) {
-                projectHandler.sceneRenderer->SetViewportSize(newWidth, newHeight);
-            }
+            // // Resize viewport jika ukuran panel berubah
+            // if (newWidth != sceneRenderer2D->GetWidth() || newHeight != sceneRenderer2D->GetHeight()) {
+            //     sceneRenderer2D->SetViewportSize(newWidth, newHeight);
+            // }
 
-            // Render scene ke texture
-            projectHandler.sceneRenderer->RenderSceneToTexture(projectHandler.currentScene);
+            // // Render scene ke texture
+            sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
 
-            // Dapatkan texture ID dari scene renderer
-            GLuint textureID = projectHandler.sceneRenderer->GetViewportTextureID();
+            // // Dapatkan texture ID dari scene renderer
+            // GLuint textureID = sceneRenderer2D->GetViewportTextureID();
             
-            // Hitung posisi untuk memusatkan viewport jika perlu
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float availHeight = ImGui::GetContentRegionAvail().y;
-            float offsetX = (availWidth - newWidth) * 0.5f;
-            float offsetY = (availHeight - newHeight) * 0.5f;
+            // // Hitung posisi untuk memusatkan viewport jika perlu
+            // float availWidth = ImGui::GetContentRegionAvail().x;
+            // float availHeight = ImGui::GetContentRegionAvail().y;
+            // float offsetX = (availWidth - newWidth) * 0.5f;
+            // float offsetY = (availHeight - newHeight) * 0.5f;
             
-            if (offsetX > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-            if (offsetY > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
+            // if (offsetX > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+            // if (offsetY > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
 
             // Tampilkan texture sebagai image di ImGui
-            ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
-            
+            // ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
             // Handle interaksi viewport
-            HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
-            
+            // HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
+            // projectHandler.sceneRenderer->viewPort.drawGrid();
+            sceneRenderer2D->LastGridShaderProgram();
             ImGui::EndTabItem();
         }
 
@@ -326,14 +326,14 @@ void MainWindow::RenderViewportToolbar() {
     ImGui::SetNextItemWidth(100);
     if (ImGui::Combo("##viewportMode", &currentMode, modes, IM_ARRAYSIZE(modes))) {
         // Handle mode change
-        projectHandler.sceneRenderer->SetEditMode((SceneRenderer2D::EditMode)currentMode);
+        sceneRenderer2D->SetEditMode((SceneRenderer2D::EditMode)currentMode);
     }
     
     // Tombol grid
     ImGui::SameLine(0, 15);
     static bool showGrid = true;
     if (ImGui::Checkbox("Show Grid", &showGrid)) {
-        projectHandler.sceneRenderer->SetGridVisible(showGrid);
+        sceneRenderer2D->SetGridVisible(showGrid);
     }
     
     // Grid size slider
@@ -343,20 +343,20 @@ void MainWindow::RenderViewportToolbar() {
     static float gridSize = 32.0f;
     ImGui::SetNextItemWidth(80);
     if (ImGui::SliderFloat("##gridSize", &gridSize, 8.0f, 64.0f, "%.0f")) {
-        projectHandler.sceneRenderer->SetGridSize(gridSize);
+        sceneRenderer2D->SetGridSize(gridSize);
     }
     
     // Snap to grid
     ImGui::SameLine(0, 15);
     static bool snapToGrid = true;
     if (ImGui::Checkbox("Snap to Grid", &snapToGrid)) {
-        projectHandler.sceneRenderer->SetSnapToGrid(snapToGrid);
+        sceneRenderer2D->SetSnapToGrid(snapToGrid);
     }
     
     // Camera controls
     ImGui::SameLine(0, 20);
     if (ImGui::Button("Reset Camera")) {
-        projectHandler.sceneRenderer->ResetCamera();
+        sceneRenderer2D->ResetCamera();
     }
     
     ImGui::SameLine();
@@ -365,7 +365,7 @@ void MainWindow::RenderViewportToolbar() {
     static float zoom = 1.0f;
     ImGui::SetNextItemWidth(80);
     if (ImGui::SliderFloat("##zoom", &zoom, 0.1f, 5.0f, "%.1fx")) {
-        projectHandler.sceneRenderer->SetCameraZoom(zoom);
+        sceneRenderer2D->SetCameraZoom(zoom);
     }
     
     ImGui::Separator();
@@ -385,7 +385,7 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         float viewportY = mousePos.y - viewportPos.y;
         
         // Konversi koordinat viewport ke koordinat world (dengan memperhitungkan zoom/pan)
-        glm::vec2 worldPos = projectHandler.sceneRenderer->ViewportToWorldPosition(viewportX, viewportY);
+        glm::vec2 worldPos = sceneRenderer2D->ViewportToWorldPosition(viewportX, viewportY);
         
         // Tampilkan informasi koordinat di pojok kanan bawah viewport
         char coordText[64];
@@ -397,7 +397,7 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
             viewportPos.y + viewportSize.y - textSize.y - 5
         );
         
-        ImGui::GetWindowDrawList()->AddText(textPos, IM_COL32(255, 255, 255, 220), coordText);
+        ImGui::GetWindowDrawList()->AddText(textPos, IM_COL32(0, 0, 0, 220), coordText);
         
         // Handling click untuk seleksi objek
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -413,7 +413,7 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
             // ImGui::SameLine();
             cout << "Dragging" << endl;
             ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-            projectHandler.sceneRenderer->HandleDrag(delta.x, delta.y);
+            sceneRenderer2D->HandleDrag(delta.x, delta.y);
             ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
         }
         
@@ -421,35 +421,35 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
         float wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0) {
             cout << "Handle Zoom" << endl;
-            projectHandler.sceneRenderer->HandleZoom(wheel);
+            sceneRenderer2D->HandleZoom(wheel);
         }
         
         // Handling key input untuk precision movement
         ImGuiIO& io = ImGui::GetIO();
-        if (projectHandler.sceneRenderer->HasSelectedObject()) {
+        if (sceneRenderer2D->HasSelectedObject()) {
             // cout << "Receive Input" << endl;
             float moveAmount = io.KeyShift ? 10.0f : 1.0f;
             
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
                 cout << "Left Arrow" << endl;
-                projectHandler.sceneRenderer->MoveSelected(-moveAmount, 0);
+                sceneRenderer2D->MoveSelected(-moveAmount, 0);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
                 cout << "Right Arrow" << endl;
-                projectHandler.sceneRenderer->MoveSelected(moveAmount, 0);
+                sceneRenderer2D->MoveSelected(moveAmount, 0);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
                 cout << "Up Arrow" << endl;
-                projectHandler.sceneRenderer->MoveSelected(0, -moveAmount);
+                sceneRenderer2D->MoveSelected(0, -moveAmount);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
                 cout << "Down Arrow" << endl;
-                projectHandler.sceneRenderer->MoveSelected(0, moveAmount);
+                sceneRenderer2D->MoveSelected(0, moveAmount);
             }
             
             // Delete key untuk menghapus objek
             if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-                projectHandler.sceneRenderer->DeleteSelected();
+                sceneRenderer2D->DeleteSelected();
             }
         }
     }

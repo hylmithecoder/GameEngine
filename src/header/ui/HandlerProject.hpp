@@ -24,7 +24,6 @@
 #include <algorithm>
 #include <nfd.h>
 #include <SceneSerializer.hpp>
-#include <SceneRenderer2D.hpp>
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -60,7 +59,6 @@ public:
     Scene currentScene;    
     SceneSerializer serializer;
     std::string currentScenePath;
-    SceneRenderer2D* sceneRenderer;
     bool isSceneLoaded = false;
     // Color
     ImVec4 redColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
