@@ -83,7 +83,6 @@ public:
     MainWindow(const char* title, int width = 1280, int height = 720);
     ~MainWindow();
         
-    ViewPort viewPort;
     SceneRenderer2D* sceneRenderer2D = nullptr;
     HandlerProject projectHandler;
     TextureData backgroundTexture;

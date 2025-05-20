@@ -8,82 +8,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-class ViewPort {
-    private :
-        GLuint vertexShader, fragmentShader, shaderProgram;
-        GLuint vao, vbo;
-        GLuint fbo, renderTex;
-        
-        // Viewport attributes
-        float zoom = 1.0f;
-        ImVec2 pan = ImVec2(0.0f, 0.0f);
-        ImVec2 lastMousePos = ImVec2(0.0f, 0.0f);
-        bool isDragging = false;
-        
-        // Grid settings
-        float gridSize = 32.0f;
-        ImVec4 gridColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-        ImVec4 bgColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-        
-        // Viewport dimensions
-        int viewportWidth = 512;
-        int viewportHeight = 512;
-
-        
-    public :
-        // Shader untuk grid dengan zoom dan pan
-        const char* vertexSrc = R"(
-            #version 330 core
-            layout (location = 0) in vec2 aPos;
-            void main() {
-                gl_Position = vec4(aPos, 0.0, 1.0);
-            }
-        )";
-
-        const char* fragmentSrc = R"(
-            #version 330 core
-            out vec4 FragColor;
-            
-            uniform vec2 uViewport;    // Viewport size
-            uniform vec2 uPan;         // Pan offset
-            uniform float uZoom;       // Zoom level
-            uniform vec3 uGridColor;   // Grid line color
-            uniform vec3 uBgColor;     // Background color
-            uniform float uGridSize;   // Grid cell size
-            
-            void main() {
-                // Ukuran grid dalam pixel (dipengaruhi zoom)
-                float gridSize = uGridSize * uZoom;
-                
-                // Hitung koordinat yang sudah dipan dan di-zoom
-                vec2 coord = (gl_FragCoord.xy - uViewport * 0.5) / uZoom + uPan;
-                
-                // Hitung garis horizontal & vertikal
-                float line = step(0.98, abs(fract(coord.x / uGridSize) - 0.5) * 2.0) +
-                            step(0.98, abs(fract(coord.y / uGridSize) - 0.5) * 2.0);
-                            
-                // Garis axis X dan Y lebih tebal
-                float axis = 0.0;
-                if (abs(coord.x) < 1.0 || abs(coord.y) < 1.0) {
-                    axis = 0.6;
-                }
-                            
-                // Warna final - campuran background dan grid
-                vec3 finalColor = mix(uBgColor, uGridColor, max(line, axis));
-                
-                FragColor = vec4(finalColor, 1.0);
-            }
-        )";
-
-        void Init();
-        // ~ViewPort();
-        void drawGrid();
-        void Clean();
-        void checkShaderCompilation(GLuint shader, const char* desc);
-        void checkProgramLinking(GLuint program);
-        void getGridShaderProgram(GLuint& program);
-};
-
 class SceneRenderer2D {
 public:
     SceneRenderer2D(int width, int height);
@@ -131,7 +55,6 @@ public:
     void InitGridBuffers();
 
     float cameraZoom = 1.0f;
-    ViewPort viewPort;
 
 private:
     int width, height;
