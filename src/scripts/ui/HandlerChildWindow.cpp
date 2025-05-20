@@ -252,17 +252,17 @@ void MainWindow::RenderMainViewWindow() {
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Viewport")) {
             // Render toolbar untuk viewport
-            // RenderViewportToolbar();
+            RenderViewportToolbar();
             
             // // Dapatkan ukuran panel yang tersedia untuk viewport
-            // ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+            ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
             
             // // Periksa ukuran minimum
-            // float minWidth = 320.0f;
-            // float minHeight = 240.0f;
+            float minWidth = 320.0f;
+            float minHeight = 240.0f;
             
-            // int newWidth = std::max((int)viewportPanelSize.x, (int)minWidth);
-            // int newHeight = std::max((int)viewportPanelSize.y, (int)minHeight);
+            int newWidth = std::max((int)viewportPanelSize.x, (int)minWidth);
+            int newHeight = std::max((int)viewportPanelSize.y, (int)minHeight);
 
             // // Resize viewport jika ukuran panel berubah
             // if (newWidth != sceneRenderer2D->GetWidth() || newHeight != sceneRenderer2D->GetHeight()) {
@@ -287,7 +287,7 @@ void MainWindow::RenderMainViewWindow() {
             // Tampilkan texture sebagai image di ImGui
             // ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
             // Handle interaksi viewport
-            // HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
+            HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
             // projectHandler.sceneRenderer->viewPort.drawGrid();
             sceneRenderer2D->LastGridShaderProgram();
             ImGui::EndTabItem();

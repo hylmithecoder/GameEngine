@@ -144,8 +144,8 @@ private:
         
     // Grid settings
     float gridSize = 32.0f;
-    ImVec4 gridColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-    ImVec4 bgColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    ImVec4 gridColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+    ImVec4 bgColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
     
     // Framebuffer objects
     GLuint framebuffer;

@@ -286,7 +286,7 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
         ImVec2 viewportSize = ImGui::GetContentRegionAvail();
         
         // Ensure square aspect ratio if needed
-        viewportSize.x = viewportSize.y = min(viewportSize.x, viewportSize.y);
+        // viewportSize.x = viewportSize.y = min(viewportSize.x, viewportSize.y);
         
         // Update viewport dimensions if window resized
         if (width != static_cast<int>(viewportSize.x) || 
