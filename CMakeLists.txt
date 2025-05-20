@@ -185,6 +185,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     opengl32
     gdi32
     ${GLAD_4_DIR}/include
+    ${VULKAN_DIR}
 )
 
 target_include_directories(TestBackground PRIVATE
@@ -198,6 +199,7 @@ target_include_directories(TestBackground PRIVATE
     ${GLES2}
     opengl32
     gdi32
+    ${VULKAN_DIR}
     # GLES2
     # GLEW
     
@@ -215,12 +217,14 @@ target_include_directories(TestGLEW PRIVATE
     opengl32
     gdi32
     ${GLAD_4_DIR}/include
+    ${VULKAN_DIR}
     # GLES2
     # GLEW
 )
 
 target_include_directories(TestGLM PRIVATE
     ${GLM}
+    ${VULKAN_DIR}
     # GLES2
     # GLEW
 )
@@ -244,6 +248,7 @@ target_include_directories(TestGLSL PRIVATE
     opengl32
     gdi32
     ${GLAD_4_DIR}/include
+    ${VULKAN_DIR}
 )
 
 target_include_directories(TestVulkan PRIVATE
