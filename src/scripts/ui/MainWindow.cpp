@@ -106,7 +106,7 @@ bool MainWindow::init(const char* title) {
     ImGuiIO& io = ImGui::GetIO();
     
     string fontPath = "assets/fonts/zh-cn.ttf";
-    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f);
+    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 13.0f);
 
     ifstream fontCheck(fontPath.c_str());
     if (!fontCheck.good()){
@@ -1458,14 +1458,15 @@ void MainWindow::handleEvents() {
 
 // Method Update Like Unity too
 void MainWindow::update() {
-
-    static HandlerProject::AssetFile assetRoot;
+    static HandlerProject::AssetFile projectRoot("", "", false);
+    static HandlerProject::AssetFile assetFolder("", "", false);
+    static string assetPath;
     static char scriptName[256] = "";
     static bool firstOpenProject = false;
 
     // Reload Project
     if (projectHandler.isOpenedProject){
-        assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+        projectRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
         // projectHandler.ScanAssetsFolder(projectHandler.projectPath+"\\assets");
         projectHandler.isOpenedProject = false;
     }
@@ -1478,10 +1479,13 @@ void MainWindow::update() {
             MB_YESNO | MB_ICONWARNING) == IDYES)
         {            
             projectHandler.OpenFolder();
-            assetRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
+            projectRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
             string assetFile = projectHandler.projectPath+"\\assets\\scenes\\MyFirstScene.ilmeescene";
             cout << assetFile << endl;
             projectHandler.currentScene = projectHandler.serializer.LoadScene(assetFile);
+            // create asset folder in project
+            assetFolder = projectRoot.children[0];
+            assetPath = projectHandler.projectPath+"\\assets";
             isLoadScene = true;
             // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;
@@ -1533,14 +1537,14 @@ void MainWindow::update() {
     
     // Left: Hierarchy with 
     MainWindow::RenderHierarchyWindow();
-    MainWindow::RenderExplorerWindow(assetRoot, firstOpenProject);
+    MainWindow::RenderExplorerWindow(projectRoot, assetFolder, assetPath, firstOpenProject);
 
     // Right: Inspector
     MainWindow::RenderInspectorWindow();
     
     // Center: Main Tabs (Viewport, Video Player, etc)
     MainWindow::RenderMainViewWindow();
-    
+    renderVideoPlayer();
     // Bottom: Console & Output
     MainWindow::RenderConsoleWindow();
     projectHandler.CheckAndRefreshAssets();

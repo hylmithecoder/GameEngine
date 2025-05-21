@@ -65,6 +65,8 @@ private:
     float position[3] = { 0.0f, 0.0f, 0.0f };
     float rotation[3] = { 0.0f, 0.0f, 0.0f };
     float scale[3] = { 1.0f, 1.0f, 1.0f };
+    static constexpr float MIN_PANEL_WIDTH = 100.0f;
+    float explorerSplitPosition = 200.0f;
 
     int audioStream = -1;
     int videoStream = -1;
@@ -120,7 +122,7 @@ public:
     void render();
     void clean();
     void log(const char* message);
-    void RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool isOpenProject);
+    void RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const std::string& assetPath , bool isOpenProject);
     void RenderInspectorWindow();
     void RenderMainViewWindow();
     void RenderConsoleWindow();

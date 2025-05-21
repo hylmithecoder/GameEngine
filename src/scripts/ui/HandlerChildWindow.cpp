@@ -11,7 +11,7 @@ void MainWindow::RenderHierarchyWindow() {
     if (isLoadScene) {
         if (ImGui::TreeNodeEx(projectHandler.currentScene.sceneName.c_str(), nodeFlags)) {
             for (const auto& obj : projectHandler.currentScene.objects) {
-                projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
+                projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20, 20);
                 if (ImGui::TreeNodeEx(obj.name.c_str(), nodeFlags)) {
                     ImGui::TreePop();
                 }
@@ -31,7 +31,7 @@ void MainWindow::RenderHierarchyWindow() {
         };
 
         if (ImGui::TreeNodeEx("Scene", nodeFlags)) {
-            projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
+            projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20, 20);
             for (const auto& element : elements) {
                 if (ImGui::TreeNodeEx(element.name.c_str(), nodeFlags)) {
                     for (const auto& prop : element.properties) {
@@ -46,8 +46,7 @@ void MainWindow::RenderHierarchyWindow() {
     ImGui::End();
 }
 
-void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool firstOpenProject) {
-
+void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const std::string& assetPath , bool firstOpenProject) {
     ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);    
             if (firstOpenProject) {
                 ImGui::BeginGroup();
@@ -92,8 +91,37 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile assetRoot, bool 
                 
                 ImGui::PopStyleColor();
                 
-                ImGui::BeginChild("AssetsExplorer", ImVec2(0, 0), true);
-                projectHandler.DrawAssetTree(assetRoot);
+                // Get available content region
+                ImVec2 contentSize = ImGui::GetContentRegionAvail();
+
+                // Left panel (Project tree)
+                ImGui::BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
+                projectHandler.DrawAssetTree(projectRoot);
+                ImGui::EndChild();
+
+                // Splitter
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 0.3f));
+                ImGui::Button("##Splitter", ImVec2(4.0f, contentSize.y));
+                ImGui::PopStyleColor();
+
+                // Handle splitter dragging
+                if (ImGui::IsItemActive()) {
+                    float delta = ImGui::GetIO().MouseDelta.x;
+                    if (explorerSplitPosition + delta >= MIN_PANEL_WIDTH && 
+                        explorerSplitPosition + delta <= contentSize.x - MIN_PANEL_WIDTH) {
+                        explorerSplitPosition += delta;
+                    }
+                }
+                
+                // Show resize cursor when hovering over splitter
+                if (ImGui::IsItemHovered())
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+                // Right panel (File explorer)
+                ImGui::SameLine();
+                ImGui::BeginChild("AssetRoot", ImVec2(0, 0), true);
+                projectHandler.DrawFolderGridView(assetFolder.children, assetPath);
                 ImGui::EndChild();
                 
                 ImGui::EndGroup();
@@ -293,10 +321,10 @@ void MainWindow::RenderMainViewWindow() {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Video Player")) {
-            renderVideoPlayer();
-            ImGui::EndTabItem();
-        }
+        // if (ImGui::BeginTabItem("Video Player")) {
+        //     renderVideoPlayer();
+        //     ImGui::EndTabItem();
+        // }
 
         if (ImGui::BeginTabItem("Animation")) {
             ImGui::Text("Animation editor will be displayed here");
