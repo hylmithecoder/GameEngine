@@ -169,13 +169,6 @@ void SceneRenderer2D::CreateFramebuffer() {
 }
 
 // This Method Is Loop Update For Render Scene To Texture And Use in HandleChilWindow.cpp
-void SceneRenderer2D::LastGridShaderProgram()
-{
-    Debug::Logger::Log("Last Grid Shader Program: " + std::to_string(gridShaderProgram), Debug::LogLevel::SUCCESS);
-    GLuint currentGridProgram = gridShaderProgram;
-    cout << to_string(currentGridProgram) << endl;
-    // viewPort.getGridShaderProgram(gridShaderProgram);
-}
 void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
     // Bind our framebuffer
     // glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
@@ -218,15 +211,15 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
         DrawSelectionGizmo(*selectedObject);
     }
 
-    Debug::Logger::Log("[Debug] camZoom: " + std::to_string(cameraZoom)
-          + " camPos: (" + std::to_string(cameraPosition.x) + ", " + std::to_string(cameraPosition.y) + ")"
-          + " width: " + std::to_string(width) + " height: " + std::to_string(height)
-          + " gridSize: " + std::to_string(gridSize)
-          + " VAO: " + std::to_string(m_GridVAO) + " VBO: " + std::to_string(m_GridVBO)
-          + "\nMax Grid Lines: " + std::to_string(m_MaxGridLines)
-          + " Current Shader: " + std::to_string(shaderProgram)
-          + " Current Gizmo Shader: " + std::to_string(gizmoShaderProgram)
-          + " Current Grid Shader: " + std::to_string(gridShaderProgram), Debug::LogLevel::INFO);
+    // Debug::Logger::Log("[Debug] camZoom: " + std::to_string(cameraZoom)
+    //       + " camPos: (" + std::to_string(cameraPosition.x) + ", " + std::to_string(cameraPosition.y) + ")"
+    //       + " width: " + std::to_string(width) + " height: " + std::to_string(height)
+    //       + " gridSize: " + std::to_string(gridSize)
+    //       + " VAO: " + std::to_string(m_GridVAO) + " VBO: " + std::to_string(m_GridVBO)
+    //       + "\nMax Grid Lines: " + std::to_string(m_MaxGridLines)
+    //       + " Current Shader: " + std::to_string(shaderProgram)
+    //       + " Current Gizmo Shader: " + std::to_string(gizmoShaderProgram)
+    //       + " Current Grid Shader: " + std::to_string(gridShaderProgram), Debug::LogLevel::INFO);
 
     
     // Disable blending when done
@@ -268,7 +261,7 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
         gridSize = 49.426f;
    
         // Controls
-        if (ImGui::CollapsingHeader("Viewport Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Viewport Settings")) {
             ImGui::SliderFloat("Zoom", &zoom, 1.0f, 10.0f);
             ImGui::DragFloat2("Pan", &pan.x, 1.0f);
             // ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
@@ -373,7 +366,7 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
 }
 
 bool SceneRenderer2D::checkShaderUniforms(GLuint program) {
-    Debug::Logger::Log("Checking shader uniforms for program: " + std::to_string(program), Debug::LogLevel::INFO);
+    // Debug::Logger::Log("Checking shader uniforms for program: " + std::to_string(program), Debug::LogLevel::INFO);
     
     bool allValid = true;
 
@@ -423,9 +416,9 @@ void SceneRenderer2D::validateUniformLocation(GLuint program, const char* unifor
         default: typeStr = "unknown";
     }
 
-    Debug::Logger::Log("Found uniform '" + std::string(uniformName) + 
-                      "' at location " + std::to_string(location) + 
-                      " (type: " + typeStr + ")", Debug::LogLevel::SUCCESS);
+    // Debug::Logger::Log("Found uniform '" + std::string(uniformName) + 
+    //                   "' at location " + std::to_string(location) + 
+    //                   " (type: " + typeStr + ")", Debug::LogLevel::SUCCESS);
 }
 
 void SceneRenderer2D::DrawSelectionGizmo(const GameObject& obj) {

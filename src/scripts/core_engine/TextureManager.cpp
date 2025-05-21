@@ -22,7 +22,7 @@ GLuint TextureManager::LoadTexture(const std::string& path) {
     // Check if texture is already loaded
     auto it = textureCache.find(normalizedPath);
     if (it != textureCache.end()) {
-        Debug::Logger::Log("Texture already loaded: " + normalizedPath, Debug::LogLevel::SUCCESS);
+        // Debug::Logger::Log("Texture already loaded: " + normalizedPath, Debug::LogLevel::SUCCESS);
         return it->second;
     }
     

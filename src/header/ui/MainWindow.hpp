@@ -132,5 +132,6 @@ public:
     void RenderViewportToolbar();
     void RenderGameViewport();
     void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
+    void RenderSceneWindow();
     void RenderHierarchyWindow();
 };

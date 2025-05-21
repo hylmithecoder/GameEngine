@@ -274,6 +274,11 @@ void MainWindow::RenderInspectorWindow() {
     ImGui::End();
 }
 
+void MainWindow::RenderSceneWindow() {
+    ImGui::Begin("Scene", nullptr);
+    sceneRenderer2D->RenderScene();
+}
+
 void MainWindow::RenderMainViewWindow() {
     ImGui::Begin("Main View", nullptr, ImGuiWindowFlags_NoCollapse);
 
@@ -298,7 +303,7 @@ void MainWindow::RenderMainViewWindow() {
             // }
 
             // // Render scene ke texture
-            sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
+            // sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
 
             // // Dapatkan texture ID dari scene renderer
             // GLuint textureID = sceneRenderer2D->GetViewportTextureID();
@@ -317,7 +322,7 @@ void MainWindow::RenderMainViewWindow() {
             // Handle interaksi viewport
             HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
             // projectHandler.sceneRenderer->viewPort.drawGrid();
-            sceneRenderer2D->LastGridShaderProgram();
+            // sceneRenderer2D->LastGridShaderProgram();
             ImGui::EndTabItem();
         }
 

@@ -67,9 +67,9 @@ public:
     ImVec4 blueColor = ImVec4(0.0f, 0.0f, 1.0f, 1.0f);
     // This is a reload and open project bool is very core
     bool isOpenedProject = false;
-    ImVec2 thumbnailSize = ImVec2(24, 24);
+    ImVec2 thumbnailSize = ImVec2(32, 32);
     // Waktu double click
-    static constexpr float doubleClickTime = 0.3f; // dalam detik
+    float doubleClickTime = 0.3f; // dalam detik
     // Menyimpan state expand/collapse untuk setiap folder
     std::unordered_map<std::string, bool> folderStates;
     float itemSpacing = 8.0f;
@@ -118,6 +118,31 @@ public:
         Notification(const std::string& t, const std::string& m, ImVec4 c, float st, float d) 
             : title(t), message(m), color(c), startTime(st), duration(d) {};
     };    
+
+    struct IconInfo {
+        ImTextureID textureId;
+        int width;
+        int height;
+    };
+    std::unordered_map<std::string, IconInfo> iconCacheInfo;
+    IconInfo LoadCachedTexture(const string& pathIcon);
+    
+    IconInfo GetIconForFile(const AssetFile& node) {
+        std::string path = "assets/images/fileicons/";
+        if (node.isDirectory) {
+            path += "folder.png";
+        } else {
+            std::string ext = fs::path(node.name).extension().string();
+            if (ext == ".cpp" || ext == ".hpp") path += "c-.png";
+            else if (ext == ".png" || ext == ".jpg") path += "image.png";
+            else if (ext == ".fbx" || ext == ".obj") path += "model.png";
+            else if (ext == ".prefab") path += "prefab.png";
+            else if (ext == ".ilmeescene" || ext == ".unity") path += "scene.png";
+            else path += "file.png";
+        }
+
+        return LoadCachedTexture(path); // caching disarankan
+    }
 
     // Asset yang dipilih saat ini
     AssetFile* selectedAsset;
