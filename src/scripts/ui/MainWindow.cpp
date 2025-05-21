@@ -1543,6 +1543,7 @@ void MainWindow::update() {
     MainWindow::RenderInspectorWindow();
     
     // Center: Main Tabs (Viewport, Video Player, etc)
+    MainWindow::RenderSceneWindow();
     MainWindow::RenderMainViewWindow();
     renderVideoPlayer();
     // Bottom: Console & Output
