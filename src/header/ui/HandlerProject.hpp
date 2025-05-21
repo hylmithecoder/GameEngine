@@ -50,6 +50,7 @@ private:
         string scriptsPath = projectPath + "/assets/scripts";
 
         // Scan directories and load assets
+        ScanAssetsFolder(projectPath);
     }
 
 public:
@@ -66,20 +67,36 @@ public:
     ImVec4 blueColor = ImVec4(0.0f, 0.0f, 1.0f, 1.0f);
     // This is a reload and open project bool is very core
     bool isOpenedProject = false;
+    ImVec2 thumbnailSize = ImVec2(24, 24);
+    // Waktu double click
+    static constexpr float doubleClickTime = 0.3f; // dalam detik
+    // Menyimpan state expand/collapse untuk setiap folder
+    std::unordered_map<std::string, bool> folderStates;
+    float itemSpacing = 8.0f;
     std::string projectPath;
     std::map<std::string, std::vector<std::string>> assetFiles;
     struct AssetFile {
         std::string name;
         bool isDirectory;
+        bool isSelected = false;
         std::vector<AssetFile> children;
         std::string fullPath;
+
+        // Timestamp untuk operasi drag & drop
+        float lastClickTime = 0.0f;
+        
+        // Konstruktor
+        AssetFile(const std::string& n, const std::string& p, bool isDir = false)
+            : name(n), fullPath(p), isDirectory(isDir) {}
     };
     AssetFile BuildAssetTree(const std::string& path)
     {
-        AssetFile node;
-        node.name = fs::path(path).filename().string();
-        node.fullPath = path;
-        node.isDirectory = fs::is_directory(path);
+        // Create AssetFile directly instead of using pointer
+        AssetFile node(
+            fs::path(path).filename().string(),
+            path,
+            fs::is_directory(path)
+        );
 
         if (node.isDirectory)
         {
@@ -100,7 +117,21 @@ public:
 
         Notification(const std::string& t, const std::string& m, ImVec4 c, float st, float d) 
             : title(t), message(m), color(c), startTime(st), duration(d) {};
-    };
+    };    
+
+    // Asset yang dipilih saat ini
+    AssetFile* selectedAsset;
+    // Callback untuk menangani klik file
+    std::function<void(const AssetFile&)> onFileClicked;
+    // Favorit folder
+    std::vector<std::string> favoriteFolders;
+    std::string currentFilter = "";
+    void DrawFolderGridView(const std::vector<AssetFile>& files, const std::string& currentPath);
+    void DrawBreadcrumbs(const std::string& path);
+    void DrawSearchBar(const std::string& path);
+    void DrawNavigationBar();
+    void DrawQuickAccessPanel();
+
     std::vector<Notification> notifications;
     Assets assets;
     TextureData icon_texture_data;
@@ -133,7 +164,7 @@ public:
     void OpenFile(const std::string& fileName);
     void ShowNotification(const std::string& title, const std::string& message, ImVec4 color);
     void RenderNotifications();
-    void DrawIconFromImage(const char* iconPath);
+    void DrawIconFromImage(const char* iconPath, int width, int height);
     // File monitoring methods
     void StartFileWatcher();
     void StopFileWatcher();
@@ -157,4 +188,6 @@ public:
     void HandleImport(const std::string& targetFile);
     void SaveNewScene();
     void OpenScene();
+    // Hint tanda "&" itu ngambil dari referensi 
+    void DrawFileExplorer(const AssetFile& assetFolder);
 };
