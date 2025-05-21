@@ -276,7 +276,8 @@ void MainWindow::RenderInspectorWindow() {
 
 void MainWindow::RenderSceneWindow() {
     ImGui::Begin("Scene", nullptr);
-    sceneRenderer2D->RenderScene();
+    sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
+    ImGui::End();
 }
 
 void MainWindow::RenderMainViewWindow() {
