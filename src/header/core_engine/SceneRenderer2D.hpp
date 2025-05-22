@@ -48,6 +48,8 @@ public:
     void DrawGrid(const glm::mat4& projection, const glm::mat4& view);
     void DeleteSelected();
     bool HasSelectedObject() const;
+    void SetGridColor(float r, float g, float b, float a);
+    void SetBackgroundColor(float r, float g, float b, float a);
 
     // Method untuk mendapatkan dimensi
     int GetWidth() const { return width; }
@@ -55,6 +57,7 @@ public:
     void InitGridBuffers();
 
     float cameraZoom = 1.0f;
+    float GetZoom() const { return zoom; }
 
 private:
     int width, height;

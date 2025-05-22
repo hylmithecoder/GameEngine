@@ -2,6 +2,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <Debugger.hpp>
 
 void MainWindow::RenderHierarchyWindow() {
     ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
@@ -83,11 +84,17 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, Han
                 }
                 
                 ImGui::SameLine();
+
+                if (ImGui::Button("Back")) 
+                {
+
+                }
+                ImGui::SameLine();
                 
                 // Add filter/search box
                 HandleSearch();
 
-                ImGui::PopItemWidth();
+                // ImGui::PopItemWidth();
                 
                 ImGui::PopStyleColor();
                 
@@ -274,10 +281,164 @@ void MainWindow::RenderInspectorWindow() {
     ImGui::End();
 }
 
-void MainWindow::RenderSceneWindow() {
-    ImGui::Begin("Scene", nullptr);
-    sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
+void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
+    // Calculate toolbar position (top-left corner of scene window with some padding)
+    ImVec2 toolbarPos = ImVec2(parentPos.x + 10, parentPos.y + 30);
+    
+    // Set toolbar window properties
+    ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.8f); // Semi-transparent background
+    
+    // Toolbar window flags
+    ImGuiWindowFlags toolbar_flags = 
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize |
+        // ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoFocusOnAppearing;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
+    // Begin floating toolbar
+    if (ImGui::Begin("Scene Toolbar", nullptr, toolbar_flags)) {
+        // Reset View Button
+        if (ImGui::Button("Reset View")) {
+            // Reset camera/viewport (implement these methods or use dummy values)
+            // if (sceneRenderer2D) {
+                Debug::Logger::Log("Resetting camera view", Debug::LogLevel::INFO);
+                sceneRenderer2D->ResetCamera(); // You'll need to implement this
+            // }
+        }
+        
+        ImGui::SameLine();
+        
+        // Zoom controls
+        static float zoom = 1.0f;
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::SliderFloat("##Zoom", &zoom, 1.0f, 10.0f, "%.2fx")) {
+            // if (sceneRenderer2D) {
+                sceneRenderer2D->SetCameraZoom(zoom); // You'll need to implement this
+            // }
+        }
+        
+        ImGui::SameLine();
+        ImGui::Text("Zoom");
+        
+        // New line for more controls
+        ImGui::NewLine();
+
+        // Grid size control
+        static float gridSize = 50.0f;
+        ImGui::SetNextItemWidth(80);
+        if (ImGui::DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
+            // if (sceneRenderer2D) {
+                sceneRenderer2D->SetGridSize(gridSize); // You'll need to implement this
+            // }
+        }
+        
+        ImGui::SameLine();
+        ImGui::Text("Grid Size");
+        
+        // Third line for color controls
+        ImGui::NewLine();
+        
+        // Grid color picker (compact)
+        static float gridColor[3] = {0.5f, 0.5f, 0.5f};
+        ImGui::SetNextItemWidth(60);
+        if (ImGui::ColorEdit3("##GridColor", gridColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+            // if (sceneRenderer2D) {
+                sceneRenderer2D->SetGridColor(gridColor[0], gridColor[1], gridColor[2], 1.0f); // You'll need to implement this
+            // }
+        }
+        
+        ImGui::SameLine();
+        ImGui::Text("Grid");
+        
+        ImGui::SameLine();
+        
+        // Background color picker (compact)
+        static float bgColor[3] = {0.2f, 0.2f, 0.2f};
+        ImGui::SetNextItemWidth(60);
+        if (ImGui::ColorEdit3("##BgColor", bgColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+            // if (sceneRenderer2D) {
+                sceneRenderer2D->SetBackgroundColor(bgColor[0], bgColor[1], bgColor[2], 1.0f); // You'll need to implement this
+            // }
+        }
+        
+        ImGui::SameLine();
+        ImGui::Text("Background");
+        
+        // Snap to grid toggle
+        ImGui::NewLine();
+        static bool snapToGrid = false;
+        ImGui::Checkbox("Snap to Grid", &snapToGrid);
+        
+        ImGui::SameLine();
+        
+        // View mode selector
+        static int viewMode = 0;
+        const char* viewModes[] = {"2D", "3D", "Wireframe"};
+        ImGui::SetNextItemWidth(80);
+        ImGui::Combo("##ViewMode", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
+    }
     ImGui::End();
+
+    ImGui::PopStyleVar(1);
+}
+
+void MainWindow::RenderSceneWindow() {
+    if (!showScene) return;
+
+    // Window flags untuk menghilangkan padding dan scrollbar
+    ImGuiWindowFlags window_flags = 
+        ImGuiWindowFlags_NoCollapse | 
+        ImGuiWindowFlags_NoScrollbar | 
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoNavFocus;  // Tambahkan flag ini
+
+    // Set window properties
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    
+    // Push style untuk menghilangkan padding window
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    // ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+    // ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
+    // ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+    if (ImGui::Begin("Scene", &showScene, window_flags)) {
+        ImVec2 windowPos = ImGui::GetWindowPos();
+        ImVec2 windowSize = ImGui::GetWindowSize();
+        ImVec2 contentSize = ImGui::GetContentRegionAvail();
+
+        // Render scene dengan ukuran penuh
+        sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
+        
+        // Dapatkan texture ID dari scene renderer
+        // ImTextureID sceneTexture = (ImTextureID)(intptr_t)sceneRenderer2D->GetSceneTextureID();
+        
+        // Render texture dengan ukuran penuh
+        // ImGui::Image(sceneTexture, contentSize, ImVec2(0, 1), ImVec2(1, 0));
+
+        // Render toolbar di atas viewport
+        RenderSceneToolbarView(windowPos, windowSize);
+
+        // Status bar dengan background semi-transparan
+        ImGui::SetCursorPos(ImVec2(0, windowSize.y - 25));
+        // ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f));
+        ImGui::BeginChild("StatusBar", ImVec2(windowSize.x, 25), false);
+        ImGui::Text(" Scene View | FPS: %.1f | Zoom: %.2fx", 
+                    ImGui::GetIO().Framerate, sceneRenderer2D->GetZoom());
+        ImGui::EndChild();
+        // ImGui::PopStyleColor();
+    }
+    ImGui::End();
+
+    // Pop semua style yang di-push
+    ImGui::PopStyleVar(1);
 }
 
 void MainWindow::RenderMainViewWindow() {
@@ -285,52 +446,8 @@ void MainWindow::RenderMainViewWindow() {
 
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Viewport")) {
-            // Render toolbar untuk viewport
-            RenderViewportToolbar();
-            
-            // // Dapatkan ukuran panel yang tersedia untuk viewport
-            ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
-            
-            // // Periksa ukuran minimum
-            float minWidth = 320.0f;
-            float minHeight = 240.0f;
-            
-            int newWidth = std::max((int)viewportPanelSize.x, (int)minWidth);
-            int newHeight = std::max((int)viewportPanelSize.y, (int)minHeight);
-
-            // // Resize viewport jika ukuran panel berubah
-            // if (newWidth != sceneRenderer2D->GetWidth() || newHeight != sceneRenderer2D->GetHeight()) {
-            //     sceneRenderer2D->SetViewportSize(newWidth, newHeight);
-            // }
-
-            // // Render scene ke texture
-            // sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
-
-            // // Dapatkan texture ID dari scene renderer
-            // GLuint textureID = sceneRenderer2D->GetViewportTextureID();
-            
-            // // Hitung posisi untuk memusatkan viewport jika perlu
-            // float availWidth = ImGui::GetContentRegionAvail().x;
-            // float availHeight = ImGui::GetContentRegionAvail().y;
-            // float offsetX = (availWidth - newWidth) * 0.5f;
-            // float offsetY = (availHeight - newHeight) * 0.5f;
-            
-            // if (offsetX > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-            // if (offsetY > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
-
-            // Tampilkan texture sebagai image di ImGui
-            // ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<void*>(reinterpret_cast<uintptr_t*>(textureID))), ImVec2(newWidth, newHeight), ImVec2(0, 1), ImVec2(1, 0));
-            // Handle interaksi viewport
-            HandleViewportInteraction(ImGui::GetItemRectMin(), ImVec2(newWidth, newHeight));
-            // projectHandler.sceneRenderer->viewPort.drawGrid();
-            // sceneRenderer2D->LastGridShaderProgram();
             ImGui::EndTabItem();
         }
-
-        // if (ImGui::BeginTabItem("Video Player")) {
-        //     renderVideoPlayer();
-        //     ImGui::EndTabItem();
-        // }
 
         if (ImGui::BeginTabItem("Animation")) {
             ImGui::Text("Animation editor will be displayed here");
@@ -617,6 +734,18 @@ void MainWindow::RenderMenuBar() {
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Windows")) {
+            if (ImGui::MenuItem("Explorer", nullptr, &showExplorer)) {}
+            if (ImGui::MenuItem("Inspector", nullptr, &showInspector)) {}
+            if (ImGui::MenuItem("Scene", "Ctrl+1", &showScene)) 
+            { 
+                // RenderSceneWindow(); 
+            }
+            if (ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy)) { RenderHierarchyWindow(); }
+            if (ImGui::MenuItem("Console", nullptr, &showConsole)) {}
+            ImGui::EndMenu();
+        }
+
         // Status bar di menu kanan
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -666,12 +795,13 @@ void MainWindow::HandleSearch() {
     static std::vector<HandlerProject::AssetFile> searchResults;
 
     // Atur lebar input sesuai jendela.
-    ImGui::PushItemWidth(-1);
+    // ImGui::PushItemWidth(-1);
     // Menampilkan input text dengan hint. Menunggu Enter untuk trigger pencarian.
     if (ImGui::InputTextWithHint("##search", "Search assets...", searchBuffer,
-                                 IM_ARRAYSIZE(searchBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                                 IM_ARRAYSIZE(searchBuffer))) {
+        projectHandler.currentFilter = searchBuffer;
         // Jika buffer tidak kosong, lakukan pencarian.
-        if (strlen(searchBuffer) > 0) {
+        if (strlen(searchBuffer) > 0 || projectHandler.currentFilter != "") {
             searchResults.clear();
             // Asumsikan BuildAssetTree menghasilkan struktur asset
             auto assetTree = projectHandler.BuildAssetTree(projectHandler.projectPath);
@@ -682,6 +812,35 @@ void MainWindow::HandleSearch() {
             searchResults.clear();
         }
     }
+
+    // Tombol tambahan untuk filter cepat
+        ImGui::SameLine();
+        if (ImGui::Button("Filter")) {
+            ImGui::OpenPopup("FilterOptions");
+            // showingFilterPopup = true;
+        }
+        
+        // Popup filter
+        if (ImGui::BeginPopup("FilterOptions")) {
+            if (ImGui::MenuItem("All Files")) {
+                projectHandler.currentFilter = "";
+                strcpy(searchBuffer, "");
+            }
+            if (ImGui::MenuItem("Scripts (.cpp, .c)")) {
+                projectHandler.currentFilter = ".cpp .c";
+                strcpy(searchBuffer, ".cpp .c");
+            }
+            if (ImGui::MenuItem("Models (.fbx, .obj)")) {
+                projectHandler.currentFilter = ".fbx .obj";
+                strcpy(searchBuffer, ".fbx .obj");
+            }
+            if (ImGui::MenuItem("Images (.png, .jpg)")) {
+                projectHandler.currentFilter = ".png .jpg .jpeg";
+                strcpy(searchBuffer, ".png .jpg .jpeg");
+            }
+            ImGui::EndPopup();
+            // showingFilterPopup = false;
+        }
     // ImGui::PopItemWidth();
 
     // Jika ada hasil pencarian, tampilkan daftar hasil.
@@ -711,10 +870,8 @@ void MainWindow::HandleSearch() {
                         std::string command = "code \"" + result.fullPath + "\"";
                         std::system(command.c_str());
                     }
-                    // Jika ingin menangani ekstensi lain, bisa tambahkan else if.
                 }
             }
-            // Opsional: tampilkan full path sebagai tooltip ketika item di-hover.
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
                 ImGui::Text("%s", result.fullPath.c_str());

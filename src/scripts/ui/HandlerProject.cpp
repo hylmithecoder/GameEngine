@@ -577,11 +577,11 @@ void HandlerProject::DrawFileExplorer(const AssetFile& node)
 void HandlerProject::DrawSearchBar(const std::string& currentPath) {
         static char searchBuffer[128] = "";
         
-        ImGui::PushItemWidth(-1);
+        // ImGui::PushItemWidth(-1);
         if (ImGui::InputTextWithHint("##search", "Search files and folders...", searchBuffer, IM_ARRAYSIZE(searchBuffer))) {
             currentFilter = searchBuffer;
         }
-        ImGui::PopItemWidth();
+        // ImGui::PopItemWidth();
         
         // Tombol tambahan untuk filter cepat
         ImGui::SameLine();
@@ -620,16 +620,16 @@ void HandlerProject::DrawNavigationBar() {
         if (ImGui::Button("Back")) {
             // Implementasi navigasi back
         }
-        ImGui::SameLine();
+        // ImGui::SameLine();
 
-        if (ImGui::Button("Up")) {
-            // Implementasi navigasi up
-        }
-        ImGui::SameLine();
+        // if (ImGui::Button("Up")) {
+        //     // Implementasi navigasi up
+        // }
+        // ImGui::SameLine();
         
-        if (ImGui::Button("Refresh")) {
-            isOpenedProject = true;
-        }
+        // if (ImGui::Button("Refresh")) {
+        //     isOpenedProject = true;
+        // }
         
         ImGui::PopStyleVar();
     }
@@ -669,9 +669,9 @@ void HandlerProject::DrawQuickAccessPanel() {
 
 void HandlerProject::DrawFolderGridView(const std::vector<AssetFile>& files, const std::string& currentPath) {
         // Panel navigasi dan pencarian
-        DrawNavigationBar();
-        ImGui::SameLine();
-        DrawSearchBar(currentPath);
+        // DrawNavigationBar();
+        // ImGui::SameLine();
+        // DrawSearchBar(currentPath);
         
         // Breadcrumb navigation
         // ImGui::Separator();
@@ -679,7 +679,7 @@ void HandlerProject::DrawFolderGridView(const std::vector<AssetFile>& files, con
         // ImGui::Separator();
         
         // Main layout dengan dua panel
-        float quickAccessWidth = 150.0f;
+        // float quickAccessWidth = 150.0f;
         
         // DrawQuickAccessPanel();
         // ImGui::SameLine();
@@ -687,14 +687,14 @@ void HandlerProject::DrawFolderGridView(const std::vector<AssetFile>& files, con
         // File explorer area
         if (ImGui::BeginChild("FileExplorerArea", ImVec2(0, 0), true)) {
             // View options bar
-            if (ImGui::Button("Grid")) {
-                // Switch to grid view (current view)
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("List")) {
-                // Switch to list view
-            }
-            ImGui::SameLine();
+            // if (ImGui::Button("Grid")) {
+            //     // Switch to grid view (current view)
+            // }
+            // ImGui::SameLine();
+            // if (ImGui::Button("List")) {
+            //     // Switch to list view
+            // }
+            // ImGui::SameLine();
             ImGui::SetNextItemWidth(100);
             ImGui::SliderFloat("Size", &thumbnailSize.x, 32.0f, 96.0f);
             thumbnailSize.y = thumbnailSize.x; // Keep square aspect ratio

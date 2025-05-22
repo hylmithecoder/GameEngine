@@ -13,6 +13,7 @@
 // #include <backends/imgui_impl_opengl3.h>
 #include <Debugger.hpp>
 using namespace std;
+namespace ui = ImGui;
 
 MainWindow::MainWindow(const char* title, int width, int height)
     : window(nullptr), renderer(nullptr), glContext(nullptr), font(nullptr),
@@ -1500,7 +1501,7 @@ void MainWindow::update() {
     }
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
+    ui::NewFrame();
 
     // Dockspace
     // #ifdef ImGuiConfigFlags_DockingEnable
@@ -1508,20 +1509,20 @@ void MainWindow::update() {
     // #else
     //     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
     // #endif
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(viewport->Size);
+    ImGuiViewport* viewport = ui::GetMainViewport();
+    ui::SetNextWindowPos(viewport->Pos);
+    ui::SetNextWindowSize(viewport->Size);
     // ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
     
-    ImGui::Begin("DockSpace", nullptr, window_flags);
-    ImGui::PopStyleVar(2);
+    ui::Begin("DockSpace", nullptr, window_flags);
+    ui::PopStyleVar(2);
     
     // DockSpace
-    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    ImGuiID dockspace_id = ui::GetID("MyDockSpace");
     // #ifdef ImGuiConfigFlags_DockingEnable
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
     // #else
@@ -1530,24 +1531,24 @@ void MainWindow::update() {
     
     // Render background SETELAH DockSpace tetapi SEBELUM semua window UI lainnya
     // Ini memastikan background ada di belakang semua window UI
-    MainWindow::HandleBackground();
+    HandleBackground();
     
     // Menu bar
-    MainWindow::RenderMenuBar();
+    RenderMenuBar();
     
     // Left: Hierarchy with 
-    MainWindow::RenderHierarchyWindow();
-    MainWindow::RenderExplorerWindow(projectRoot, assetFolder, assetPath, firstOpenProject);
+    RenderHierarchyWindow();
+    RenderExplorerWindow(projectRoot, assetFolder, assetPath, firstOpenProject);
 
     // Right: Inspector
-    MainWindow::RenderInspectorWindow();
+    RenderInspectorWindow();
     
     // Center: Main Tabs (Viewport, Video Player, etc)
-    MainWindow::RenderSceneWindow();
-    MainWindow::RenderMainViewWindow();
+    RenderSceneWindow();
+    RenderMainViewWindow();
     renderVideoPlayer();
     // Bottom: Console & Output
-    MainWindow::RenderConsoleWindow();
+    RenderConsoleWindow();
     projectHandler.CheckAndRefreshAssets();
     projectHandler.RenderNotifications();
     
@@ -1556,10 +1557,10 @@ void MainWindow::update() {
         ShowSecondaryWindow(&showSecondary);
     }
 
-    ImGui::End();
-    ImGui::EndFrame(); // DockSpace
+    ui::End();
+    ui::EndFrame(); // DockSpace
     // ImGui::End();
-    ImGui::UpdatePlatformWindows();
+    ui::UpdatePlatformWindows();
 }
 
 void MainWindow::render() {

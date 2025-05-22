@@ -100,6 +100,12 @@ public:
     bool isBackgroundChanged = false;
     bool isBackgroundActived = false;
     bool isLoadScene = false;
+    bool showExplorer = true;
+    bool showInspector = true;
+    bool showScene = true;
+    bool showConsole = true;
+    bool showHierarchy = true;
+    string currentFilter = "";
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 
@@ -134,4 +140,5 @@ public:
     void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
     void RenderSceneWindow();
     void RenderHierarchyWindow();
+    void RenderSceneToolbarView(ImVec2 viewportPos, ImVec2 viewportSize);
 };

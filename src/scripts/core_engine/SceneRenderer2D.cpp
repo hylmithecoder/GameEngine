@@ -171,14 +171,14 @@ void SceneRenderer2D::CreateFramebuffer() {
 // This Method Is Loop Update For Render Scene To Texture And Use in HandleChilWindow.cpp
 void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
     // Bind our framebuffer
-    // glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     
     // Set the viewport to match our framebuffer size
-    // glViewport(0, 0, width, height);
+    glViewport(0, 0, width, height);
     
     // Clear the framebuffer
-    // glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
     // Enable alpha blending
     glEnable(GL_BLEND);
@@ -239,7 +239,7 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
 
         string info = to_string(gridShaderProgram);
         string info2 = to_string(textureID);
-        ImGui::Text("Grid Shader Program: %s | And Texture ID: %s", info.c_str(), info2.c_str());
+        // ImGui::Text("Grid Shader Program: %s | And Texture ID: %s", info.c_str(), info2.c_str());
 
         if (!checkShaderUniforms(gridShaderProgram)) {
             Debug::Logger::Log("Missing required uniforms in grid shader!", Debug::LogLevel::CRASH);
@@ -261,19 +261,19 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
         gridSize = 49.426f;
    
         // Controls
-        if (ImGui::CollapsingHeader("Viewport Settings")) {
-            ImGui::SliderFloat("Zoom", &zoom, 1.0f, 10.0f);
-            ImGui::DragFloat2("Pan", &pan.x, 1.0f);
-            // ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
-            ImGui::ColorEdit3("Grid Color", &gridColor.x);
-            ImGui::ColorEdit3("Background Color", &bgColor.x);
-            std::string currentShaderProgram = to_string(shaderProgram);
-            ImGui::Text("Current Shader: %s", currentShaderProgram.c_str());
-            if (ImGui::Button("Reset View")) {
-                zoom = 1.0f;
-                pan = ImVec2(0.0f, 0.0f);
-            }
-        }
+        // if (ImGui::CollapsingHeader("Viewport Settings")) {
+        //     ImGui::SliderFloat("Zoom", &zoom, 1.0f, 10.0f);
+        //     ImGui::DragFloat2("Pan", &pan.x, 1.0f);
+        //     // ImGui::SliderFloat("Grid Size", &gridSize, 4.0f, 64.0f);
+        //     ImGui::ColorEdit3("Grid Color", &gridColor.x);
+        //     ImGui::ColorEdit3("Background Color", &bgColor.x);
+        //     std::string currentShaderProgram = to_string(shaderProgram);
+        //     ImGui::Text("Current Shader: %s", currentShaderProgram.c_str());
+        //     if (ImGui::Button("Reset View")) {
+        //         zoom = 1.0f;
+        //         pan = ImVec2(0.0f, 0.0f);
+        //     }
+        // }
         
         // Viewport area
         ImVec2 viewportPos = ImGui::GetCursorScreenPos();
@@ -361,8 +361,8 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
         }
         
         // Status bar
-        ImGui::Text("Zoom: %.2fx | Pan: (%.2f, %.2f) | Grid Size: %.10f", 
-                    zoom, pan.x, pan.y, gridSize);
+        // ImGui::Text("Zoom: %.2fx | Pan: (%.2f, %.2f) | Grid Size: %.10f", 
+        //             zoom, pan.x, pan.y, gridSize);
 }
 
 bool SceneRenderer2D::checkShaderUniforms(GLuint program) {
@@ -721,12 +721,20 @@ void SceneRenderer2D::SetSnapToGrid(bool snap) {
 }
 
 void SceneRenderer2D::ResetCamera() {
-    cameraPosition = glm::vec2(0.0f, 0.0f);
-    cameraZoom = 1.0f;
+    pan = ImVec2(0.0f, 0.0f);
+    SceneRenderer2D::zoom = 1.0f;
 }
 
 void SceneRenderer2D::SetCameraZoom(float zoom) {
-    cameraZoom = std::max(0.1f, std::min(zoom, 5.0f)); // Clamp zoom between 0.1x and 5x
+    SceneRenderer2D::zoom = std::max(0.1f, std::min(zoom, 5.0f)); // Clamp zoom between 0.1x and 5x
+}
+
+void SceneRenderer2D::SetGridColor(float r, float g, float b, float a) {
+    gridColor = ImVec4(r, g, b, a);
+}
+
+void SceneRenderer2D::SetBackgroundColor(float r, float g, float b, float a) {
+    bgColor = ImVec4(r, g, b, a);
 }
 
 glm::vec2 SceneRenderer2D::ViewportToWorldPosition(float viewX, float viewY) const {
