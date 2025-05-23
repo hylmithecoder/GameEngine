@@ -5,6 +5,7 @@ project(GameEngineSDL)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
+option(BUILD_SHARED_LIBS "Build CoreEngine as a shared libraries" ON)
 
 # Add SDL2 and SDL2_ttf paths
 set(SDL2_DIR "C:/SDL2")
@@ -43,6 +44,11 @@ set(SOURCE_TEST_VULKAN
     src/scripts/test_vulkan.cpp
 )
 
+set(SOURCE_CORE
+    src/scripts/core_engine/core/EngineCore.cpp
+    src/scripts/core_engine/core/LifeCycleManager.cpp
+)
+
 # Add header files
 set(HEADERS
     src/header/ui/MainWindow.hpp
@@ -67,6 +73,14 @@ set(HEADER_GLSL
 
 set(HEADER_VULKAN
     src/header/core_engine/test_vulkan.hpp
+)
+
+set(HEADER_CORE
+    src/header/core_engine/core/Component.hpp
+    src/header/core_engine/core/Scene.hpp
+    src/header/core_engine/core/GameObject.hpp
+    src/header/core_engine/core/EngineCore.hpp
+    src/header/core_engine/core/LifeCycleManager.hpp
 )
 
 set(SOURCE_TEST
@@ -161,6 +175,9 @@ add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_
 target_link_options(TestGLSL PRIVATE -mconsole)
 add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
 target_link_options(TestVulkan PRIVATE -mconsole)
+add_library(CoreEngine ${SOURCE_CORE} ${HEADER_CORE})
+set_target_properties(CoreEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_options(CoreEngine PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 # set(Vulkan_DIR "${VULKAN_SDK}/lib/cmake/VulkanLoader")
@@ -273,6 +290,51 @@ target_include_directories(TestVulkan PRIVATE
     # ${VULKAN_SDK}/include
     ${VULKAN_DIR}
 )    
+
+target_include_directories(CoreEngine PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core>
+    $<INSTALL_INTERFACE:include/core_engine/core>
+)
+
+# Mark the library for export
+install(TARGETS CoreEngine
+    EXPORT EngineCoreTargets
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+    INCLUDES DESTINATION include
+)
+# Install headers
+install(DIRECTORY src/header/core_engine/core/
+    DESTINATION include/core_engine/core
+    FILES_MATCHING PATTERN "*.hpp"
+)
+# Export configuration - now this will work because we defined the export target above
+install(EXPORT EngineCoreTargets
+    FILE EngineCoreTargets.cmake
+    NAMESPACE Engine::
+    DESTINATION lib/cmake/CoreEngine
+)
+
+# Create and install config files
+# configure_file(cmake/EngineCoreConfig.cmake.in
+#     "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfig.cmake"
+#     @ONLY
+# )
+
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfigVersion.cmake"
+    VERSION 1.0.0
+    COMPATIBILITY SameMajorVersion
+)
+
+# Install config files
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfigVersion.cmake"
+    DESTINATION lib/cmake/CoreEngine
+)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE

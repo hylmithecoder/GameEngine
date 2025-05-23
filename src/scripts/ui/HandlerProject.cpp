@@ -471,13 +471,64 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
     }
 }
 
-void HandlerProject::DrawFileExplorer(const AssetFile& node)
-{
+void HandlerProject::HandleRenameFileOrFolder(const AssetFile& node) {
     ImGui::PushID(node.fullPath.c_str());
-    ImGui::BeginGroup();
+    ImGui::SetNextItemWidth(200);
+
+    if (ImGui::InputText("##rename", renameBuffer, IM_ARRAYSIZE(renameBuffer),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+        
+        std::string newName = renameBuffer;
+        if (newName.empty()) {
+            ShowNotification("Rename Failed", "Name cannot be empty", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        } else {
+            std::string newPath = fs::path(node.fullPath).parent_path().string() + "/" + newName;
+            
+            // If it's a file, preserve the extension
+            if (!node.isDirectory) {
+                std::string ext = fs::path(node.fullPath).extension().string();
+                if (!ext.empty() && fs::path(newName).extension().string().empty()) {
+                    newPath += ext;
+                }
+            }
+
+            try {
+                if (!fs::exists(newPath)) {
+                    fs::rename(node.fullPath, newPath);
+                    ShowNotification("Renamed", 
+                        node.name + " renamed to " + fs::path(newPath).filename().string(), 
+                        ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    
+                    // Trigger refresh
+                    isOpenedProject = true;
+                } else {
+                    ShowNotification("Rename Failed", 
+                        "A file or folder with this name already exists", 
+                        ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                }
+            } catch (const std::exception& e) {
+                ShowNotification("Rename Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            }
+        }
+        fileExplorerRenameTarget.clear();
+    }
+
+    // Cancel rename if clicked outside
+    if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
+        fileExplorerRenameTarget.clear();
+    }
+
+    ImGui::PopID();
+}
+
+void HandlerProject::DrawFileExplorer(AssetFile& node)
+{
+    static string localPath = "";
+    // Debug::Logger::Log("Drawing File Explorer: " + node.name, Debug::LogLevel::INFO);
+    ImGui::PushID(node.fullPath.c_str());
 
     float itemWidth = thumbnailSize.x + itemSpacing * 2;
-    float itemHeight = thumbnailSize.y + ImGui::GetFontSize() + 8.0f; // ikon + teks
+    float itemHeight = thumbnailSize.y + ImGui::GetFontSize() + 8.0f;
     ImVec2 totalSize(itemWidth, itemHeight);
 
     // Simpan posisi awal
@@ -485,37 +536,49 @@ void HandlerProject::DrawFileExplorer(const AssetFile& node)
 
     // InvisibleButton sebagai bounding box klik
     float currentTime = ImGui::GetTime();
-    if (selectedAsset) selectedAsset->lastClickTime += currentTime - 1.0f;
-    // Logger::Log(to_string(currentTime) + " " + to_string(node.lastClickTime) + " " + to_string(doubleClickTime));
-    bool isDoubleClick = (node.lastClickTime > 0.0f && (currentTime - node.lastClickTime) < doubleClickTime);
+    
+    // Periksa apakah ini double-click (hanya jika node yang sama yang diklik sebelumnya)
+    bool isDoubleClick = false;
+    if (localPath == node.fullPath && (currentTime - node.lastClickTime) < doubleClickTime) {
+        isDoubleClick = true;
+    }
 
     if (ImGui::InvisibleButton("##ItemButton", totalSize)) {
         if (isDoubleClick) {
             Logger::Log("Double-clicked: " + node.name);
+            
             if (node.isDirectory) {
-                Logger::Log("Opening folder: " + node.name);                
-                selectedAsset = const_cast<AssetFile*>(&node);
+                Logger::Log("Opening folder: " + node.name);
+                currentDirectory = node.fullPath;
+                Debug::Logger::Log("Current Directory changed to: " + currentDirectory, Debug::LogLevel::SUCCESS);
+                // Reset selection setelah pindah folder
+                selectedAsset = nullptr;
                 ShowNotification("Opening folder: " + node.name, "Explorer", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-                folderStates[node.fullPath] = !folderStates[node.fullPath];
             } else {
+                HandlerOpenFileWithExtensionName(node);
                 Logger::Log("Opening file: " + node.name);                
                 selectedAsset = const_cast<AssetFile*>(&node);
                 ShowNotification("Opening file: " + node.name, "Explorer", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
                 if (onFileClicked) onFileClicked(node);
             }
 
-            // Reset lastClickTime supaya gak nyangkut
-            if (selectedAsset) selectedAsset->lastClickTime = 0.0f;
+            // Reset lastClickTime untuk mencegah triple-click
+            node.lastClickTime = 0.0f;
 
         } else {
-            selectedAsset = const_cast<AssetFile*>(&node);
-            if (selectedAsset) selectedAsset->lastClickTime = currentTime;
-            Logger::Log("Single click, waiting for double-click: " + to_string(currentTime));
+            // Single click - hanya select item, jangan ubah directory
+            Logger::Log("Time From Struct AssetFile: "+to_string(node.lastClickTime) +" Time Now: "+to_string(currentTime), LogLevel::SUCCESS);
+            selectedAsset = nullptr;
+            localPath = node.fullPath;
+            Debug::Logger::Log("Current Directory changed to: " + localPath, Debug::LogLevel::SUCCESS);
+            node.lastClickTime = currentTime;
+            
+            ShowNotification("Selected: " + node.name, "Explorer", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
         }
     }
 
     // Highlight jika terpilih
-    if (&node == selectedAsset) {
+    if (node.fullPath == localPath) {
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         drawList->AddRectFilled(cursorPos, ImVec2(cursorPos.x + itemWidth, cursorPos.y + itemHeight),
             ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.6f, 1.0f, 0.2f)), 4.0f);
@@ -527,9 +590,11 @@ void HandlerProject::DrawFileExplorer(const AssetFile& node)
     float iconPosX = cursorPos.x + (itemWidth - thumbnailSize.x) * 0.5f;
     float iconPosY = cursorPos.y + 4.0f;
     ImGui::GetWindowDrawList()->AddImage(
-        GetIconForFile(node).textureId, // Buat fungsi ini untuk return ImTextureID + caching
+        GetIconForFile(node).textureId,
         ImVec2(iconPosX, iconPosY),
         ImVec2(iconPosX + thumbnailSize.x, iconPosY + thumbnailSize.y)
+        // ImVec2(0, 1),
+        // ImVec2(1, 0)
     );
 
     // Nama file
@@ -547,24 +612,43 @@ void HandlerProject::DrawFileExplorer(const AssetFile& node)
         displayName.c_str());
 
     // Context menu
-    if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::MenuItem("Rename")) { /* ... */ }
-        if (ImGui::MenuItem("Delete")) { /* ... */ }
-        ImGui::Separator();
-        if (node.isDirectory) {
-            if (ImGui::MenuItem("Add to Favorites")) {
-                favoriteFolders.push_back(node.fullPath);
+    if (fileExplorerRenameTarget == node.fullPath) {
+        HandleRenameOperation(node, cursorPos, itemWidth, itemHeight);
+    } else {
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("Rename")) {
+                fileExplorerRenameTarget = node.fullPath;
+                strcpy(renameBuffer, node.name.c_str());
             }
-            if (ImGui::MenuItem("New Folder")) { /* ... */ }
-            if (ImGui::MenuItem("New File")) { /* ... */ }
-        } else {
-            if (ImGui::MenuItem("Open")) { /* ... */ }
+            
+            if (ImGui::MenuItem("Delete")) {
+                if (MessageBoxA(NULL,
+                    ("Are you sure you want to delete " + node.name + "?").c_str(),
+                    "Confirm Delete",
+                    MB_YESNO | MB_ICONWARNING) == IDYES) {
+                    if (node.isDirectory) {
+                        DeleteFolder(node.fullPath);
+                    } else {
+                        DeleteFileOrFolder(node.fullPath);
+                    }
+                }
+            }
+
+
+            if (!node.isDirectory) {                
+                ImGui::Separator();      
+                if (ImGui::MenuItem("Open")) {
+                    HandlerOpenFileWithExtensionName(const_cast<AssetFile&>(node));
+                }
+                if (ImGui::MenuItem("Copy")) {
+                    HandleCopy(node);
+                }
+            }
+
+            ImGui::EndPopup();
         }
-        ImGui::EndPopup();
     }
-
-    ImGui::EndGroup();
-
+    
     // Next item posisi horizontal
     ImGui::SameLine(0, itemSpacing);
     if (ImGui::GetCursorPosX() + itemWidth > ImGui::GetWindowContentRegionMax().x) {
@@ -574,166 +658,120 @@ void HandlerProject::DrawFileExplorer(const AssetFile& node)
     ImGui::PopID();
 }
 
-void HandlerProject::DrawSearchBar(const std::string& currentPath) {
-        static char searchBuffer[128] = "";
-        
-        // ImGui::PushItemWidth(-1);
-        if (ImGui::InputTextWithHint("##search", "Search files and folders...", searchBuffer, IM_ARRAYSIZE(searchBuffer))) {
-            currentFilter = searchBuffer;
+void HandlerProject::DrawFolderGridView() {
+    // Gunakan currentDirectory yang sudah di-update dari double-click
+    std::vector<AssetFile> localFiles = GetFilesInDirectory(currentDirectory);
+
+    // Define rootDirectory as the initial projectPath or another appropriate root
+    std::string rootDirectory = projectPath+"\\assets";
+
+    ImGui::SetNextItemWidth(100);
+    ImGui::SliderFloat("Size", &thumbnailSize.x, 32.0f, 96.0f);
+    thumbnailSize.y = thumbnailSize.x;
+
+    // Tampilkan current directory path
+    ImGui::Text("Current: %s", currentDirectory.c_str());
+    
+    ImGui::Separator();
+
+    if (ImGui::BeginChild("FileGrid", ImVec2(0, 0), false)) {
+        float contentWidth = ImGui::GetContentRegionAvail().x;
+        int itemsPerRow = static_cast<int>(contentWidth / (thumbnailSize.x + itemSpacing * 2));
+        if (itemsPerRow < 1) itemsPerRow = 1;
+
+        // Filter files berdasarkan currentFilter
+        std::vector<AssetFile> filteredFiles;
+        for (const auto& file : localFiles) {
+            if (currentFilter.empty() || file.name.find(currentFilter) != std::string::npos) {
+                filteredFiles.push_back(file);
+            }
         }
-        // ImGui::PopItemWidth();
-        
-        // Tombol tambahan untuk filter cepat
-        ImGui::SameLine();
-        if (ImGui::Button("Filter")) {
-            ImGui::OpenPopup("FilterOptions");
-            // showingFilterPopup = true;
+
+        // Sort: directories first, then alphabetically
+        std::sort(filteredFiles.begin(), filteredFiles.end(),
+            [](const AssetFile& a, const AssetFile& b) {
+                if (a.isDirectory && !b.isDirectory) return true;
+                if (!a.isDirectory && b.isDirectory) return false;
+                return a.name < b.name;
+            });
+
+        // Draw each file/folder
+        for (auto& file : filteredFiles) {
+            // Debug::Logger::Log("Drawing file in grid: " + file.name, Debug::LogLevel::SUCCESS);
+            DrawFileExplorer(file);
         }
-        
-        // Popup filter
-        if (ImGui::BeginPopup("FilterOptions")) {
-            if (ImGui::MenuItem("All Files")) {
-                currentFilter = "";
-                strcpy(searchBuffer, "");
+        // Draw the "New Folder" button
+        if (ImGui::BeginPopupContextWindow("FileGridContentMenu", 
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            
+            bool isInRootDirectory = (currentDirectory == projectPath + "\\assets");
+            
+            if (ImGui::BeginMenu("Create New")) {
+                if (ImGui::MenuItem("Folder")) {
+                    HandleCreateNewFolder(currentDirectory);
+                }
+                
+                if (ImGui::BeginMenu("Script")) {
+                    if (ImGui::BeginMenu("C++ Script")) {
+                        HandleCreateNewFile(currentDirectory);
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::MenuItem("Shader")) {
+                        // HandleCreateShader(currentDirectory);
+                        ShowNotification("New Shader", "Creating new shader...", 
+                            ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+                    }
+                    ImGui::EndMenu();
+                }
+
+                ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Scripts (.cpp, .c)")) {
-                currentFilter = ".cpp .c";
-                strcpy(searchBuffer, ".cpp .c");
+
+            if (ImGui::MenuItem("Paste", nullptr, false, !fileExplorerCopyTarget.empty())) {
+                HandlePaste(currentDirectory);
             }
-            if (ImGui::MenuItem("Models (.fbx, .obj)")) {
-                currentFilter = ".fbx .obj";
-                strcpy(searchBuffer, ".fbx .obj");
+
+            if (ImGui::MenuItem("Import Files...")) {
+                OpenFile();
             }
-            if (ImGui::MenuItem("Images (.png, .jpg)")) {
-                currentFilter = ".png .jpg .jpeg";
-                strcpy(searchBuffer, ".png .jpg .jpeg");
+
+            if (!isInRootDirectory) {
+                ImGui::Separator();
+                if (ImGui::MenuItem("Show in Explorer")) {
+                    #ifdef _WIN32
+                        ShellExecuteA(NULL, "explore", currentDirectory.c_str(), 
+                            NULL, NULL, SW_SHOW);
+                    #else
+                        std::string cmd = "xdg-open \"" + currentDirectory + "\"";
+                        system(cmd.c_str());
+                    #endif
+                }
             }
+
             ImGui::EndPopup();
-            // showingFilterPopup = false;
         }
     }
     
-    // Method baru: Navigation Bar (seperti Unity)
-void HandlerProject::DrawNavigationBar() {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-        
-        if (ImGui::Button("Back")) {
-            // Implementasi navigasi back
-        }
-        // ImGui::SameLine();
 
-        // if (ImGui::Button("Up")) {
-        //     // Implementasi navigasi up
-        // }
-        // ImGui::SameLine();
-        
-        // if (ImGui::Button("Refresh")) {
-        //     isOpenedProject = true;
-        // }
-        
-        ImGui::PopStyleVar();
-    }
-    
-    // Method baru: Quick Access Panel (Favorites)
-void HandlerProject::DrawQuickAccessPanel() {
-        if (ImGui::BeginChild("QuickAccess", ImVec2(150, 0), true)) {
-            ImGui::Text("Favorites");
-            ImGui::Separator();
-            
-            for (const auto& path : favoriteFolders) {
-                fs::path p(path);
-                if (ImGui::Selectable(p.filename().string().c_str())) {
-                    // Navigasi ke folder favorit
-                }
-                
-                // Menu konteks untuk favorit
-                if (ImGui::BeginPopupContextItem()) {
-                    if (ImGui::MenuItem("Remove from favorites")) {
-                        // Hapus dari favorit
-                        auto it = std::find(favoriteFolders.begin(), favoriteFolders.end(), path);
-                        if (it != favoriteFolders.end()) {
-                            favoriteFolders.erase(it);
-                        }
-                    }
-                    ImGui::EndPopup();
-                }
-            }
-            
-            ImGui::Separator();
-            if (ImGui::Button("+ Add Current")) {
-                // Tambahkan folder saat ini ke favorit
-            }
-        }
-        ImGui::EndChild();
-    }
+    // if (ImGui::BeginPopupContextWindow("FileGridContentMenu", ImGuiPopupFlags_MouseButtonRight))
+    // {
+    //     if (ImGui::MenuItem("Create Folder"))
+    //     {
+    //         HandleCreateNewFolder(currentDirectory);
+    //     }
+    //     if (ImGui::MenuItem("New Script"))
+    //     {
+    //         HandleCreateNewFile(currentDirectory);
+    //     }
+    //     if (ImGui::MenuItem("New Shader"))
+    //     {
+    //         ShowNotification("New Shader", "You Click New Shader", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+    //     }
 
-void HandlerProject::DrawFolderGridView(const std::vector<AssetFile>& files, const std::string& currentPath) {
-        // Panel navigasi dan pencarian
-        // DrawNavigationBar();
-        // ImGui::SameLine();
-        // DrawSearchBar(currentPath);
-        
-        // Breadcrumb navigation
-        // ImGui::Separator();
-        // DrawBreadcrumbs(currentPath);
-        // ImGui::Separator();
-        
-        // Main layout dengan dua panel
-        // float quickAccessWidth = 150.0f;
-        
-        // DrawQuickAccessPanel();
-        // ImGui::SameLine();
-        
-        // File explorer area
-        if (ImGui::BeginChild("FileExplorerArea", ImVec2(0, 0), true)) {
-            // View options bar
-            // if (ImGui::Button("Grid")) {
-            //     // Switch to grid view (current view)
-            // }
-            // ImGui::SameLine();
-            // if (ImGui::Button("List")) {
-            //     // Switch to list view
-            // }
-            // ImGui::SameLine();
-            ImGui::SetNextItemWidth(100);
-            ImGui::SliderFloat("Size", &thumbnailSize.x, 32.0f, 96.0f);
-            thumbnailSize.y = thumbnailSize.x; // Keep square aspect ratio
-            
-            ImGui::Separator();
-            
-            // File grid area
-            if (ImGui::BeginChild("FileGrid", ImVec2(0, 0), false)) {
-                // Compute how many items can fit in a row
-                float contentWidth = ImGui::GetContentRegionAvail().x;
-                int itemsPerRow = static_cast<int>(contentWidth / (thumbnailSize.x + itemSpacing * 2));
-                if (itemsPerRow < 1) itemsPerRow = 1;
-                
-                // Filter dan sort files jika diperlukan
-                std::vector<AssetFile> filteredFiles;
-                for (const auto& file : files) {
-                    // Terapkan filter pencarian
-                    if (currentFilter.empty() || file.name.find(currentFilter) != std::string::npos) {
-                        filteredFiles.push_back(file);
-                    }
-                }
-                
-                // Sort: folders first, then files
-                std::sort(filteredFiles.begin(), filteredFiles.end(), 
-                    [](const AssetFile& a, const AssetFile& b) {
-                        if (a.isDirectory && !b.isDirectory) return true;
-                        if (!a.isDirectory && b.isDirectory) return false;
-                        return a.name < b.name; // alphabetical within same type
-                    });
-                
-                // Draw files dan folder dalam grid layout
-                for (const auto& file : filteredFiles) {
-                    DrawFileExplorer(file);
-                }
-            }
-            ImGui::EndChild();
-        }
-        ImGui::EndChild();
-    }
+    //     ImGui::EndPopup();
+    // }
+    ImGui::EndChild();
+}
 
 void HandlerProject::NewScripts(const std::string& scriptName) {
     string scriptPath = projectPath + "/assets/scripts/";
@@ -921,6 +959,7 @@ HandlerProject::IconInfo HandlerProject::LoadCachedTexture(const std::string& pa
 
     // Load dari file
     int width, height, channels;
+    stbi_set_flip_vertically_on_load(true); // Wajib sebelum stbi_load
     unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
     if (!data) {
         std::cerr << "Failed to load icon: " << path << std::endl;
@@ -934,7 +973,9 @@ HandlerProject::IconInfo HandlerProject::LoadCachedTexture(const std::string& pa
     
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); // filter bisa disesuaikan
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    FlipImageVertically(data, width, height, channels);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
     glBindTexture(GL_TEXTURE_2D, 0);
     
@@ -955,6 +996,7 @@ ImTextureID HandlerProject::GetCachedIcon(const std::string& path) {
         return it->second;
 
     int w, h, channels;
+    // stbi_set_flip_vertically_on_load(true); // Wajib sebelum stbi_load
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
     if (!data) return (ImTextureID)0;
 
@@ -1496,4 +1538,267 @@ void HandlerProject::HandleImport(const std::string& targetFolder) {
     } catch (const fs::filesystem_error& e) {
         ShowNotification("Import Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
+}
+
+void HandlerProject::HandlerOpenFileWithExtensionName(AssetFile& node)
+{
+    std::string ext = fs::path(node.name).extension().string();
+    bool isCpp = (ext == ".cpp");
+    bool isHpp = (ext == ".hpp");
+    bool isVideo = (ext == ".mp4" || ext == ".mkv" || ext == ".m4a" || ext == ".avi" || ext == ".mov");
+    bool isImage = (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".bmp");
+    bool isAudio = (ext == ".mp3" || ext == ".wav" || ext == ".ogg");
+    bool isShader = (ext == ".glsl" || ext == ".shader" || ext == ".frag" || ext == ".vert");
+
+    if (isCpp || isHpp) {
+#ifdef _WIN32
+        std::string cmd = "code \"" + projectPath + "\"";            
+#else
+        std::string cmd = "code \"" + node.fullPath + "\"";
+#endif
+        system(cmd.c_str());
+    } 
+    else if (isVideo) {
+#ifdef _WIN32
+        ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL, SW_SHOW);
+#else
+        std::string cmd = "xdg-open \"" + node.fullPath + "\"";
+        system(cmd.c_str());
+#endif
+    }
+    else if (isImage || isAudio) {
+#ifdef _WIN32
+        ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL, SW_SHOW);
+#else
+        std::string cmd = "xdg-open \"" + node.fullPath + "\"";
+        system(cmd.c_str());
+#endif
+    }
+}
+
+bool HandlerProject::IsFrameValid(const AVFrame* frame, int width, int height) {
+    int totalPixels = width * height * 3;
+    const uint8_t* data = frame->data[0];
+
+    uint8_t minVal = 255;
+    uint8_t maxVal = 0;
+
+    for (int i = 0; i < totalPixels; i++) {
+        if (data[i] < minVal) minVal = data[i];
+        if (data[i] > maxVal) maxVal = data[i];
+    }
+
+    // Bedanya harus cukup besar agar tidak dianggap hitam/putih saja
+    return (maxVal - minVal) > 30;
+}
+
+float HandlerProject::CalculateColorVariance(const uint8_t* data, int width, int height) {
+    int totalPixels = width * height;
+    int totalRGB = totalPixels * 3;
+
+    long long sum = 0;
+    long long sumSq = 0;
+
+    for (int i = 0; i < totalRGB; ++i) {
+        int val = data[i];
+        sum += val;
+        sumSq += val * val;
+    }
+
+    float mean = (float)sum / totalRGB;
+    float variance = ((float)sumSq / totalRGB) - (mean * mean);
+    return variance;
+}
+
+void HandlerProject::FlipImageVertically(unsigned char* data, int width, int height, int channels) {
+    int stride = width * channels;
+    std::vector<unsigned char> row(stride);
+    for (int y = 0; y < height / 2; ++y) {
+        unsigned char* rowTop = data + y * stride;
+        unsigned char* rowBottom = data + (height - y - 1) * stride;
+        std::memcpy(row.data(), rowTop, stride);
+        std::memcpy(rowTop, rowBottom, stride);
+        std::memcpy(rowBottom, row.data(), stride);
+    }
+}
+
+HandlerProject::IconInfo HandlerProject::GenerateVideoThumbnail(const std::string& videoPath) {
+    IconInfo thumbnailInfo;
+    thumbnailInfo.width = thumbnailSize.x;
+    thumbnailInfo.height = thumbnailSize.y;
+
+    AVFormatContext* formatContext = nullptr;
+    if (avformat_open_input(&formatContext, videoPath.c_str(), nullptr, nullptr) != 0) {
+        Debug::Logger::Log("Failed to open video file: " + videoPath, Debug::LogLevel::CRASH);
+        return LoadCachedTexture("assets/images/fileicons/video.png");
+    }
+
+    if (avformat_find_stream_info(formatContext, nullptr) < 0) {
+        avformat_close_input(&formatContext);
+        return LoadCachedTexture("assets/images/fileicons/video.png");
+    }
+
+    // Find the video stream
+    int videoStream = -1;
+    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
+        if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            videoStream = i;
+            break;
+        }
+    }
+
+    if (videoStream == -1) {
+        avformat_close_input(&formatContext);
+        return LoadCachedTexture("assets/images/fileicons/video.png");
+    }
+
+    // Get codec parameters
+    AVCodecParameters* codecParams = formatContext->streams[videoStream]->codecpar;
+    const AVCodec* codec = avcodec_find_decoder(codecParams->codec_id);
+    AVCodecContext* codecContext = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(codecContext, codecParams);
+    avcodec_open2(codecContext, codec, nullptr);
+
+    // Seek to 1/3 of the video
+    int64_t duration = formatContext->duration / AV_TIME_BASE;
+    int64_t third = duration / 3;
+    int64_t half = duration / 2;
+    int64_t quarter = duration / 4;
+
+    // Coba seek ke tengah dulu
+    av_seek_frame(formatContext, -1, half * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
+
+
+    // Read frames
+    AVFrame* frame = av_frame_alloc();
+    AVFrame* rgbFrame = av_frame_alloc();
+    AVPacket* packet = av_packet_alloc();
+        
+    // Allocate buffer for RGB frame
+    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, 
+                                            thumbnailSize.x, 
+                                            thumbnailSize.y, 
+                                            1);
+    uint8_t* buffer = (uint8_t*)av_malloc(numBytes);
+    av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, buffer,
+                        AV_PIX_FMT_RGB24, thumbnailSize.x, thumbnailSize.y, 1);
+
+    // Initialize software scaler
+    SwsContext* swsContext = sws_getContext(
+        codecContext->width, codecContext->height, codecContext->pix_fmt,
+        thumbnailSize.x, thumbnailSize.y, AV_PIX_FMT_RGB24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr
+    );
+
+    int framesTried = 0;
+    float maxVariance = 0.0f;
+    std::vector<uint8_t> bestFrameData(numBytes);
+
+    // int framesTried = 0;
+    const int maxFramesToTry = 20;
+
+    while (av_read_frame(formatContext, packet) >= 0 && framesTried < maxFramesToTry) {
+        if (packet->stream_index == videoStream) {
+            if (avcodec_send_packet(codecContext, packet) >= 0) {
+                while (avcodec_receive_frame(codecContext, frame) >= 0) {
+                    sws_scale(swsContext, frame->data, frame->linesize, 0,
+                            codecContext->height, rgbFrame->data, rgbFrame->linesize);
+
+                    float variance = CalculateColorVariance(rgbFrame->data[0], thumbnailSize.x, thumbnailSize.y);
+
+                    if (variance > maxVariance) {
+                        maxVariance = variance;
+                        memcpy(bestFrameData.data(), rgbFrame->data[0], numBytes);
+                    }
+
+                    framesTried++;
+                }
+            }
+        }
+        av_packet_unref(packet);
+    }
+
+
+    // Create texture from RGB data
+    GLuint textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    // FlipImageVertically(bestFrameData.data(), thumbnailSize.x, thumbnailSize.y, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, thumbnailSize.x, thumbnailSize.y, 
+                0, GL_RGB, GL_UNSIGNED_BYTE, rgbFrame->data[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    thumbnailInfo.textureId = (ImTextureID)(intptr_t)textureID;
+
+    // Cleanup
+    av_free(buffer);
+    av_frame_free(&rgbFrame);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    sws_freeContext(swsContext);
+    avcodec_free_context(&codecContext);
+    avformat_close_input(&formatContext);
+
+    return thumbnailInfo;
+}
+
+void HandlerProject::HandleRenameOperation(AssetFile& node, const ImVec2& cursorPos, float itemWidth, float itemHeight) {
+    ImGui::PushID((node.fullPath + "_rename").c_str());
+    
+    // Position the input box over the item
+    ImGui::SetCursorScreenPos(cursorPos);
+    
+    // Style for rename input
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    
+    ImGui::SetNextItemWidth(itemWidth);
+    if (ImGui::InputText("##rename", renameBuffer, IM_ARRAYSIZE(renameBuffer),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+        
+        std::string newName = renameBuffer;
+        if (newName.empty()) {
+            ShowNotification("Rename Failed", "Name cannot be empty", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        } else {
+            std::string newPath = fs::path(node.fullPath).parent_path().string() + "/" + newName;
+            
+            // Preserve extension for files
+            if (!node.isDirectory) {
+                std::string ext = fs::path(node.fullPath).extension().string();
+                if (!ext.empty() && fs::path(newName).extension().string().empty()) {
+                    newPath += ext;
+                }
+            }
+
+            try {
+                if (!fs::exists(newPath)) {
+                    fs::rename(node.fullPath, newPath);
+                    ShowNotification("Renamed", 
+                        fs::path(node.fullPath).filename().string() + " → " + fs::path(newPath).filename().string(), 
+                        ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    
+                    isOpenedProject = true; // Trigger refresh
+                } else {
+                    ShowNotification("Rename Failed", 
+                        "A file or folder with this name already exists", 
+                        ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                }
+            } catch (const std::exception& e) {
+                ShowNotification("Rename Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            }
+        }
+        fileExplorerRenameTarget.clear();
+    }
+
+    // Cancel rename if clicked outside
+    if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
+        fileExplorerRenameTarget.clear();
+    }
+
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+    ImGui::PopID();
 }

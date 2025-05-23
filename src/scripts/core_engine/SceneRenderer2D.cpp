@@ -356,8 +356,9 @@ void SceneRenderer2D::DrawGrid(const glm::mat4& projection, const glm::mat4& vie
                 (mousePosInViewport.x - viewportSize.x * 0.5f) / zoom + pan.x,
                 (mousePosInViewport.y - viewportSize.y * 0.5f) / zoom + pan.y
             );
-            
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
             ImGui::SetTooltip("Pos: (%.1f, %.1f)", worldPos.x, worldPos.y);
+            ImGui::PopStyleVar(1);
         }
         
         // Status bar
@@ -726,7 +727,7 @@ void SceneRenderer2D::ResetCamera() {
 }
 
 void SceneRenderer2D::SetCameraZoom(float zoom) {
-    SceneRenderer2D::zoom = std::max(0.1f, std::min(zoom, 5.0f)); // Clamp zoom between 0.1x and 5x
+    SceneRenderer2D::zoom = std::max(0.1f, std::min(zoom, 10.0f)); // Clamp zoom between 0.1x and 5x
 }
 
 void SceneRenderer2D::SetGridColor(float r, float g, float b, float a) {

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <nfd.h>
 #include <SceneSerializer.hpp>
+#include <FFmpegWrapper.hpp>
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -52,6 +53,7 @@ private:
         // Scan directories and load assets
         ScanAssetsFolder(projectPath);
     }
+    
 
 public:
     HandlerProject()
@@ -67,7 +69,7 @@ public:
     ImVec4 blueColor = ImVec4(0.0f, 0.0f, 1.0f, 1.0f);
     // This is a reload and open project bool is very core
     bool isOpenedProject = false;
-    ImVec2 thumbnailSize = ImVec2(32, 32);
+    ImVec2 thumbnailSize = ImVec2(96, 96);
     // Waktu double click
     float doubleClickTime = 0.3f; // dalam detik
     // Menyimpan state expand/collapse untuk setiap folder
@@ -83,7 +85,8 @@ public:
         std::string fullPath;
 
         // Timestamp untuk operasi drag & drop
-        float lastClickTime = 0.0f;
+        float time = ImGui::GetTime();
+        float lastClickTime = time - 0.2f;
         
         // Konstruktor
         AssetFile(const std::string& n, const std::string& p, bool isDir = false)
@@ -108,6 +111,25 @@ public:
 
         return node;
     }
+    std::vector<AssetFile> GetFilesInDirectory(const std::string& path) {
+        std::vector<AssetFile> result;
+
+        if (!fs::is_directory(path)) {
+            std::cerr << "Bukan direktori: " << path << std::endl;
+            return result;
+        }
+
+        for (const auto& entry : fs::directory_iterator(path)) {
+            std::string name = entry.path().filename().string();
+            std::string full = entry.path().string();
+            bool isDir = entry.is_directory();
+            AssetFile file(name, full, isDir);
+            result.push_back(file);
+        }
+
+        return result;
+    }
+    
     struct Notification {
         std::string title;
         std::string message;
@@ -124,6 +146,7 @@ public:
         int width;
         int height;
     };
+    IconInfo GenerateVideoThumbnail(const std::string& videoPath);
     std::unordered_map<std::string, IconInfo> iconCacheInfo;
     IconInfo LoadCachedTexture(const string& pathIcon);
     
@@ -134,16 +157,28 @@ public:
         } else {
             std::string ext = fs::path(node.name).extension().string();
             if (ext == ".cpp" || ext == ".hpp") path += "c-.png";
-            else if (ext == ".png" || ext == ".jpg") path += "image.png";
-            else if (ext == ".fbx" || ext == ".obj") path += "model.png";
-            else if (ext == ".prefab") path += "prefab.png";
-            else if (ext == ".ilmeescene" || ext == ".unity") path += "scene.png";
+            else if (ext == ".png" || ext == ".jpg" || ext == ".webp" || ext == ".jpeg") path = node.fullPath;
+            else if (ext == ".mp4" || ext == ".avi" || ext == ".mov" || ext == ".mkv") {
+                // Generate thumbnail for video files
+                auto cachedThumbnail = iconCacheInfo.find(node.fullPath);
+                if (cachedThumbnail != iconCacheInfo.end()) {
+                    return cachedThumbnail->second;
+                }
+                IconInfo thumbnail = GenerateVideoThumbnail(node.fullPath);
+                iconCacheInfo[node.fullPath] = thumbnail;
+                return thumbnail;
+            }
+            else if (ext == ".fbx" || ext == ".obj") path += "file.png";
+            else if (ext == ".prefab") path += "file.png";
+            else if (ext == ".ilmeescene" || ext == ".unity") path += "file.png";
             else path += "file.png";
         }
 
-        return LoadCachedTexture(path); // caching disarankan
+        return LoadCachedTexture(path);
     }
-
+    bool IsFrameValid(const AVFrame* frame, int width, int height);
+    float CalculateColorVariance(const uint8_t* data, int width, int height);
+    void FlipImageVertically(unsigned char* data, int width, int height, int channels);
     // Asset yang dipilih saat ini
     AssetFile* selectedAsset;
     // Callback untuk menangani klik file
@@ -151,11 +186,13 @@ public:
     // Favorit folder
     std::vector<std::string> favoriteFolders;
     std::string currentFilter = "";
-    void DrawFolderGridView(const std::vector<AssetFile>& files, const std::string& currentPath);
+    string currentDirectory = "";
+    void DrawFolderGridView();
     void DrawBreadcrumbs(const std::string& path);
     void DrawSearchBar(const std::string& path);
     void DrawNavigationBar();
     void DrawQuickAccessPanel();
+    void HandlerOpenFileWithExtensionName(AssetFile& currentNode);
 
     std::vector<Notification> notifications;
     Assets assets;
@@ -214,5 +251,7 @@ public:
     void SaveNewScene();
     void OpenScene();
     // Hint tanda "&" itu ngambil dari referensi 
-    void DrawFileExplorer(const AssetFile& assetFolder);
+    void DrawFileExplorer(AssetFile& assetFolder);
+    void HandleRenameFileOrFolder(const AssetFile& node);
+    void HandleRenameOperation(AssetFile& node, const ImVec2& cursorPos, float itemWidth, float itemHeight);
 };

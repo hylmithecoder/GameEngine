@@ -58,12 +58,12 @@ public:
 
     float cameraZoom = 1.0f;
     float GetZoom() const { return zoom; }
+    float zoom = 1.0f;
 
 private:
     int width, height;
 
     // Viewport attributes
-    float zoom = 1.0f;
     ImVec2 pan = ImVec2(0.0f, 0.0f);
     ImVec2 lastMousePos = ImVec2(0.0f, 0.0f);
     bool isDragging = false;

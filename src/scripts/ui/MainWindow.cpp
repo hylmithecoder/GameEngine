@@ -1487,6 +1487,7 @@ void MainWindow::update() {
             // create asset folder in project
             assetFolder = projectRoot.children[0];
             assetPath = projectHandler.projectPath+"\\assets";
+            projectHandler.currentDirectory = assetPath;
             isLoadScene = true;
             // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;

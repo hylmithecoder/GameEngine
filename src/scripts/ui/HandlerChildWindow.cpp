@@ -49,23 +49,27 @@ void MainWindow::RenderHierarchyWindow() {
 
 void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const std::string& assetPath , bool firstOpenProject) {
     ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);    
+        // Debug::Logger::Log("Asset Folder: " + assetFolder.fullPath + "\nChildren: "+to_string(assetFolder.children.size()), Debug::LogLevel::INFO);
             if (firstOpenProject) {
                 ImGui::BeginGroup();
                 
                 // Add toolbar above assets
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-                                
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
+
+                // Refresh button
                 if (ImGui::Button("Refresh")) {
                     projectHandler.isOpenedProject = true;
                 }
-                
+
                 // Tooltip for refresh button
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Manually refresh asset tree");
                 }
-                
-                 ImGui::SameLine();
-            
+
+                ImGui::SameLine();
+
                 // Add file watcher toggle button
                 bool watcherRunning = projectHandler.IsFileWatcherRunning();
                 if (ImGui::Button(watcherRunning ? "Watching" : "Watch Off")) {
@@ -75,28 +79,51 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, Han
                         projectHandler.StartFileWatcher();
                     }
                 }
-                
+
                 // Tooltip for watcher button
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(watcherRunning ? 
                                     "Auto-refresh is active" : 
                                     "Turn on auto-refresh");
                 }
-                
+
                 ImGui::SameLine();
 
-                if (ImGui::Button("Back")) 
-                {
+                // Back button - disabled if in root directory
+                std::string rootPath = projectHandler.projectPath + "\\assets";
+                bool isInRootDirectory = (projectHandler.currentDirectory == rootPath);
 
+                // Disable button if in root directory
+                if (isInRootDirectory) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
+                    ImGui::Button("Back");
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar();
+                    
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Already in root directory");
+                    }
+                } else {
+                    if (ImGui::Button("Back")) {
+                        size_t lastSlash = projectHandler.currentDirectory.find_last_of("/\\");
+                        if (lastSlash != std::string::npos) {
+                            projectHandler.currentDirectory = projectHandler.currentDirectory.substr(0, lastSlash);
+                            projectHandler.selectedAsset = nullptr; // Reset selection when navigating
+                        }
+                    }
+                    
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Go back to parent folder");
+                    }
                 }
+
                 ImGui::SameLine();
-                
+
                 // Add filter/search box
                 HandleSearch();
 
-                // ImGui::PopItemWidth();
-                
-                ImGui::PopStyleColor();
+                ImGui::PopStyleColor(3);
                 
                 // Get available content region
                 ImVec2 contentSize = ImGui::GetContentRegionAvail();
@@ -128,7 +155,9 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, Han
                 // Right panel (File explorer)
                 ImGui::SameLine();
                 ImGui::BeginChild("AssetRoot", ImVec2(0, 0), true);
-                projectHandler.DrawFolderGridView(assetFolder.children, assetPath);
+                // Fix: Get files directly from projectHandler instead of through selectedAsset
+                // Debug::Logger::Log("If You See it this is work in method RenderExplorerWindow", Debug::LogLevel::SUCCESS);
+                projectHandler.DrawFolderGridView();
                 ImGui::EndChild();
                 
                 ImGui::EndGroup();
@@ -304,22 +333,17 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
     if (ImGui::Begin("Scene Toolbar", nullptr, toolbar_flags)) {
         // Reset View Button
         if (ImGui::Button("Reset View")) {
-            // Reset camera/viewport (implement these methods or use dummy values)
-            // if (sceneRenderer2D) {
                 Debug::Logger::Log("Resetting camera view", Debug::LogLevel::INFO);
-                sceneRenderer2D->ResetCamera(); // You'll need to implement this
-            // }
+                sceneRenderer2D->ResetCamera();
         }
         
         ImGui::SameLine();
         
         // Zoom controls
-        static float zoom = 1.0f;
+        // static float zoom = sceneRenderer2D->zoom;
         ImGui::SetNextItemWidth(100);
-        if (ImGui::SliderFloat("##Zoom", &zoom, 1.0f, 10.0f, "%.2fx")) {
-            // if (sceneRenderer2D) {
-                sceneRenderer2D->SetCameraZoom(zoom); // You'll need to implement this
-            // }
+        if (ImGui::SliderFloat("##Zoom", &sceneRenderer2D->zoom, 1.0f, 10.0f, "%.2fx")) {
+                sceneRenderer2D->SetCameraZoom(sceneRenderer2D->zoom);
         }
         
         ImGui::SameLine();
@@ -332,9 +356,7 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
         static float gridSize = 50.0f;
         ImGui::SetNextItemWidth(80);
         if (ImGui::DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
-            // if (sceneRenderer2D) {
-                sceneRenderer2D->SetGridSize(gridSize); // You'll need to implement this
-            // }
+                sceneRenderer2D->SetGridSize(gridSize);
         }
         
         ImGui::SameLine();
@@ -347,9 +369,7 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
         static float gridColor[3] = {0.5f, 0.5f, 0.5f};
         ImGui::SetNextItemWidth(60);
         if (ImGui::ColorEdit3("##GridColor", gridColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-            // if (sceneRenderer2D) {
-                sceneRenderer2D->SetGridColor(gridColor[0], gridColor[1], gridColor[2], 1.0f); // You'll need to implement this
-            // }
+                sceneRenderer2D->SetGridColor(gridColor[0], gridColor[1], gridColor[2], 1.0f);
         }
         
         ImGui::SameLine();
@@ -395,7 +415,6 @@ void MainWindow::RenderSceneWindow() {
         ImGuiWindowFlags_NoCollapse | 
         ImGuiWindowFlags_NoScrollbar | 
         ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoNavFocus;  // Tambahkan flag ini
 
     // Set window properties
@@ -628,7 +647,9 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
 
 
 void MainWindow::RenderConsoleWindow() {
-    ImGui::Begin("Console", nullptr, ImGuiWindowFlags_NoCollapse);
+    if (!showConsole) return;
+    // Set window properties
+    ImGui::Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
     
     static int selectedTab = 0;
     ImGui::BeginTabBar("ConsoleTabs");
@@ -737,12 +758,9 @@ void MainWindow::RenderMenuBar() {
         if (ImGui::BeginMenu("Windows")) {
             if (ImGui::MenuItem("Explorer", nullptr, &showExplorer)) {}
             if (ImGui::MenuItem("Inspector", nullptr, &showInspector)) {}
-            if (ImGui::MenuItem("Scene", "Ctrl+1", &showScene)) 
-            { 
-                // RenderSceneWindow(); 
-            }
+            if (ImGui::MenuItem("Scene", "Ctrl+1", &showScene)) {}
             if (ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy)) { RenderHierarchyWindow(); }
-            if (ImGui::MenuItem("Console", nullptr, &showConsole)) {}
+            if (ImGui::MenuItem("Console", "Ctrl+2", &showConsole)) {}
             ImGui::EndMenu();
         }
 
