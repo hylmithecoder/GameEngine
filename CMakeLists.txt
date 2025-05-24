@@ -1,11 +1,24 @@
 cmake_minimum_required(VERSION 3.10)
-project(GameEngineSDL)
+project(GameEngineSDL VERSION 1.0.0)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
-option(BUILD_SHARED_LIBS "Build CoreEngine as a shared libraries" ON)
+option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
+# Output directories
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+
+# Compiler-specific options
+if(MSVC)
+    add_compile_options(/W4)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+else()
+    add_compile_options(-Wall -Wextra -pedantic)
+endif()
 
 # Add SDL2 and SDL2_ttf paths
 set(SDL2_DIR "C:/SDL2")
@@ -45,8 +58,8 @@ set(SOURCE_TEST_VULKAN
 )
 
 set(SOURCE_CORE
-    src/scripts/core_engine/core/EngineCore.cpp
-    src/scripts/core_engine/core/LifeCycleManager.cpp
+    src/scripts/core_engine/core/GameEngine.cpp
+    src/scripts/core_engine/core/CoreDebugger.cpp
 )
 
 # Add header files
@@ -76,11 +89,12 @@ set(HEADER_VULKAN
 )
 
 set(HEADER_CORE
-    src/header/core_engine/core/Component.hpp
-    src/header/core_engine/core/Scene.hpp
-    src/header/core_engine/core/GameObject.hpp
-    src/header/core_engine/core/EngineCore.hpp
-    src/header/core_engine/core/LifeCycleManager.hpp
+    # src/header/core_engine/core/Component.hpp
+    # src/header/core_engine/core/Scene.hpp
+    src/header/core_engine/core/GameEngine.h
+    src/header/core_engine/core/CoreDebugger.h
+    # src/header/core_engine/core/EngineCore.hpp
+    # src/header/core_engine/core/LifeCycleManager.hpp
 )
 
 set(SOURCE_TEST
@@ -175,8 +189,19 @@ add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_
 target_link_options(TestGLSL PRIVATE -mconsole)
 add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
 target_link_options(TestVulkan PRIVATE -mconsole)
-add_library(CoreEngine ${SOURCE_CORE} ${HEADER_CORE})
+
+add_library(CoreEngine SHARED ${SOURCE_CORE} ${HEADER_CORE})
 set_target_properties(CoreEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Define GAMEENGINE_EXPORTS when building the DLL
+target_compile_definitions(CoreEngine PRIVATE GAMEENGINE_EXPORTS)
+
+# Set properties for the DLL
+set_target_properties(CoreEngine PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 1
+    OUTPUT_NAME "CoreEngine"
+)
+
 target_link_options(CoreEngine PRIVATE -mconsole)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
@@ -296,45 +321,105 @@ target_include_directories(CoreEngine PUBLIC
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
-# Mark the library for export
+# First, find this section and modify it:
 install(TARGETS CoreEngine
-    EXPORT EngineCoreTargets
+    EXPORT CoreEngineTargets    # Add this line
+    RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-    INCLUDES DESTINATION include
 )
-# Install headers
-install(DIRECTORY src/header/core_engine/core/
-    DESTINATION include/core_engine/core
-    FILES_MATCHING PATTERN "*.hpp"
-)
-# Export configuration - now this will work because we defined the export target above
-install(EXPORT EngineCoreTargets
-    FILE EngineCoreTargets.cmake
-    NAMESPACE Engine::
+
+# Then keep your existing export commands:
+install(EXPORT CoreEngineTargets
+    FILE CoreEngineTargets.cmake
+    NAMESPACE CoreEngine::
     DESTINATION lib/cmake/CoreEngine
 )
 
-# Create and install config files
-# configure_file(cmake/EngineCoreConfig.cmake.in
-#     "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfig.cmake"
-#     @ONLY
-# )
+export(EXPORT CoreEngineTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/CoreEngineTargets.cmake"
+    NAMESPACE CoreEngine::
+)
+# Install header files
+install(FILES ${HEADER_CORE} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
+set(CONFIG_INSTALL_DIR lib/cmake/CoreEngine)
+
+# Generate the config file
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/CoreEngineConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfig.cmake
+    INSTALL_DESTINATION ${CONFIG_INSTALL_DIR}
+    PATH_VARS CONFIG_INSTALL_DIR
+)
+
+# Generate the version file
 write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfigVersion.cmake"
-    VERSION 1.0.0
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
 
-# Install config files
+# Install the config files
 install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/EngineCoreConfigVersion.cmake"
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfigVersion.cmake
+    DESTINATION ${CONFIG_INSTALL_DIR}
+)
+
+# Export targets
+install(EXPORT CoreEngineTargets
+    FILE CoreEngineTargets.cmake
+    NAMESPACE CoreEngine::
     DESTINATION lib/cmake/CoreEngine
 )
+
+# Documentation (optional)
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+    option(BUILD_DOCUMENTATION "Create and install the HTML based API documentation (requires Doxygen)" ${DOXYGEN_FOUND})
+    
+    if(BUILD_DOCUMENTATION)
+        set(DOXYGEN_IN ${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile.in)
+        set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile)
+        
+        configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
+        
+        add_custom_target(doc_doxygen ALL
+            COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            COMMENT "Generating API documentation with Doxygen"
+            VERBATIM
+        )
+        
+        install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/html DESTINATION share/doc)
+    endif()
+endif()
+
+# Print build information
+message(STATUS "=== GameEngine Build Configuration ===")
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Build example: ${BUILD_EXAMPLE}")
+message(STATUS "Build tests: ${BUILD_TESTS}")
+message(STATUS "Build documentation: ${BUILD_DOCUMENTATION}")
+message(STATUS "=====================================")
+
+# CPack configuration for creating installers
+include(CPack)
+set(CPACK_PACKAGE_NAME "GameEngine")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A simple game engine library")
+set(CPACK_PACKAGE_VENDOR "Your Company")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+
+if(WIN32)
+    set(CPACK_GENERATOR "NSIS;ZIP")
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE

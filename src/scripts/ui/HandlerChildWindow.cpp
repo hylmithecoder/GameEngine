@@ -414,8 +414,7 @@ void MainWindow::RenderSceneWindow() {
     ImGuiWindowFlags window_flags = 
         ImGuiWindowFlags_NoCollapse | 
         ImGuiWindowFlags_NoScrollbar | 
-        ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoNavFocus;  // Tambahkan flag ini
+        ImGuiWindowFlags_NoScrollWithMouse;  // Tambahkan flag ini
 
     // Set window properties
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
