@@ -29,4 +29,11 @@ namespace GameEngine {
             std::cerr << "[ERROR] " << message << std::endl;
             SetConsoleTextAttribute(hConsole, 15); // Reset to default
         }
+
+        void CoreDebugger::LogSuccess(const std::string& message) {
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, 10); // Green
+            std::cout << "[SUCCESS] " << message << std::endl;
+            SetConsoleTextAttribute(hConsole, 15); // Reset to default
+        }
 }

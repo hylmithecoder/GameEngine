@@ -41,7 +41,7 @@ namespace GameEngine {
             LogWarning("Engine already initialized");
             return false;
         }
-        LogInfo("Thanks for using GameEngine!");
+        LogInfo("Thanks for using Ilmeee Engine!");
         LogInfo("Window: "+windowTitle+" ("+std::to_string(width)+"x"+std::to_string(height)+")");
         LogInfo("Initializing Game Engine...");
         
@@ -308,15 +308,24 @@ namespace GameEngine {
     
     // Utility Functions
     void LogInfo(const std::string& message) {
-        std::cout << "[INFO] " << message << std::endl;
+        if (message.empty()) return;
+        if (message.find("ERROR") != std::string::npos) {
+            CoreDebugger::LogError("Log message contains 'ERROR': " + message);
+            return;
+        }
+        CoreDebugger::LogInfo(message);
     }
     
     void LogWarning(const std::string& message) {
-        std::cout << "[WARNING] " << message << std::endl;
+        CoreDebugger::LogWarning(message);
     }
     
     void LogError(const std::string& message) {
-        std::cerr << "[ERROR] " << message << std::endl;
+        CoreDebugger::LogError(message);
+    }
+
+    void LogSuccess(const std::string& message) {
+        CoreDebugger::LogSuccess(message);
     }
     
     // C-style API Implementation

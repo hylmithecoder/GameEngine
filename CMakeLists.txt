@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # Output directories
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
@@ -33,6 +33,7 @@ set(GLM "E:/glm")
 set(VULKAN_SDK "C:/msys64/mingw64")
 set(VULKAN_DIR "C:/vulkan")
 set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
+set(DLFCN "E:/dlfcn-win32")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -195,6 +196,9 @@ set_target_properties(CoreEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(CoreEngine PRIVATE GAMEENGINE_EXPORTS)
 
+add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp)
+target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
+
 # Set properties for the DLL
 set_target_properties(CoreEngine PROPERTIES
     VERSION ${PROJECT_VERSION}
@@ -314,7 +318,11 @@ target_include_directories(TestVulkan PRIVATE
     # ${GLAD_VULKAN_DIR}/include
     # ${VULKAN_SDK}/include
     ${VULKAN_DIR}
-)    
+) 
+
+target_include_directories(HandlerIlmeeeEngine PRIVATE
+    ${DLFCN}/src
+)
 
 target_include_directories(CoreEngine PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core>
@@ -489,6 +497,10 @@ target_link_libraries(TestVulkan PRIVATE
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
     # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
+)
+
+target_link_libraries(HandlerIlmeeeEngine PRIVATE
+    ${DLFCN}/build/lib/libdl.dll.a
 )
 
 # Copy DLL files to output directory

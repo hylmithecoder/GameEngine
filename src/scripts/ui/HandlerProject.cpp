@@ -194,7 +194,7 @@ void HandlerProject::OpenProject(const char* folderPath) {
         "/assets/models",
         "/assets/scripts",
         "/scenes",
-        "/builds",
+        "/build",
         "/config"
     };
 

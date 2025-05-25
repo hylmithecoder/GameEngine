@@ -1536,6 +1536,7 @@ void MainWindow::update() {
     
     // Menu bar
     RenderMenuBar();
+    RenderPlayMenu();
     
     // Left: Hierarchy with 
     RenderHierarchyWindow();

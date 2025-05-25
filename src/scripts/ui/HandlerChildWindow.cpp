@@ -900,3 +900,74 @@ void MainWindow::HandleSearch() {
             searchResults.clear();
     }
 }
+
+void MainWindow::RenderPlayMenu() {
+    ImVec2 viewportSize = ImGui::GetMainViewport()->Size;
+    float buttonHeight = 20.0f;
+    float toolbarHeight = buttonHeight;  // Tinggi window sama dengan tombol
+
+    float menuBarHeight = ImGui::GetFrameHeight();
+    ImGui::SetNextWindowPos(ImVec2(0, menuBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewportSize.x, toolbarHeight));
+
+    ImGuiWindowFlags toolbar_flags =
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.0f)); // Semi-transparent background
+
+    if (ImGui::Begin("PlayControlsToolbar", nullptr, toolbar_flags)) {
+        ImVec2 buttonSize(30, buttonHeight);
+        float spacing = 5.0f;
+        float totalWidth = (buttonSize.x * 3) + (spacing * 2);
+        float startX = (viewportSize.x - totalWidth) * 0.5f;
+
+        ImGui::SetCursorPosX(startX);
+
+        // Play
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.6f, 0.1f, 1.0f));
+        if (ImGui::Button("##Play", buttonSize)) {
+            Debug::Logger::Log("Starting game...", Debug::LogLevel::INFO);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play (Ctrl+P)");
+        ImGui::PopStyleColor(3);
+
+        // Pause
+        ImGui::SameLine(0, spacing);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.7f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.1f, 1.0f));
+        if (ImGui::Button("##Pause", buttonSize)) {
+            Debug::Logger::Log("Pausing game...", Debug::LogLevel::INFO);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pause (Ctrl+Shift+P)");
+        ImGui::PopStyleColor(3);
+
+        // Stop
+        ImGui::SameLine(0, spacing);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+        if (ImGui::Button("##Stop", buttonSize)) {
+            Debug::Logger::Log("Stopping game...", Debug::LogLevel::INFO);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop (Ctrl+S)");
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(1);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(1); // Pop background color
+    ImGui::PopStyleVar(4);
+}

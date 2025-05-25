@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <CoreDebugger.h>
 
 namespace GameEngine {
     
@@ -167,6 +168,7 @@ namespace GameEngine {
     GAMEENGINE_API void LogInfo(const std::string& message);
     GAMEENGINE_API void LogWarning(const std::string& message);
     GAMEENGINE_API void LogError(const std::string& message);
+    GAMEENGINE_API void LogSuccess(const std::string& message);
     
     // C-style API for easier integration
     extern "C" {

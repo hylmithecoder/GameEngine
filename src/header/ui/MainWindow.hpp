@@ -141,4 +141,5 @@ public:
     void RenderSceneWindow();
     void RenderHierarchyWindow();
     void RenderSceneToolbarView(ImVec2 viewportPos, ImVec2 viewportSize);
+    void RenderPlayMenu();
 };
