@@ -23,17 +23,17 @@ endif()
 # Add SDL2 and SDL2_ttf paths
 set(SDL2_DIR "C:/SDL2")
 set(SDL2_TTF_DIR "C:/SDL2_ttf") 
-set(STB "E:/stb")
+set(STB "D:/stb")
 set(GLFW "C:/glfw3.4")
-set(FFMPEG_DIR "E:/FFmpeg")
+set(FFMPEG_DIR "D:/FFmpeg")
 set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
-set(NFD "E:/nativefiledialog-extended")
-set(GLM "E:/glm")
+set(NFD "D:/nativefiledialog-extended")
+set(GLM "D:/glm")
 set(VULKAN_SDK "C:/msys64/mingw64")
 set(VULKAN_DIR "C:/vulkan")
 set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
-set(DLFCN "E:/dlfcn-win32")
+set(DLFCN "D:/dlfcn-win32")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -96,6 +96,10 @@ set(HEADER_CORE
     src/header/core_engine/core/CoreDebugger.h
     # src/header/core_engine/core/EngineCore.hpp
     # src/header/core_engine/core/LifeCycleManager.hpp
+)
+
+set(HEADER_CORE_EDITOR
+    src/header/core_engine/core_editor/IlmeeeEditor.h
 )
 
 set(SOURCE_TEST
@@ -192,6 +196,7 @@ add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} $
 target_link_options(TestVulkan PRIVATE -mconsole)
 
 add_library(CoreEngine SHARED ${SOURCE_CORE} ${HEADER_CORE})
+target_link_options(CoreEngine PRIVATE -mconsole)
 set_target_properties(CoreEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(CoreEngine PRIVATE GAMEENGINE_EXPORTS)
@@ -199,6 +204,8 @@ target_compile_definitions(CoreEngine PRIVATE GAMEENGINE_EXPORTS)
 add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp)
 target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
+add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
 set_target_properties(CoreEngine PROPERTIES
     VERSION ${PROJECT_VERSION}
@@ -206,9 +213,20 @@ set_target_properties(CoreEngine PROPERTIES
     OUTPUT_NAME "CoreEngine"
 )
 
-target_link_options(CoreEngine PRIVATE -mconsole)
+add_library(CoreEditor SHARED src/scripts/core_engine/core_editor/IlmeeeEditor.cpp ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${NFD_SOURCES} ${JSON} ${GLAD_4})
+target_link_options(CoreEditor PRIVATE -mconsole)
+set_target_properties(CoreEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Define GAMEENGINE_EXPORTS when building the DLL
+target_compile_definitions(CoreEditor PRIVATE ILMEEEDITOR_EXPORTS)
+# Set properties for the DLL
+set_target_properties(CoreEditor PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 1
+    OUTPUT_NAME "CoreEditor"
+)
+
 find_package(OpenGL REQUIRED)
-find_package(GLEW REQUIRED)
+# find_package(GLEW REQUIRED)
 # set(Vulkan_DIR "${VULKAN_SDK}/lib/cmake/VulkanLoader")
 
 # Include directories
@@ -329,6 +347,53 @@ target_include_directories(CoreEngine PUBLIC
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
+target_include_directories(CoreEditor PUBLIC
+    # Build interface paths
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core_editor>
+    $<BUILD_INTERFACE:${SDL2_DIR}/include>
+    $<BUILD_INTERFACE:${ICON_DIR}>
+    $<BUILD_INTERFACE:${IMGUI_DIR}>
+    $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/ui>
+    $<BUILD_INTERFACE:${FFMPEG_DIR}>
+    $<BUILD_INTERFACE:${NFD}/src/include>
+    $<BUILD_INTERFACE:${JSON_DIR}>
+    $<BUILD_INTERFACE:${STB}>
+    $<BUILD_INTERFACE:${GLAD_4_DIR}/include>
+    
+    # Install interface paths
+    $<INSTALL_INTERFACE:include/core_engine/core_editor>
+    $<INSTALL_INTERFACE:include>
+    $<INSTALL_INTERFACE:include/SDL2>
+    $<INSTALL_INTERFACE:include/imgui>
+    $<INSTALL_INTERFACE:include/FFmpeg>
+    $<INSTALL_INTERFACE:include/nfd>
+    $<INSTALL_INTERFACE:include/json>
+    $<INSTALL_INTERFACE:include/stb>
+)
+
+target_include_directories(IlmeeeHub PRIVATE
+    ${SDL2_DIR}/include
+    ${ICON_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${FFMPEG_DIR}
+    ${NFD}/src/include
+    ${JSON_DIR}
+    ${STB}
+    ${GLM}
+    # GL
+    # ${GLEW}/include/GL
+    ${GLFW}/include
+    ${GLES2}
+    opengl32
+    gdi32
+    ${GLAD_4_DIR}/include
+    ${VULKAN_DIR}
+)
+
 # First, find this section and modify it:
 install(TARGETS CoreEngine
     EXPORT CoreEngineTargets    # Add this line
@@ -376,11 +441,51 @@ install(FILES
     DESTINATION ${CONFIG_INSTALL_DIR}
 )
 
-# Export targets
-install(EXPORT CoreEngineTargets
-    FILE CoreEngineTargets.cmake
-    NAMESPACE CoreEngine::
-    DESTINATION lib/cmake/CoreEngine
+# First, find this section and modify it:
+install(TARGETS CoreEditor
+    EXPORT CoreEditorTargets    # Add this line
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+)
+
+install(EXPORT CoreEditorTargets
+    FILE CoreEditorTargets.cmake
+    NAMESPACE CoreEditor::
+    DESTINATION lib/cmake/CoreEditor
+)
+
+export(EXPORT CoreEditorTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/CoreEditorTargets.cmake"
+    NAMESPACE CoreEditor::
+)
+
+# Install header files
+install(FILES ${HEADER_CORE_EDITOR} DESTINATION include)
+
+include(CMakePackageConfigHelpers)
+set(CONFIG_INSTALL_DIR lib/cmake/CoreEditor)
+
+# Generate the config file
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/CoreEditorConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfig.cmake
+    INSTALL_DESTINATION ${CONFIG_INSTALL_DIR}
+    PATH_VARS CONFIG_INSTALL_DIR
+)
+
+# Generate the version file
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+# Install the config files
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfigVersion.cmake
+    DESTINATION ${CONFIG_INSTALL_DIR}
 )
 
 # Documentation (optional)
@@ -454,7 +559,7 @@ target_link_libraries(TestBackground PRIVATE
     ${LIBRARY}/swresample.lib
     ${LIBRARY}/swscale.lib
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # GLEW::GLEW
+    #   GLEW::GLEW
 )
 
 target_link_libraries(TestGLEW PRIVATE
@@ -503,6 +608,27 @@ target_link_libraries(HandlerIlmeeeEngine PRIVATE
     ${DLFCN}/build/lib/libdl.dll.a
 )
 
+target_link_libraries(IlmeeeHub PRIVATE
+    ${SDL2_DIR}/lib/x64/SDL2.lib
+    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    OpenGL::GL
+    ${LIBRARY}/avformat.lib
+    ${LIBRARY}/avcodec.lib 
+    ${LIBRARY}/avutil.lib 
+    ${LIBRARY}/swresample.lib
+    ${LIBRARY}/swscale.lib    
+    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    # ${GLEW}/lib/Release/x64/glew32.lib
+    # GLEW::GLEW
+)
+
+target_link_libraries(CoreEditor PRIVATE
+    ${SDL2_DIR}/lib/x64/SDL2.lib
+    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    OpenGL::GL
+    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+)
+
 # Copy DLL files to output directory
 if(WIN32)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -523,5 +649,12 @@ if(WIN32)
             "${LIBRARY}/vulkan-1.dll"
             "${VULKAN_LIB}"
             $<TARGET_FILE_DIR:TestVulkan>
+    )
+    add_custom_command(TARGET CoreEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SDL2_DIR}/lib/x64/SDL2.dll"
+            "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
+            "${GLFW}/lib-static-ucrt/glfw3.dll"
+            $<TARGET_FILE_DIR:CoreEditor>
     )
 endif()

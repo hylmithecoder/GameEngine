@@ -101,7 +101,9 @@ namespace GameEngine {
         
         // GameObject management
         GameObject* CreateGameObject(const std::string& name = "GameObject");
+        // DestroyGameObject(const std::string& name);
         void DestroyGameObject(GameObject* obj);
+        // FindGameObject(const std::string& name);
         GameObject* FindGameObject(const std::string& name);
         
         const std::string& GetName() const { return name; }
@@ -115,6 +117,7 @@ namespace GameEngine {
         std::vector<std::unique_ptr<Component>> components;
         
     public:
+        // GameObject Constructor and Destructor
         GameObject(const std::string& objName);
         virtual ~GameObject();
         
@@ -136,6 +139,7 @@ namespace GameEngine {
         
         // Properties
         const std::string& GetName() const { return name; }
+        // SetActive Scene
         void SetActive(bool isActive) { active = isActive; }
         bool IsActive() const { return active; }
     };
