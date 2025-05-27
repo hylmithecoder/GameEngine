@@ -5,28 +5,34 @@
 #include <SDL_ttf.h>
 #include "header/ui/MainWindow.hpp"
 #include "scripts/ui/Check_Environment.cpp"
+#include <NetworkManager.hpp>
 #include "SceneRenderer2D.hpp"
+#include <Debugger.hpp>
+
+NetworkManager networkManager;
 
 void LaunchGame() {
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
 
-    std::string command = "HandlerIlmeeeEngine.exe -project MyGameProject";
+    // Start TCP server before launching the game
+    if (!networkManager.startServer()) {
+        MessageBoxA(0, "Failed to start network server", "Error", MB_OK);
+        return;
+    }
 
+    std::string command = "HandlerIlmeeeEngine.exe -project MyGameProject";
     BOOL result = CreateProcessA(
-        NULL,               // No module name (use command line)
-        command.data(),     // Command line
-        NULL,               // Process handle not inheritable
-        NULL,               // Thread handle not inheritable
-        FALSE,              // Set handle inheritance to FALSE
-        0,                  // No creation flags
-        NULL,               // Use parent's environment block
-        NULL,               // Use parent's starting directory 
-        &si,                // Pointer to STARTUPINFO structure
-        &pi                 // Pointer to PROCESS_INFORMATION structure
+        NULL, command.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi
     );
 
     if (result) {
+        // Wait for connection establishment
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        // Send initial configuration
+        networkManager.sendMessage("init:MyGameProject");
+        
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     } else {
@@ -67,6 +73,14 @@ int main(int argc, char* argv[]) {
     // window.assets.load_assets();
 
     while (window.running()) {
+
+        std::string message = networkManager.receiveMessage();
+        if (!message.empty()) {
+            Debug::Logger::Log("Received message: " + message);
+        }
+        std::string sendMessage = "Halo World";
+        networkManager.sendMessage("Halo World");
+
         window.handleEvents();
         window.update();
         window.render();

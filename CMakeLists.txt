@@ -6,11 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
-# Output directories
-# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-
+# Set output directories specifically for library targets
 
 # Compiler-specific options
 if(MSVC)
@@ -34,6 +30,7 @@ set(VULKAN_SDK "C:/msys64/mingw64")
 set(VULKAN_DIR "C:/vulkan")
 set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
 set(DLFCN "D:/dlfcn-win32")
+set(WS "D:/ws2_32")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -79,6 +76,7 @@ set(HEADERS
     src/header/core_engine/TextureManager.hpp
     src/header/core_engine/GLHeader.hpp
     src/header/core_engine/Debugger.hpp
+    src/header/core_engine/NetworkManager.hpp
 )
 
 set(HEADER_GLSL
@@ -100,6 +98,7 @@ set(HEADER_CORE
 
 set(HEADER_CORE_EDITOR
     src/header/core_engine/core_editor/IlmeeeEditor.h
+    src/header/core_engine/core_editor/TCPConnection.hpp
 )
 
 set(SOURCE_TEST
@@ -108,6 +107,7 @@ set(SOURCE_TEST
     src/scripts/ui/test_main.cpp
 )
 
+# This Source Not Glew but glad
 set(SOURCE_TEST_GLEW
     src/scripts/test_glew.cpp
 )
@@ -131,7 +131,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
@@ -195,11 +195,11 @@ target_link_options(TestGLSL PRIVATE -mconsole)
 add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
 target_link_options(TestVulkan PRIVATE -mconsole)
 
-add_library(CoreEngine SHARED ${SOURCE_CORE} ${HEADER_CORE})
-target_link_options(CoreEngine PRIVATE -mconsole)
-set_target_properties(CoreEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(IlmeeeEngine SHARED src/IlmeeeEngine.rc ${SOURCE_CORE} ${HEADER_CORE})
+target_link_options(IlmeeeEngine PRIVATE -mconsole)
+set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
-target_compile_definitions(CoreEngine PRIVATE GAMEENGINE_EXPORTS)
+target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 
 add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp)
 target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
@@ -207,23 +207,33 @@ target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
-set_target_properties(CoreEngine PROPERTIES
+set_target_properties(IlmeeeEngine PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     VERSION ${PROJECT_VERSION}
     SOVERSION 1
-    OUTPUT_NAME "CoreEngine"
+    OUTPUT_NAME "IlmeeeEngine"
 )
 
-add_library(CoreEditor SHARED src/scripts/core_engine/core_editor/IlmeeeEditor.cpp ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${NFD_SOURCES} ${JSON} ${GLAD_4})
-target_link_options(CoreEditor PRIVATE -mconsole)
-set_target_properties(CoreEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(IlmeeeEditor SHARED src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${NFD_SOURCES} ${JSON} ${GLAD_4})
+target_link_options(IlmeeeEditor PRIVATE -mconsole)
+set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
-target_compile_definitions(CoreEditor PRIVATE ILMEEEDITOR_EXPORTS)
+target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
-set_target_properties(CoreEditor PROPERTIES
+
+
+set_target_properties(IlmeeeEditor PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     VERSION ${PROJECT_VERSION}
     SOVERSION 1
-    OUTPUT_NAME "CoreEditor"
+    OUTPUT_NAME "IlmeeeEditor"
+    POSITION_INDEPENDENT_CODE ON
 )
+
 
 find_package(OpenGL REQUIRED)
 # find_package(GLEW REQUIRED)
@@ -342,12 +352,12 @@ target_include_directories(HandlerIlmeeeEngine PRIVATE
     ${DLFCN}/src
 )
 
-target_include_directories(CoreEngine PUBLIC
+target_include_directories(IlmeeeEngine PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core>
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
-target_include_directories(CoreEditor PUBLIC
+target_include_directories(IlmeeeEditor PUBLIC
     # Build interface paths
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core_editor>
     $<BUILD_INTERFACE:${SDL2_DIR}/include>
@@ -395,96 +405,96 @@ target_include_directories(IlmeeeHub PRIVATE
 )
 
 # First, find this section and modify it:
-install(TARGETS CoreEngine
-    EXPORT CoreEngineTargets    # Add this line
+install(TARGETS IlmeeeEngine
+    EXPORT IlmeeeEngineTargets    # Add this line
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
 
 # Then keep your existing export commands:
-install(EXPORT CoreEngineTargets
-    FILE CoreEngineTargets.cmake
-    NAMESPACE CoreEngine::
-    DESTINATION lib/cmake/CoreEngine
+install(EXPORT IlmeeeEngineTargets
+    FILE IlmeeeEngineTargets.cmake
+    NAMESPACE IlmeeeEngine::
+    DESTINATION lib/cmake/IlmeeeEngine
 )
 
-export(EXPORT CoreEngineTargets
-    FILE "${CMAKE_CURRENT_BINARY_DIR}/CoreEngineTargets.cmake"
-    NAMESPACE CoreEngine::
+export(EXPORT IlmeeeEngineTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineTargets.cmake"
+    NAMESPACE IlmeeeEngine::
 )
 # Install header files
 install(FILES ${HEADER_CORE} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
-set(CONFIG_INSTALL_DIR lib/cmake/CoreEngine)
+set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEngine)
 
 # Generate the config file
 configure_package_config_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/CoreEngineConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfig.cmake
+    ${CMAKE_CURRENT_SOURCE_DIR}/IlmeeeEngineConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineConfig.cmake
     INSTALL_DESTINATION ${CONFIG_INSTALL_DIR}
     PATH_VARS CONFIG_INSTALL_DIR
 )
 
 # Generate the version file
 write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfigVersion.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
 
 # Install the config files
 install(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfig.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEngineConfigVersion.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineConfigVersion.cmake
     DESTINATION ${CONFIG_INSTALL_DIR}
 )
 
 # First, find this section and modify it:
-install(TARGETS CoreEditor
-    EXPORT CoreEditorTargets    # Add this line
+install(TARGETS IlmeeeEditor
+    EXPORT IlmeeeEditorTargets    # Add this line
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
 
-install(EXPORT CoreEditorTargets
-    FILE CoreEditorTargets.cmake
-    NAMESPACE CoreEditor::
-    DESTINATION lib/cmake/CoreEditor
+install(EXPORT IlmeeeEditorTargets
+    FILE IlmeeeEditorTargets.cmake
+    NAMESPACE IlmeeeEditor::
+    DESTINATION lib/cmake/IlmeeeEditor
 )
 
-export(EXPORT CoreEditorTargets
-    FILE "${CMAKE_CURRENT_BINARY_DIR}/CoreEditorTargets.cmake"
-    NAMESPACE CoreEditor::
+export(EXPORT IlmeeeEditorTargets
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEditorTargets.cmake"
+    NAMESPACE IlmeeeEditor::
 )
 
 # Install header files
 install(FILES ${HEADER_CORE_EDITOR} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
-set(CONFIG_INSTALL_DIR lib/cmake/CoreEditor)
+set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEditor)
 
 # Generate the config file
 configure_package_config_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/CoreEditorConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfig.cmake
+    ${CMAKE_CURRENT_SOURCE_DIR}/IlmeeeEditorConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEditorConfig.cmake
     INSTALL_DESTINATION ${CONFIG_INSTALL_DIR}
     PATH_VARS CONFIG_INSTALL_DIR
 )
 
 # Generate the version file
 write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfigVersion.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEditorConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
 
 # Install the config files
 install(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfig.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/CoreEditorConfigVersion.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEditorConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEditorConfigVersion.cmake
     DESTINATION ${CONFIG_INSTALL_DIR}
 )
 
@@ -547,6 +557,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
     # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
+    wsock32
+    ws2_32
 )
 
 target_link_libraries(TestBackground PRIVATE
@@ -622,15 +634,19 @@ target_link_libraries(IlmeeeHub PRIVATE
     # GLEW::GLEW
 )
 
-target_link_libraries(CoreEditor PRIVATE
+target_link_libraries(IlmeeeEditor PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
     ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
     OpenGL::GL
     ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    wsock32
+    ws2_32
 )
 
 # Copy DLL files to output directory
 if(WIN32)
+    find_library(WSOCK32_LIBRARY wsock32)
+    find_library(WS2_32_LIBRARY ws2_32)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SDL2_DIR}/lib/x64/SDL2.dll"
@@ -650,11 +666,12 @@ if(WIN32)
             "${VULKAN_LIB}"
             $<TARGET_FILE_DIR:TestVulkan>
     )
-    add_custom_command(TARGET CoreEditor POST_BUILD
+    add_custom_command(TARGET IlmeeeEditor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SDL2_DIR}/lib/x64/SDL2.dll"
             "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
             "${GLFW}/lib-static-ucrt/glfw3.dll"
-            $<TARGET_FILE_DIR:CoreEditor>
+            "${WS}/ws2_32.dll"
+            $<TARGET_FILE_DIR:IlmeeeEditor>
     )
 endif()

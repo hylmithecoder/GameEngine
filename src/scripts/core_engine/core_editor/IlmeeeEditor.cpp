@@ -359,7 +359,7 @@ namespace IlmeeeEditor {
         ImGui::End();
     }
     // ========== C API Implementation ==========
-    // extern "C" {
+    extern "C" {
         ILMEEEDITOR_API bool EditorInit(const char* title, int width, int height) {
             try {
                 LogInfo(std::string("Initializing editor: ") + title + 
@@ -391,6 +391,43 @@ namespace IlmeeeEditor {
                 LogInfo("Editor shutdown complete");
             }
         }
-    // }
+
+        ILMEEEDITOR_API bool StartServer() {
+            if (Editor::instance) {
+                Editor::instance->connectToEngine();
+            }
+            return true;
+        }
+
+        ILMEEEDITOR_API bool SendCommandToEngine(const char* command) {
+            if (Editor::instance) {
+                return Editor::instance->sendCommandToEngine(std::string(command));
+            }
+            LogError("Editor not initialized. Call EditorInit first.");
+            return false;
+        }
+
+        ILMEEEDITOR_API bool ConnectToEngine() {
+            if (Editor::instance) {
+                return Editor::instance->connectToEngine();
+            }
+            LogError("Editor not initialized. Call EditorInit first.");
+            return false;
+        }
+    }
 
 } // namespace IlmeeeEditor
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    switch (ul_reason_for_call) {
+        case DLL_PROCESS_ATTACH:
+            IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
+            break;
+        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_DETACH:
+            break;
+        case DLL_PROCESS_DETACH:
+            IlmeeeEditor::LogInfo("IlmeeeEditor DLL unloaded");
+            break;
+    }
+    return TRUE;
+}

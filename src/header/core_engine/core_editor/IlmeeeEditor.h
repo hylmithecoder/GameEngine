@@ -14,6 +14,7 @@
 #include <glad/glad.h>
 #include <SDL.h>
 #include <imgui_impl_sdl2.h>
+#include <TCPConnection.hpp>
 
 namespace IlmeeeEditor {
 
@@ -27,6 +28,7 @@ namespace IlmeeeEditor {
         std::vector<std::unique_ptr<Project>> projects;
         std::vector<std::unique_ptr<EditorWindow>> windows;
         std::function<void()> onProjectOpenedCallback;
+        TCPConnection tcpClient;
 
     public:
         static std::unique_ptr<Editor> instance;
@@ -50,6 +52,14 @@ namespace IlmeeeEditor {
         
         // Callbacks
         void SetOnProjectOpenedCallback(const std::function<void()>& callback);
+    
+        bool connectToEngine() {
+            return tcpClient.connectToServer();
+        }
+        
+        bool sendCommandToEngine(const std::string& command) {
+            return tcpClient.sendMessage(command);
+        }
     };
     
     class ILMEEEDITOR_API Project {
@@ -160,5 +170,8 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool EditorInit(const char* title, int width, int height);
         ILMEEEDITOR_API void EditorRun();
         ILMEEEDITOR_API void EditorShutdown();
+        ILMEEEDITOR_API bool StartServer();
+        ILMEEEDITOR_API bool SendCommandToEngine(const char* command);
+        ILMEEEDITOR_API bool ConnectToEngine();
     }
 } // namespace GameEditor
