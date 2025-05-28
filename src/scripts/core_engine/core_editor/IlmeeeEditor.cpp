@@ -192,6 +192,7 @@ namespace IlmeeeEditor {
             // Update all windows
             for (auto& window : windows) {
                 if (window && window->IsOpen()) {
+                    sendCommandToEngine("UpdateWindow " + window->GetTitle());
                     window->Update();
                     window->Render();
                 }
@@ -378,10 +379,16 @@ namespace IlmeeeEditor {
         }
 
         ILMEEEDITOR_API void EditorRun() {
-            if (Editor::instance) {
-                Editor::instance->Run();
-            } else {
-                LogError("Editor not initialized. Call EditorInit first.");
+            try {                
+                LogSuccess("Hei This is a method Editor Run You Call");
+                if (Editor::instance) {
+                    Editor::instance->Run();
+                } else {
+                    LogError("Editor not initialized. Call EditorInit first.");
+                }
+            }
+            catch (const std::exception& e) {
+                LogError(std::string("Failed to run editor: ") + e.what());
             }
         }
 

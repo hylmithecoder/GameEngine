@@ -37,9 +37,12 @@ int main() {
     // Run the engine
     auto Run = dllManager.GetFunction<EngineRunFunc>(dllManager.GetEngineDLL(), "EngineRun");
     auto Shutdown = dllManager.GetFunction<EngineShutdownFunc>(dllManager.GetEngineDLL(), "EngineShutdown");
+    auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
     auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEngineDLL(), "SendCommandToEngine");
+    
     if (Run && Shutdown) {
         Run();
+        RunEditor();
         Shutdown();
         SendCommand("Exit");
     }

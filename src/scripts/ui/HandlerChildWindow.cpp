@@ -656,9 +656,14 @@ void MainWindow::RenderConsoleWindow() {
     if (ImGui::BeginTabItem("Output")) {
         selectedTab = 0;
         static char consoleBuffer[4096] = "Game initialized successfully.\nAll systems operational.\nReady to start...\n";
+        
+        std::lock_guard<std::mutex> lock(messagesMutex);
+        for (const auto& message : messages) {
+            ImGui::TextWrapped("%s", message.c_str());
+        }
         // Concatenate logFromIlmeeeEditor vector into a single string
         std::string combinedLog;
-        for (const auto& line : logFromIlmeeeEditor) {
+        for (const auto& line : messages) {
             combinedLog += line + "\n";
         }
         // Copy to buffer and ensure null-termination
@@ -666,6 +671,11 @@ void MainWindow::RenderConsoleWindow() {
         consoleBuffer[sizeof(consoleBuffer) - 1] = '\0';
         ImGui::InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer), 
                                  ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+
         ImGui::EndTabItem();
     }
     
@@ -978,4 +988,19 @@ void MainWindow::RenderPlayMenu() {
     ImGui::End();
     ImGui::PopStyleColor(1); // Pop background color
     ImGui::PopStyleVar(4);
+}
+
+void MainWindow::PushMessage(const std::string& message) {
+    std::lock_guard<std::mutex> lock(messagesMutex);
+    messages.push_back(message);
+        
+    // Limit buffer size
+    if (messages.size() > MAX_MESSAGES) {
+        messages.erase(messages.begin());
+    }
+}
+
+void MainWindow::ClearMessages() {
+    std::lock_guard<std::mutex> lock(messagesMutex);
+    messages.clear();
 }

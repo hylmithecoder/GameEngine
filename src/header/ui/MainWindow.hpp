@@ -113,6 +113,9 @@ public:
         "You can see logs here",
         "Enjoy your coding experience!"
     };
+    std::vector<std::string> messages;
+    std::mutex messagesMutex;
+    static const size_t MAX_MESSAGES = 1000;
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 
@@ -149,4 +152,10 @@ public:
     void RenderHierarchyWindow();
     void RenderSceneToolbarView(ImVec2 viewportPos, ImVec2 viewportSize);
     void RenderPlayMenu();
+    void PushMessage(const std::string& message);
+    
+    const std::vector<std::string>& getMessages() const {
+        return messages;
+    }
+    void ClearMessages();
 };

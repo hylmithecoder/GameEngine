@@ -24,6 +24,9 @@ private:
     std::thread networkThread;
     std::thread messageProcessorThread;
     std::atomic<bool> networkThreadRunning{false};
+
+    std::mutex messagesMutex;
+    static const size_t MAX_MESSAGES = 1000; // Limit buffer size
     
 public:
     ApplicationManager() {
@@ -145,38 +148,43 @@ public:
             Debug::Logger::Log("Network thread started");
             
             while (networkThreadRunning && isRunning) {
-                try {
-                    std::string message = networkManager->receiveMessage();
-                    if (!message.empty()) {
-                        Debug::Logger::Log("Received: " + message);
-                        ProcessNetworkMessage(message);
-                    }
-                    else {
-                        // If no message, check if the engine process is still running
-                        if (engineProcess.hProcess) {
-                            DWORD exitCode;
-                            if (GetExitCodeProcess(engineProcess.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-                                Debug::Logger::Log("Engine process has terminated unexpectedly", Debug::LogLevel::CRASH);
-                                shouldExit = true;
-                                break;
-                            }
-                        }
-                    }
+            try {
+                std::string message = networkManager->receiveMessage();
+                if (!message.empty()) {
+                    Debug::Logger::Log("Received: " + message);
+                    ProcessNetworkMessage(message);
                     
-                    // Send periodic heartbeat
-                    static auto lastHeartbeat = std::chrono::steady_clock::now();
-                    auto now = std::chrono::steady_clock::now();
-                    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
-                        networkManager->sendMessage("heartbeat");
-                        lastHeartbeat = now;
+                    // Push message to UI with thread safety
+                    {
+                        std::lock_guard<std::mutex> lock(messagesMutex);
+                        window->PushMessage(message);
                     }
-                    
-                    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
-                } catch (const std::exception& e) {
-                    Debug::Logger::Log("Network thread exception: " + std::string(e.what()), Debug::LogLevel::WARNING);
-                    break;
                 }
+                
+                // Check engine process
+                if (engineProcess.hProcess) {
+                    DWORD exitCode;
+                    if (GetExitCodeProcess(engineProcess.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                        Debug::Logger::Log("Engine process has terminated unexpectedly", Debug::LogLevel::CRASH);
+                        shouldExit = true;
+                        break;
+                    }
+                }
+                
+                // Heartbeat logic
+                static auto lastHeartbeat = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
+                    networkManager->sendMessage("heartbeat");
+                    lastHeartbeat = now;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            } catch (const std::exception& e) {
+                Debug::Logger::Log("Network thread exception: " + std::string(e.what()), Debug::LogLevel::WARNING);
+                break;
             }
+        }
             
             Debug::Logger::Log("Network thread ended");
         });

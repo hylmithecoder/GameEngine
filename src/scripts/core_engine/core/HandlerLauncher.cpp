@@ -13,6 +13,7 @@ typedef bool (*EngineInitFunc)(const char*, int, int);
 typedef void (*EngineRunFunc)();
 typedef void (*EngineShutdownFunc)();
 typedef bool (*EditorInitFunc)(const char*, int, int);
+typedef void (*EditorRunFunc)();
 typedef bool (*StartServerFunc)();
 typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
@@ -328,7 +329,15 @@ public:
                     dllManager.GetEditorDLL(), 
                     "ConnectToEngine"
                 );
+                auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
                 
+                if (RunEditor) {
+                    std::cout << "Running Editor..." << std::endl;
+                }
+                if (!RunEditor) {
+                    DLLManager::ShowError("Failed to find EditorRun function");
+                    return false;
+                }
                 if (!ConnectToEngine) {
                     DLLManager::ShowError("Failed to find ConnectToEngine function");
                     return false;
@@ -347,10 +356,8 @@ public:
                 );
                 
                 if (SendCommand) {
-                    SendCommand("Open Folder Now !!!\n");
+                    SendCommand("Open Folder Now !!!");
                     SendCommand("GetEngineMessage");
-                    string response = GetEngineMessage();
-                    std::cout << "Engine Response: " + response << std::endl;
                 }
                 
                 return true;

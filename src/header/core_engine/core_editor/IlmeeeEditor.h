@@ -54,10 +54,12 @@ namespace IlmeeeEditor {
         void SetOnProjectOpenedCallback(const std::function<void()>& callback);
     
         bool connectToEngine() {
+            std::cout << "Connecting to engine..." << std::endl;
             return tcpClient.connectToServer();
         }
         
         bool sendCommandToEngine(const std::string& command) {
+            std::cout << "Sending command to engine: " << command << std::endl;
             return tcpClient.sendMessage(command);
         }
     };
