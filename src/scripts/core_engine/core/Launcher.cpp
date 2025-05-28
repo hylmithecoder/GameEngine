@@ -1,90 +1,49 @@
-// Launcher.cpp
 #include <Windows.h>
 #include <iostream>
 #include <thread>
 #include <chrono>
-
-// Function typedefs
-typedef bool (*EngineInitFunc)(const char*, int, int);
-typedef void (*EngineRunFunc)();
-typedef void (*EngineShutdownFunc)();
-typedef bool (*EditorInitFunc)(const char*, int, int);
-
-void ShowLoadingWindow() {
-    // Simple fake loading window (replace with your own SDL2 or Win32 window)
-    std::cout << "============================\n";
-    std::cout << "   Starting Game Engine...   \n";
-    std::cout << "============================\n";
-    for (int i = 0; i < 5; ++i) {
-        std::cout << ".";
-        std::cout.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    std::cout << "\nDone!\n";
-}
+#include <string>
+#include <functional>
+#include <CommCtrl.h>
+#include "HandlerLauncher.cpp"
+using namespace std;
 
 int main() {
-    HMODULE engineDLL = LoadLibraryA("bin/libIlmeeeEngine.dll");
-    if (!engineDLL) {
-        MessageBoxA(nullptr, "Failed to load libIlmeeeEngine.dll", "Launcher", MB_ICONERROR);
+    // Initialize COM for modern UI effects
+    CoInitialize(nullptr);
+    
+    LoadingWindow loadingWindow;
+    DLLManager dllManager;
+    
+    if (!loadingWindow.Create()) {
+        DLLManager::ShowError("Failed to create loading window");
         return -1;
     }
-
-    HMODULE editorDLL = LoadLibraryA("bin/libIlmeeeEditor.dll");
-    if (!editorDLL) {
-        MessageBoxA(nullptr, "Failed to load IlmeeeEditor.dll", "Launcher", MB_ICONERROR);
-        FreeLibrary(engineDLL);
+    
+    loadingWindow.Show();
+    loadingWindow.StartLoadingAnimation();
+    
+    // Execute loading sequence
+    LaunchSequence sequence(loadingWindow, dllManager);
+    bool success = sequence.Execute();
+    
+    loadingWindow.Hide();
+    
+    if (!success) {
+        CoUninitialize();
         return -1;
     }
-
-    EngineInitFunc Init = (EngineInitFunc)GetProcAddress(engineDLL, "EngineInit");
-    EngineRunFunc Run = (EngineRunFunc)GetProcAddress(engineDLL, "EngineRun");
-    EngineShutdownFunc Shutdown = (EngineShutdownFunc)GetProcAddress(engineDLL, "EngineShutdown");
-    EditorInitFunc InitEditor = (EditorInitFunc)GetProcAddress(editorDLL, "EditorInit");
-
-    if (!Init || !Run || !Shutdown) {
-        MessageBoxA(nullptr, "Failed to find one or more engine functions", "Launcher", MB_ICONERROR);
-        return -1;
-    }
-
-    ShowLoadingWindow();
-
-    if (!Init("Ilmee Game Engine", 1280, 720)) {
-        MessageBoxA(nullptr, "Engine failed to initialize", "Launcher", MB_ICONERROR);
-        return -1;
-    }
-
-    // Start engine's TCP server
-    typedef bool (*StartServerFunc)();
-    StartServerFunc StartServer = (StartServerFunc)GetProcAddress(editorDLL, "StartServer");
-    if (!StartServer || !StartServer()) {
-        MessageBoxA(nullptr, "Failed to start engine server", "Launcher", MB_ICONERROR);
-        return -1;
-    }
-    if (!InitEditor("Ilmee Editor", 1280, 720)) {
-        MessageBoxA(nullptr, "Editor failed to initialize", "Launcher", MB_ICONERROR);
+    
+    // Run the engine
+    auto Run = dllManager.GetFunction<EngineRunFunc>(dllManager.GetEngineDLL(), "EngineRun");
+    auto Shutdown = dllManager.GetFunction<EngineShutdownFunc>(dllManager.GetEngineDLL(), "EngineShutdown");
+    auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEngineDLL(), "SendCommandToEngine");
+    if (Run && Shutdown) {
+        Run();
         Shutdown();
-        return -1;
+        SendCommand("Exit");
     }
-
-    // Connect editor to engine
-    typedef bool (*ConnectToEngineFunc)();
-    ConnectToEngineFunc ConnectToEngine = (ConnectToEngineFunc)GetProcAddress(editorDLL, "ConnectToEngine");
-    if (!ConnectToEngine || !ConnectToEngine()) {
-        MessageBoxA(nullptr, "Failed to connect editor to engine", "Launcher", MB_ICONERROR);
-        return -1;
-    }
-    typedef bool (*SendCommandToEngineFunc)(const char*);
-    SendCommandToEngineFunc SendCommandToEngine = (SendCommandToEngineFunc)GetProcAddress(editorDLL, "SendCommandToEngine");
-    if (!SendCommandToEngine || !SendCommandToEngine("Halo From Launcher.cpp")) {
-        MessageBoxA(nullptr, "Failed to send initial command to engine", "Launcher", MB_ICONERROR);
-        return -1;
-    }
-
-    Run();
-    Shutdown();
-
-    FreeLibrary(engineDLL);
-    FreeLibrary(editorDLL);
+    
+    CoUninitialize();
     return 0;
 }

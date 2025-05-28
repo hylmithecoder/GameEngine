@@ -60,6 +60,17 @@ public:
         }
         return "";
     }
+    
+    void stop() {
+        isRunning_ = false;
+        if (listenThread_.joinable()) {
+            listenThread_.join();
+        }
+        for (auto& socket : clientSockets_) {
+            closesocket(socket);
+        }
+        closesocket(socket_);
+    }
 
 private:
     void listenForConnections() {
@@ -83,17 +94,6 @@ private:
             else break;
         }
         closesocket(clientSocket);
-    }
-
-    void stop() {
-        isRunning_ = false;
-        if (listenThread_.joinable()) {
-            listenThread_.join();
-        }
-        for (auto& socket : clientSockets_) {
-            closesocket(socket);
-        }
-        closesocket(socket_);
     }
 
     SOCKET socket_;

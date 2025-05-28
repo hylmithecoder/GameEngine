@@ -1,96 +1,96 @@
 #define _WIN32_WINNT 0x0A00
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
-// #include <SDL_syswm.h>
 #include <SDL_ttf.h>
-#include "header/ui/MainWindow.hpp"
-#include "scripts/ui/Check_Environment.cpp"
-#include <NetworkManager.hpp>
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <memory>
+#include <csignal>
+#include <vector>
+#include <functional>
+#include "scripts/ApplicationManager.cpp"
 #include "SceneRenderer2D.hpp"
 #include <Debugger.hpp>
 
-NetworkManager networkManager;
+// Global state management
 
-void LaunchGame() {
-    STARTUPINFOA si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
 
-    // Start TCP server before launching the game
-    if (!networkManager.startServer()) {
-        MessageBoxA(0, "Failed to start network server", "Error", MB_OK);
-        return;
+// Global application manager
+std::unique_ptr<ApplicationManager> g_app;
+
+// Signal handlers for proper cleanup
+void SignalHandler(int signal) {
+    Debug::Logger::Log("Received signal: " + std::to_string(signal));
+    if (g_app) {
+        g_app->Shutdown();
     }
+    exit(signal);
+}
 
-    std::string command = "HandlerIlmeeeEngine.exe -project MyGameProject";
-    BOOL result = CreateProcessA(
-        NULL, command.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi
-    );
-
-    if (result) {
-        // Wait for connection establishment
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        
-        // Send initial configuration
-        networkManager.sendMessage("init:MyGameProject");
-        
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    } else {
-        MessageBoxA(0, "Failed to launch HandlerIlmeeeEngine.exe", "Error", MB_OK);
+// Windows console handler for Ctrl+C, close button, etc.
+BOOL WINAPI ConsoleHandler(DWORD signal) {
+    Debug::Logger::Log("Console event: " + std::to_string(signal));
+    if (g_app) {
+        g_app->Shutdown();
     }
+    return TRUE;
 }
 
 int main(int argc, char* argv[]) {
-    // Check environment
-    LaunchGame();
-    for (int i = 0; i < 5; ++i) {
-        std::cout << "";
-        std::cout.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    Environment env;
-    env.detectDriveInfo();
-    env.printEnvironment();
-    env.printDriveInfo();
-    av_log_set_level(AV_LOG_ERROR);
+    // Set up signal handlers
+    std::signal(SIGINT, SignalHandler);
+    std::signal(SIGTERM, SignalHandler);
+    std::signal(SIGABRT, SignalHandler);
+    SetConsoleCtrlHandler(ConsoleHandler, TRUE);
     
-    // SceneRenderer2D renderer(1280, 720);
-
-
-    // assets.load_assets();
-    // Init SDL
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        SDL_Log("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+    try {
+        Debug::Logger::Log("=== Ilmee Editor Starting ===");
+        
+        // Create application manager
+        g_app = std::make_unique<ApplicationManager>();
+        
+        // Launch engine
+        if (!g_app->LaunchEngine()) {
+            Debug::Logger::Log("Failed to launch engine", Debug::LogLevel::CRASH);
+            
+            return 1;
+        }
+        
+        // Initialize application
+        if (!g_app->Initialize()) {
+            Debug::Logger::Log("Failed to initialize application", Debug::LogLevel::CRASH);
+            return 1;
+        }
+        
+        
+        // Run main loop
+        g_app->Run();
+        
+        Debug::Logger::Log("=== Ilmee Editor Shutting Down ===");
+        
+        // Explicit shutdown before cleanup
+        g_app->Shutdown();
+        g_app.reset();
+        Debug::Logger::Log("Application manager cleaned up");
+        g_app = nullptr;
+        
+        Debug::Logger::Log("=== Ilmee Editor Terminated Successfully ===");
+        return 0;
+    } catch (const std::exception& e) {
+        Debug::Logger::Log("Unhandled exception: " + std::string(e.what()), Debug::LogLevel::CRASH);
+        if (g_app) {
+            g_app->Shutdown();
+            g_app.reset();
+            g_app = nullptr;
+        }
         return 1;
     }
-
-    MainWindow window("Ilmeee Editor", 1280, 720);
-
-    char cwd[512];
-    _getcwd(cwd, sizeof(cwd));
-    std::cout << "Working Directory: " << cwd << std::endl;
-
-    // window.assets.load_assets();
-
-    while (window.running()) {
-
-        std::string message = networkManager.receiveMessage();
-        if (!message.empty()) {
-            Debug::Logger::Log("Received message: " + message);
-        }
-        std::string sendMessage = "Halo World";
-        networkManager.sendMessage("Halo World");
-
-        window.handleEvents();
-        window.update();
-        window.render();
-    }
-
-    SDL_Quit();
+    
+    // Cleanup will be called automatically by ApplicationManager destructor
+    g_app.reset();
+    
+    Debug::Logger::Log("=== Ilmee Editor Terminated ===");
     return 0;
 }
-
-
-// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-//     return main(__argc, __argv);
-// }

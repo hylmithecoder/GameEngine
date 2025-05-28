@@ -9,28 +9,27 @@ option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # Set output directories specifically for library targets
 
 # Compiler-specific options
-if(MSVC)
-    add_compile_options(/W4)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-else()
-    add_compile_options(-Wall -Wextra -pedantic)
-endif()
+# if(MSVC)
+#     add_compile_options(/W4)
+#     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+# else()
+#     add_compile_options(-Wall -Wextra -pedantic)
+# endif()
 
 # Add SDL2 and SDL2_ttf paths
 set(SDL2_DIR "C:/SDL2")
 set(SDL2_TTF_DIR "C:/SDL2_ttf") 
-set(STB "D:/stb")
+set(STB "E:/stb")
 set(GLFW "C:/glfw3.4")
-set(FFMPEG_DIR "D:/FFmpeg")
+set(FFMPEG_DIR "E:/FFmpeg")
 set(LIBRARY "C:/msys64/mingw64/bin")
 set(GLES2 ${GLFW}/)
-set(NFD "D:/nativefiledialog-extended")
-set(GLM "D:/glm")
+set(NFD "E:/nativefiledialog-extended")
+set(GLM "E:/glm")
 set(VULKAN_SDK "C:/msys64/mingw64")
 set(VULKAN_DIR "C:/vulkan")
 set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
-set(DLFCN "D:/dlfcn-win32")
-set(WS "D:/ws2_32")
+set(DLFCN "E:/dlfcn-win32")
 # set(GLEW "C:/glew-2.1.0")
 
 # Add source files
@@ -40,6 +39,7 @@ set(SOURCES
     src/scripts/ui/MainWindow.cpp
     # src/RocketInterfaces.cpp
     # src/SimpleRenderer.cpp
+    src/scripts/ApplicationManager.cpp
     src/scripts/ui/SecondaryWindow.cpp
     src/scripts/ui/Check_Environment.cpp
     src/scripts/ui/VideoPlayer.cpp
@@ -201,7 +201,7 @@ set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 
-add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp)
+add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp src/scripts/core_engine/core/HandlerLauncher.cpp)
 target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
 add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
@@ -618,6 +618,8 @@ target_link_libraries(TestVulkan PRIVATE
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
     ${DLFCN}/build/lib/libdl.dll.a
+    msimg32  # For GradientFill
+    comctl32 # For InitCommonControlsEx
 )
 
 target_link_libraries(IlmeeeHub PRIVATE
@@ -671,7 +673,6 @@ if(WIN32)
             "${SDL2_DIR}/lib/x64/SDL2.dll"
             "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
             "${GLFW}/lib-static-ucrt/glfw3.dll"
-            "${WS}/ws2_32.dll"
             $<TARGET_FILE_DIR:IlmeeeEditor>
     )
 endif()

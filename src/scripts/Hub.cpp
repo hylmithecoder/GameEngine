@@ -1,6 +1,7 @@
 #define _WIN32_WINNT 0x0A00
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
+#include <SDL_main.h>
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_sdlrenderer2.h>
@@ -9,6 +10,8 @@
 #include <algorithm>
 #include <iostream>
 #include <string>
+#include <nfd.hpp>
+#include <filesystem>
 #include <ctime>
 using namespace std;
 
@@ -155,7 +158,7 @@ public:
         
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.2f, 1.0f));
         if (ImGui::Button("Open Project", ImVec2(-1, 35))) {
-            // Open file dialog
+            OpenFolder();
         }
         ImGui::PopStyleColor();
         
@@ -392,7 +395,10 @@ public:
                 if (ImGui::MenuItem("New Project", "Ctrl+N")) {
                     showCreateDialog = true;
                 }
-                if (ImGui::MenuItem("Open Project", "Ctrl+O")) {}
+                if (ImGui::MenuItem("Open Project", "Ctrl+O")) 
+                {
+                    OpenFolder();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Exit", "Alt+F4")) {}
                 ImGui::EndMenu();
@@ -438,7 +444,7 @@ public:
                 ImGui::Text("Advanced Project Management Tool");
                 ImGui::Separator();
                 ImGui::Text("Built with SDL2 and Dear ImGui");
-                ImGui::Text("© 2024 Ilmee Development");
+                ImGui::Text("© 2025 Ilmee Development");
                 if (ImGui::Button("Close")) {
                     showAbout = false;
                 }
@@ -447,6 +453,24 @@ public:
         }
         
         ImGui::End();
+    }
+
+    void OpenFolder()
+    {
+        NFD::Guard nfdGuard;
+
+        // auto-freeing memory
+        NFD::UniquePath outPath;
+
+        // show the dialog
+        nfdresult_t result = NFD::PickFolder(outPath);
+        if (result == NFD_OKAY) {
+            cout << outPath.get() << endl;
+        } else if (result == NFD_CANCEL) {
+            cout << "User pressed cancel." << endl;
+        } else {
+            cout << "Error: " << NFD::GetError() << endl;
+        }
     }
 };
 
@@ -462,7 +486,7 @@ public:
     bool Initialize() {
         if (SDL_Init(SDL_INIT_VIDEO) < 0) return false;
         
-        window = SDL_CreateWindow("Ilmee Hub", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 980, 500, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        window = SDL_CreateWindow("Ilmee Hub", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1000, 580, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
         if (!window) return false;
         
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -480,6 +504,7 @@ public:
         ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
         ImGui_ImplSDLRenderer2_Init(renderer);
         
+        SetWindowIcon();
         return true;
     }
     
@@ -487,6 +512,16 @@ public:
         while (running) {
             HandleEvents();
             Render();
+        }
+    }
+
+    void SetWindowIcon() {
+        SDL_Surface* icon = SDL_LoadBMP("assets/icons/app_icon.bmp");
+        if (icon) {
+            SDL_SetWindowIcon(window, icon);
+            SDL_FreeSurface(icon);
+        } else {
+            SDL_Log("Failed to load icon: %s", SDL_GetError());
         }
     }
     

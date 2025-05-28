@@ -6,6 +6,7 @@
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include <SDL_ttf.h>
+#include <vector>
 #include <SceneRenderer2D.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
@@ -106,6 +107,12 @@ public:
     bool showConsole = true;
     bool showHierarchy = true;
     string currentFilter = "";
+    vector<string> logFromIlmeeeEditor = {
+        "Welcome to Ilmeee Editor",
+        "This is a log message",
+        "You can see logs here",
+        "Enjoy your coding experience!"
+    };
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 

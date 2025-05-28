@@ -656,6 +656,14 @@ void MainWindow::RenderConsoleWindow() {
     if (ImGui::BeginTabItem("Output")) {
         selectedTab = 0;
         static char consoleBuffer[4096] = "Game initialized successfully.\nAll systems operational.\nReady to start...\n";
+        // Concatenate logFromIlmeeeEditor vector into a single string
+        std::string combinedLog;
+        for (const auto& line : logFromIlmeeeEditor) {
+            combinedLog += line + "\n";
+        }
+        // Copy to buffer and ensure null-termination
+        strncpy(consoleBuffer, combinedLog.c_str(), sizeof(consoleBuffer) - 1);
+        consoleBuffer[sizeof(consoleBuffer) - 1] = '\0';
         ImGui::InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer), 
                                  ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
         ImGui::EndTabItem();
