@@ -15,7 +15,7 @@
 #include <SDL.h>
 #include <imgui_impl_sdl2.h>
 #include <TCPConnection.hpp>
-
+using namespace std;
 namespace IlmeeeEditor {
 
     // Forward declarations
@@ -57,10 +57,22 @@ namespace IlmeeeEditor {
             std::cout << "Connecting to engine..." << std::endl;
             return tcpClient.connectToServer();
         }
+
+        bool startServer() {
+            std::cout << "Starting server..." << std::endl;
+            return tcpClient.startServer();
+        }
         
         bool sendCommandToEngine(const std::string& command) {
             std::cout << "Sending command to engine: " << command << std::endl;
             return tcpClient.sendMessage(command);
+        }
+
+        std::string receiveMessageFromEngine() {
+            // std::cout << "Receiving message from engine..." << std::endl;
+            std::string msg = tcpClient.receiveMessage();
+            std::cout << "Message: " << msg << std::endl; 
+            return "Still Empty";
         }
     };
     
@@ -175,5 +187,7 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool StartServer();
         ILMEEEDITOR_API bool SendCommandToEngine(const char* command);
         ILMEEEDITOR_API bool ConnectToEngine();
+        ILMEEEDITOR_API string GetCommandFromEngine();
+        ILMEEEDITOR_API string TestString();
     }
 } // namespace GameEditor

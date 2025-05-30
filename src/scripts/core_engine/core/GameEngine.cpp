@@ -76,6 +76,7 @@ namespace GameEngine {
         const float targetFrameTime = 1.0f / targetFPS;
         
         while (currentState == EngineState::Running) {
+            // LogSuccess("This is Looping from GameEngine.cpp");
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
             lastTime = currentTime;

@@ -85,7 +85,7 @@ public:
                 Debug::Logger::Log("Working Directory: " + std::string(cwd));
             }
             
-            isRunning = true;
+            // isRunning = true;
             Debug::Logger::Log("Application Manager initialized successfully");
             return true;
             
@@ -97,14 +97,20 @@ public:
     
     bool LaunchEngine() {
         try {
-            Debug::Logger::Log("Starting network server...");
+            Debug::Logger::Log("[IlmeeeEditor] Starting network server...");
+            isRunning = true;
             if (!networkManager->startServer()) {
                 Debug::Logger::Log("Failed to start network server", Debug::LogLevel::CRASH);
                 MessageBoxA(0, "Failed to start network server", "Error", MB_OK | MB_ICONERROR);
                 return false;
             }
+            // In your engine initialization
+            if (!networkManager->connectToServer()) {
+                Debug::Logger::Log("Failed to connect to editor", Debug::LogLevel::CRASH);
+                return false;
+            }
             
-            Debug::Logger::Log("Launching engine process...");
+            Debug::Logger::Log("[IlmeeeEditor] Launching engine process...");
             STARTUPINFOA si = { sizeof(si) };
             std::string command = "HandlerIlmeeeEngine.exe -project MyGameProject";
             
@@ -124,12 +130,12 @@ public:
             }
             
             // Wait for connection establishment
-            Debug::Logger::Log("Waiting for engine connection...");
+            Debug::Logger::Log("[IlmeeeEditor] Waiting for engine connection...");
             std::this_thread::sleep_for(std::chrono::seconds(1));
             
             // Send initial configuration
             networkManager->sendMessage("init:MyGameProject");
-            Debug::Logger::Log("Engine launched successfully");
+            Debug::Logger::Log("[IlmeeeEditor] Engine launched successfully");
             
             // Start network processing thread
             StartNetworkThread();
@@ -145,10 +151,11 @@ public:
     void StartNetworkThread() {
         networkThreadRunning = true;
         networkThread = std::thread([this]() {
-            Debug::Logger::Log("Network thread started");
+            Debug::Logger::Log("[IlmeeeEditor] Network thread started");
             
             while (networkThreadRunning && isRunning) {
             try {
+                // Debug::Logger::Log("Wait for network message...");
                 std::string message = networkManager->receiveMessage();
                 if (!message.empty()) {
                     Debug::Logger::Log("Received: " + message);
@@ -156,8 +163,8 @@ public:
                     
                     // Push message to UI with thread safety
                     {
-                        std::lock_guard<std::mutex> lock(messagesMutex);
-                        window->PushMessage(message);
+                        // std::lock_guard<std::mutex> lock(messagesMutex);
+                        // window->PushMessage(message);
                     }
                 }
                 
@@ -203,6 +210,7 @@ public:
             Debug::Logger::Log("Cannot run - application not properly initialized", Debug::LogLevel::CRASH);
             return;
         }
+
         string message = networkManager->receiveMessage();
         if (!message.empty()) {
             Debug::Logger::Log("Received initial message: " + message);
@@ -210,8 +218,9 @@ public:
             Debug::Logger::Log("No initial message received from network");
         }
         
-        Debug::Logger::Log("Starting main application loop...");
+        Debug::Logger::Log("Starting main application loop...", Debug::LogLevel::SUCCESS);
         
+        // This is the main application loop
         while (window->running() && isRunning && !shouldExit) {
             try {
                 // Handle window events
@@ -264,7 +273,7 @@ public:
 
         // Execute cleanup tasks in specific order
         CleanupNetwork();
-        CleanupEngine();
+        // CleanupEngine();
         CleanupWindow();
         CleanupSDL();
         Debug::Logger::Log("Application shutdown complete");

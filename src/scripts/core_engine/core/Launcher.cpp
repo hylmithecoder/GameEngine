@@ -7,8 +7,11 @@
 #include <CommCtrl.h>
 #include "HandlerLauncher.cpp"
 using namespace std;
+using namespace Debug;
 
-int main() {
+typedef string (*TestString)();
+typedef string (*ReceivedMessages)();
+int main(int argc, char* argv[]) {
     // Initialize COM for modern UI effects
     CoInitialize(nullptr);
     
@@ -37,16 +40,47 @@ int main() {
     // Run the engine
     auto Run = dllManager.GetFunction<EngineRunFunc>(dllManager.GetEngineDLL(), "EngineRun");
     auto Shutdown = dllManager.GetFunction<EngineShutdownFunc>(dllManager.GetEngineDLL(), "EngineShutdown");
-    auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
-    auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEngineDLL(), "SendCommandToEngine");
+    // This not working
+    // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
+    SendCommandToEngineFunc SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEngineDLL(), "SendCommandToEngine");
     
-    if (Run && Shutdown) {
-        Run();
-        RunEditor();
-        Shutdown();
-        SendCommand("Exit");
+    TestString Test = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
+    if (Test) {
+        Logger::Log("Test: " + Test(), LogLevel::SUCCESS);
     }
     
+    ReceivedMessages messages = dllManager.GetFunction<ReceivedMessages>(dllManager.GetEditorDLL(), "GetCommandFromEngine");
+    if (messages)
+    {
+        Logger::Log("Pesan Di terima dari Editor", LogLevel::SUCCESS);
+        Logger::Log("Messages: " + messages(), LogLevel::SUCCESS);
+    }
+
+    if (Run && Shutdown) {
+        cout << "Running engine..." << endl;
+        // std::vector<std::string> messages = sequence.GetPendingMessages();
+        // for (const auto& msg : messages) {
+        //     cout << msg << endl;
+        // }
+        while (true)
+        {
+            SendCommand("Say Hi From Runtime");
+            Run();
+        }
+        // cout << "After Run" << endl;
+        // thread editorThread([&]() { RunEditor(); });
+        // editorThread.join();
+        // Shutdown();
+        // SendCommand("Exit");
+        // RunEditor();
+        // Shutdown();
+        // while (true)
+        // {
+        //     SendCommand("Hallo Guys if you see this in runtime this is just loop for test");
+        // }
+    }
+    cout << "After Run" << endl;
+    Shutdown();
     CoUninitialize();
     return 0;
 }

@@ -5,6 +5,11 @@
 #include <string>
 #include <functional>
 #include <CommCtrl.h>
+#include <atomic>
+#include <Debugger.hpp>
+#include <mutex>
+#include <queue>
+using namespace Debug;
 using namespace std;
 #pragma comment(lib, "comctl32.lib")
 
@@ -17,7 +22,8 @@ typedef void (*EditorRunFunc)();
 typedef bool (*StartServerFunc)();
 typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
-typedef string (*GetReceiveCommandFunc)();
+typedef string (*GetCommandFunc)();
+typedef string (*TestString)();
 
 // Loading window class
 class LoadingWindow {
@@ -282,8 +288,77 @@ private:
     };
     
     std::vector<LoadingStep> steps;
+    std::atomic<bool> messageThreadRunning{false};
+    std::thread messagePollingThread;
+    std::queue<std::string> messageQueue;
+    std::mutex queueMutex;
+    
+    void StartMessagePolling() {
+        messageThreadRunning = true;
+        Logger::Log("Starting message polling...", LogLevel::SUCCESS);
+
+        TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
+        if (text)
+        {
+            Logger::Log(text(), LogLevel::SUCCESS);
+        }
+
+        // GetCommandFunc text = dllManager.GetFunction<GetCommandFunc>(dllManager.GetEditorDLL(), "GetCommandFromEngine");
+        // if (text)
+        // {
+        //     Logger::Log(text(), LogLevel::SUCCESS);
+        // }
+        messagePollingThread = std::thread([this]() {
+            auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
+                dllManager.GetEditorDLL(), 
+                "GetCommandFromEngine"
+            );
+            
+            // TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
+            // if (text)
+            // {
+            //     Logger::Log(text(), LogLevel::SUCCESS);
+            // }
+
+            if (!GetReceiveCommand) {
+                std::cout << "Failed to initialize message polling: GetReceiveCommand not found" << std::endl;
+                return;
+            }
+            else 
+            {
+                std::cout << "Message polling initialized" << std::endl;
+            }
+
+            while (messageThreadRunning) {
+                try {
+                    std::string message = GetReceiveCommand();
+                    if (!message.empty()) {
+                        // Store message in thread-safe queue
+                        std::lock_guard<std::mutex> lock(queueMutex);
+                        messageQueue.push(message);
+                        std::cout << " Received message: " << message << std::endl;
+                        std::cout << "Total messages: " << messageQueue.size() << std::endl;
+                    }
+                    
+                    // Prevent tight polling
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                } catch (const std::exception& e) {
+                    std::cerr << "Message polling error: " << e.what() << std::endl;
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+            }
+        });
+    }
+
+    void StopMessagePolling() {
+        messageThreadRunning = false;
+        if (messagePollingThread.joinable()) {
+            messagePollingThread.join();
+        }
+    }
     
 public:
+    // Ui loading sequence
     LaunchSequence(LoadingWindow& window, DLLManager& dll) 
         : loadingWindow(window), dllManager(dll) {
         
@@ -301,11 +376,11 @@ public:
                     return false;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-                return Init("Ilmee Game Engine", 1280, 720);
+                return Init("My First Project", 1280, 720);
             }, 30},
             
-            {"Starting Engine Server...", [&]() {
-                auto StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
+            {"Starting Editor Server...", [&]() {
+                StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
                 if (!StartServer) {
                     DLLManager::ShowError("Failed to find StartServer function");
                     return false;
@@ -329,35 +404,28 @@ public:
                     dllManager.GetEditorDLL(), 
                     "ConnectToEngine"
                 );
-                auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
                 
-                if (RunEditor) {
-                    std::cout << "Running Editor..." << std::endl;
-                }
-                if (!RunEditor) {
-                    DLLManager::ShowError("Failed to find EditorRun function");
-                    return false;
-                }
                 if (!ConnectToEngine) {
                     DLLManager::ShowError("Failed to find ConnectToEngine function");
                     return false;
                 }
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(400));
                 if (!ConnectToEngine()) {
                     DLLManager::ShowError("Failed to connect editor to engine");
                     return false;
                 }
                 
-                // Send and receive test message
+                // Start message polling after successful connection
+                StartMessagePolling();
+                
+                // Test message
                 auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
                     dllManager.GetEditorDLL(), 
                     "SendCommandToEngine"
                 );
                 
                 if (SendCommand) {
-                    SendCommand("Open Folder Now !!!");
-                    SendCommand("GetEngineMessage");
+                    SendCommand("[HandlerLauncher] Communication initialized");
                 }
                 
                 return true;
@@ -365,10 +433,11 @@ public:
         };
     }
 
+    // Dont Use Like This is not safe TODO: You should create a string method with asyncron to handle receive message from Ui Editor
     string GetEngineMessage() {
-        auto GetReceiveCommand = dllManager.GetFunction<GetReceiveCommandFunc>(
+        auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
             dllManager.GetEditorDLL(), 
-            "GetReceiveCommand"
+            "GetCommandFromEngine"
         );
         
         if (!GetReceiveCommand) {
@@ -424,5 +493,23 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
         return true;
+    }
+    
+    std::vector<std::string> GetPendingMessages() {
+        std::vector<std::string> messages;
+        std::lock_guard<std::mutex> lock(queueMutex);
+        
+        while (!messageQueue.empty()) {
+            messages.push_back(messageQueue.front());
+            messageQueue.pop();
+        }
+        
+        return messages;
+    }
+
+    // Modify the destructor to ensure clean shutdown
+    ~LaunchSequence() {
+        StopMessagePolling();
+        std::cout  << "Destroying LaunchSequence" << std::endl;
     }
 };

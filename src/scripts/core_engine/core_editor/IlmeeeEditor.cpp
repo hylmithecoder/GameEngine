@@ -176,7 +176,7 @@ namespace IlmeeeEditor {
     }
 
     void Editor::Initialize() {
-        LogInfo("Initializing IlmeeeEditor...");
+        // LogInfo("Initializing IlmeeeEditor...");
         
         // Initialize ImGui context if not already done
         // This would typically be done in the main application
@@ -197,6 +197,7 @@ namespace IlmeeeEditor {
                     window->Render();
                 }
             }
+            std::this_thread::sleep_for(chrono::milliseconds(16));
 
             // Remove closed windows
             windows.erase(
@@ -401,7 +402,7 @@ namespace IlmeeeEditor {
 
         ILMEEEDITOR_API bool StartServer() {
             if (Editor::instance) {
-                Editor::instance->connectToEngine();
+                Editor::instance->startServer();
             }
             return true;
         }
@@ -421,15 +422,32 @@ namespace IlmeeeEditor {
             LogError("Editor not initialized. Call EditorInit first.");
             return false;
         }
-    }
 
+        ILMEEEDITOR_API string GetCommandFromEngine() {
+            if (Editor::instance) {
+                std::string command = Editor::instance->receiveMessageFromEngine();  // Make sure this returns string
+                return command;
+            }
+            // LogError("Editor not initialized. Call EditorInit first.");
+            return "Still Empty";
+        }
+
+        ILMEEEDITOR_API string TestString() {
+            // LogWarning("Hello from libIlmeeeEditor.dll");
+            return "Hello from libIlmeeeEditor.dll";
+        }
+    }
 } // namespace IlmeeeEditor
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH:
             IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
             break;
-        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_ATTACH: {
+            IlmeeeEditor::LogSuccess("This is runtime DLL");
+            IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
+            break;
+        }
         case DLL_THREAD_DETACH:
             break;
         case DLL_PROCESS_DETACH:

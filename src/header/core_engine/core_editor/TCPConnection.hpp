@@ -71,7 +71,7 @@ public:
             closesocket(socket_);
             return false;
         }
-        cout << "Connected To Server: " << inet_ntoa(clientService.sin_addr) << ":" << ntohs(clientService.sin_port) << endl;
+        cout << "Connected To Server: " << inet_ntoa(clientService.sin_addr) << ":" << ntohs(clientService.sin_port) << " Family: " << clientService.sin_family << endl;
         isConnected_ = true;
         return true;
     }
@@ -91,6 +91,13 @@ public:
             return std::string(buffer, result);
         }
         return "";
+        // std::lock_guard<std::mutex> lock(receiveMutex_);
+        // if (!messageQueue_.empty()) {
+        //     std::string msg = messageQueue_.front();
+        //     messageQueue_.pop();
+        //     return msg;
+        // }
+        // return "";
     }
 
 private:
@@ -103,5 +110,7 @@ private:
 
     SOCKET socket_;
     bool isConnected_;
+    mutex receiveMutex_;
+    queue<std::string> messageQueue_;
 };
 } // namespace IlmeeeEditor

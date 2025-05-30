@@ -45,9 +45,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGABRT, SignalHandler);
     SetConsoleCtrlHandler(ConsoleHandler, TRUE);
     
-    try {
-        Debug::Logger::Log("=== Ilmee Editor Starting ===");
-        
+    try {        
         // Create application manager
         g_app = std::make_unique<ApplicationManager>();
         
@@ -67,8 +65,6 @@ int main(int argc, char* argv[]) {
         
         // Run main loop
         g_app->Run();
-        
-        Debug::Logger::Log("=== Ilmee Editor Shutting Down ===");
         
         // Explicit shutdown before cleanup
         g_app->Shutdown();

@@ -120,6 +120,12 @@ set(SOURCE_TEST_GLSL
     src/scripts/test_glsl.cpp
 )
 
+set(SOURCE_HANDLER
+    src/scripts/core_engine/core/Launcher.cpp 
+    src/scripts/core_engine/core/HandlerLauncher.cpp
+    src/header/core_engine/Debugger.hpp
+)
+
 # Add ImGui source files
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
 set(IMGUI_SOURCES
@@ -201,7 +207,7 @@ set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 
-add_executable(HandlerIlmeeeEngine src/scripts/core_engine/core/Launcher.cpp src/scripts/core_engine/core/HandlerLauncher.cpp)
+add_executable(HandlerIlmeeeEngine ${SOURCE_HANDLER})
 target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
 add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
@@ -350,6 +356,7 @@ target_include_directories(TestVulkan PRIVATE
 
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     ${DLFCN}/src
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
 )
 
 target_include_directories(IlmeeeEngine PUBLIC
