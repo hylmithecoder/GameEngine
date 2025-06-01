@@ -6,6 +6,7 @@
 #include <queue>
 #include <mutex>
 #include <Debugger.hpp>
+using namespace std;
 #pragma comment(lib, "ws2_32.lib")
 
 class NetworkManager {
@@ -66,30 +67,43 @@ public:
     }
 
     bool connectToServer() {
-        socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socket_ == INVALID_SOCKET) {
-            Debug::Logger::Log("Failed to create client socket", Debug::LogLevel::CRASH);
+        socketCore_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (socketCore_ == INVALID_SOCKET) {
+            int errorCode = WSAGetLastError();
+            Debug::Logger::Log("Failed to create client socket: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
             return false;
         }
 
         sockaddr_in clientService;
         clientService.sin_family = AF_INET;
-        InetPton(AF_INET, "127.0.0.1", &clientService.sin_addr.s_addr);
-        clientService.sin_port = htons(PORT);
-
-        if (connect(socket_, (SOCKADDR*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
-            Debug::Logger::Log("Connection failed", Debug::LogLevel::CRASH);
-            closesocket(socket_);
+        if (InetPton(AF_INET, "127.0.0.1", &clientService.sin_addr.s_addr) == 0) {
+            int errorCode = WSAGetLastError();
+            Debug::Logger::Log("Failed to convert IP address: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
             return false;
+        }
+        clientService.sin_port = htons(27016);
+
+        try {            
+            if (connect(socketCore_, (SOCKADDR*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
+                int errorCode = WSAGetLastError();
+                Debug::Logger::Log("Connection failed: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
+                closesocket(socketCore_);
+                return false;
+            }
+        }
+        catch (const std::exception& e) {
+            Debug::Logger::Log("Exception occurred during connection: " + std::string(e.what()), Debug::LogLevel::CRASH);
         }
 
         isConnected_ = true;
-        isRunning_ = true;
+        // isRunning_ = true;
 
         // Start receive thread for client
-        receiveThread_ = std::thread(&NetworkManager::handleMessages, this);
-        Debug::Logger::Log("Connected to server", Debug::LogLevel::SUCCESS);
-        
+        // receiveThread_ = std::thread(&NetworkManager::handleMessages, this);
+        char ipStr[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(clientService.sin_addr), ipStr, INET_ADDRSTRLEN);
+        Debug::Logger::Log("Connected to server: " + std::string(ipStr) + " on port " + std::to_string(ntohs(clientService.sin_port)), Debug::LogLevel::SUCCESS);
+            
         return true;
     }
 
@@ -97,14 +111,14 @@ public:
         if (!isConnected_) return false;
 
         std::lock_guard<std::mutex> lock(sendMutex_);
-        int bytesSent = send(socket_, message.c_str(), message.length(), 0);
+        int bytesSent = send(socketCore_, message.c_str(), message.length(), 0);
         // Debug::Logger::Log("[IlmeeeEngine] Sending: " + message, Debug::LogLevel::INFO);
         if (bytesSent == SOCKET_ERROR) {
-            Debug::Logger::Log("Send failed: " + std::to_string(WSAGetLastError()), Debug::LogLevel::CRASH);
+            Debug::Logger::Log("Send failed: " + to_string(WSAGetLastError()), Debug::LogLevel::CRASH);
             return false;
         }
         
-        Debug::Logger::Log("Sent: " + message, Debug::LogLevel::SUCCESS);
+        Debug::Logger::Log("Sent to: " + to_string(socketCore_) + to_string(bytesSent) +" And Message: "  + message);
         return true;
     }
 
@@ -113,6 +127,7 @@ public:
         if (!messageQueue_.empty()) {
             std::string msg = messageQueue_.front();
             messageQueue_.pop();
+            Debug::Logger::Log("Menerima Pesan Dari: " + std::to_string(socket_) + " Yang Berisi: " + msg, Debug::LogLevel::SUCCESS);
             return msg;
         }
         return "";
@@ -180,6 +195,7 @@ private:
         }
     }
 
+    SOCKET socketCore_;
     SOCKET socket_;
     bool isRunning_;
     bool isConnected_;

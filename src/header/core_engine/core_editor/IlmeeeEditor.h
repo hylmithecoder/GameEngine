@@ -51,29 +51,11 @@ namespace IlmeeeEditor {
         void RemoveWindow(EditorWindow* window);
         
         // Callbacks
-        void SetOnProjectOpenedCallback(const std::function<void()>& callback);
-    
-        bool connectToEngine() {
-            std::cout << "Connecting to engine..." << std::endl;
-            return tcpClient.connectToServer();
-        }
-
-        bool startServer() {
-            std::cout << "Starting server..." << std::endl;
-            return tcpClient.startServer();
-        }
-        
-        bool sendCommandToEngine(const std::string& command) {
-            std::cout << "Sending command to engine: " << command << std::endl;
-            return tcpClient.sendMessage(command);
-        }
-
-        std::string receiveMessageFromEngine() {
-            // std::cout << "Receiving message from engine..." << std::endl;
-            std::string msg = tcpClient.receiveMessage();
-            std::cout << "Message: " << msg << std::endl; 
-            return "Still Empty";
-        }
+        void SetOnProjectOpenedCallback(const std::function<void()>& callback);        
+        bool connectToEngine();
+        bool startServer();
+        bool sendCommandToEngine(const std::string& command);
+        std::string receiveMessageFromEngine();
     };
     
     class ILMEEEDITOR_API Project {
@@ -184,6 +166,7 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool EditorInit(const char* title, int width, int height);
         ILMEEEDITOR_API void EditorRun();
         ILMEEEDITOR_API void EditorShutdown();
+        ILMEEEDITOR_API bool ConnectToEngine();
         ILMEEEDITOR_API bool StartServer();
         ILMEEEDITOR_API bool SendCommandToEngine(const char* command);
         ILMEEEDITOR_API bool ConnectToEngine();

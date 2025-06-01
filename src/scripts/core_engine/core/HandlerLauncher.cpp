@@ -8,6 +8,7 @@
 #include <atomic>
 #include <Debugger.hpp>
 #include <mutex>
+#include <windowsx.h>
 #include <queue>
 using namespace Debug;
 using namespace std;
@@ -33,49 +34,63 @@ private:
     HWND statusLabel;
     std::thread loadingThread;
     bool isVisible = false;
-    
+    bool isDragging = false;
+    POINT dragOffset = {0, 0};
+    HBITMAP logoBitmap = nullptr;
+
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         LoadingWindow* window = reinterpret_cast<LoadingWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
         
         switch (uMsg) {
-        case WM_CREATE:
-            return 0;
+        case WM_NCHITTEST: {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            if (pt.y <= rc.top + 30) { // Top drag area
+                return HTCAPTION;
+            }
+            return HTCLIENT;
+        }
+        
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             
-            // Draw background gradient
+            // Draw background with Unity-style gradient
             RECT rect;
             GetClientRect(hwnd, &rect);
             
             TRIVERTEX vertex[2];
             vertex[0].x = 0;
             vertex[0].y = 0;
-            vertex[0].Red = 0x2000;
-            vertex[0].Green = 0x2000;
-            vertex[0].Blue = 0x2800;
+            vertex[0].Red = 0x2500;    // Dark gray-blue
+            vertex[0].Green = 0x2700;
+            vertex[0].Blue = 0x2900;
             vertex[0].Alpha = 0x0000;
             
             vertex[1].x = rect.right;
             vertex[1].y = rect.bottom;
-            vertex[1].Red = 0x1000;
-            vertex[1].Green = 0x1000;
-            vertex[1].Blue = 0x1800;
+            vertex[1].Red = 0x1800;    // Darker gray-blue
+            vertex[1].Green = 0x1A00;
+            vertex[1].Blue = 0x1C00;
             vertex[1].Alpha = 0x0000;
             
             GRADIENT_RECT gRect = {0, 1};
             GradientFill(hdc, vertex, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
             
+            // Draw subtle border
+            HPEN hPen = CreatePen(PS_SOLID, 1, RGB(70, 70, 70));
+            SelectObject(hdc, hPen);
+            Rectangle(hdc, 0, 0, rect.right, rect.bottom);
+            DeleteObject(hPen);
+            
             EndPaint(hwnd, &ps);
             return 0;
         }
-        case WM_CLOSE:
-            return 0; // Prevent closing during loading
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
+        
+        default:
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
     
 public:
@@ -111,53 +126,61 @@ public:
         int y = (screenHeight - windowHeight) / 2;
         
         hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_LAYERED | WS_EX_APPWINDOW,
             className,
-            L"Ilmee Game Engine - Loading...",
-            WS_POPUP | WS_BORDER,
+            L"Ilmee Game Engine",
+            WS_POPUP | WS_THICKFRAME, // Add WS_THICKFRAME for resizable borders
             x, y, windowWidth, windowHeight,
             nullptr, nullptr, GetModuleHandle(nullptr), nullptr
         );
         
-        if (!hwnd) {
-            return false;
-        }
+        if (!hwnd) return false;
         
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        // Set window transparency
+        SetLayeredWindowAttributes(hwnd, 0, 245, LWA_ALPHA);
         
-        // Create logo/title text
-        CreateWindowW(L"STATIC", L"ILMEE",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, 30, windowWidth - 40, 40,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+        // Create rounded window region
+        HRGN region = CreateRoundRectRgn(0, 0, windowWidth, windowHeight, 15, 15);
+        SetWindowRgn(hwnd, region, TRUE);
         
-        // Set large font for title
-        HWND titleLabel = GetWindow(hwnd, GW_CHILD);
-        HFONT titleFont = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        // Create title with custom font
+        HFONT titleFont = CreateFontW(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+            
+        HWND titleLabel = CreateWindowW(L"STATIC", L"ILMEE ENGINE",
+            WS_VISIBLE | WS_CHILD | SS_CENTER,
+            0, 20, windowWidth, 40,
+            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
         SendMessage(titleLabel, WM_SETFONT, (WPARAM)titleFont, TRUE);
         
-        // Create status label
-        statusLabel = CreateWindowW(L"STATIC", L"Initializing...",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, 80, windowWidth - 40, 20,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        
-        // Create progress bar
+        // Create modern progress bar
         progressBar = CreateWindowW(PROGRESS_CLASSW, nullptr,
             WS_VISIBLE | WS_CHILD | PBS_SMOOTH,
-            40, 110, windowWidth - 80, 25,
+            40, 120, windowWidth - 80, 4, // Make it thinner
             hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+            
+        // Set progress bar colors
+        SendMessage(progressBar, PBM_SETBARCOLOR, 0, RGB(72, 144, 232)); // Blue
+        SendMessage(progressBar, PBM_SETBKCOLOR, 0, RGB(45, 45, 48));    // Dark gray
         
-        SendMessage(progressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-        SendMessage(progressBar, PBM_SETPOS, 0, 0);
-        
-        // Create version/copyright info
-        CreateWindowW(L"STATIC", L"Game Engine v1.0 - Loading Assets...",
+        // Create status label with custom font
+        HFONT statusFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+            
+        statusLabel = CreateWindowW(L"STATIC", L"Initializing...",
             WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, 150, windowWidth - 40, 20,
+            20, 90, windowWidth - 40, 20,
             hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+        SendMessage(statusLabel, WM_SETFONT, (WPARAM)statusFont, TRUE);
+        
+        // Create version label
+        HWND versionLabel = CreateWindowW(L"STATIC", L"v1.0.0",
+            WS_VISIBLE | WS_CHILD | SS_CENTER,
+            20, windowHeight - 30, windowWidth - 40, 20,
+            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+        SendMessage(versionLabel, WM_SETFONT, (WPARAM)statusFont, TRUE);
         
         return true;
     }
@@ -230,14 +253,15 @@ private:
     HMODULE editorDLL = nullptr;
     
 public:
+    const vector<string> IlmeeEngine = {"libIlmeeeEngine.dll", "libIlmeeeEditor.dll"};
     bool LoadDLLs() {
-        engineDLL = LoadLibraryA("bin/libIlmeeeEngine.dll");
+        engineDLL = LoadLibraryA(("bin/" + IlmeeEngine[0]).c_str());
         if (!engineDLL) {
             ShowError("Failed to load libIlmeeeEngine.dll");
             return false;
         }
         
-        editorDLL = LoadLibraryA("bin/libIlmeeeEditor.dll");
+        editorDLL = LoadLibraryA(("bin/" + IlmeeEngine[1]).c_str());
         if (!editorDLL) {
             ShowError("Failed to load libIlmeeeEditor.dll");
             Cleanup();
@@ -292,6 +316,69 @@ private:
     std::thread messagePollingThread;
     std::queue<std::string> messageQueue;
     std::mutex queueMutex;
+
+    void RunMessageLoop() {
+        Debug::Logger::Log("Starting message loop...", Debug::LogLevel::INFO);
+        messageThreadRunning = true;
+
+        auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
+            dllManager.GetEditorDLL(), 
+            "SendCommandToEngine"
+        );
+
+        auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
+            dllManager.GetEditorDLL(), 
+            "GetCommandFromEngine"
+        );
+
+        StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
+            if (!StartServer) {
+                DLLManager::ShowError("Failed to find StartServer function");
+            }
+
+        if (!SendCommand || !GetReceiveCommand) {
+            Debug::Logger::Log("Failed to initialize message functions", Debug::LogLevel::CRASH);
+            return;
+        }
+
+        while (messageThreadRunning) {
+            try {
+                // Send heartbeat every 5 seconds
+                static auto lastHeartbeat = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
+                    SendCommand("Heartbeat");
+                    lastHeartbeat = now;
+                }
+
+                // Check for incoming messages
+                std::string message = GetReceiveCommand();
+                if (!message.empty()) {
+                    std::lock_guard<std::mutex> lock(queueMutex);
+                    messageQueue.push(message);
+                    Debug::Logger::Log("Received: " + message, Debug::LogLevel::INFO);
+                }
+
+                // Process window messages
+                MSG msg;
+                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
+                    if (msg.message == WM_QUIT) {
+                        messageThreadRunning = false;
+                        break;
+                    }
+                }
+
+                // Prevent tight loop
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            } catch (const std::exception& e) {
+                Debug::Logger::Log("Message loop error: " + std::string(e.what()), Debug::LogLevel::CRASH);
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    }
     
     void StartMessagePolling() {
         messageThreadRunning = true;
@@ -308,46 +395,58 @@ private:
         // {
         //     Logger::Log(text(), LogLevel::SUCCESS);
         // }
-        messagePollingThread = std::thread([this]() {
-            auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
-                dllManager.GetEditorDLL(), 
-                "GetCommandFromEngine"
-            );
+        // messagePollingThread = std::thread([this]() {
+        //     auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
+        //         dllManager.GetEditorDLL(), 
+        //         "GetCommandFromEngine"
+        //     );
             
-            // TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
-            // if (text)
-            // {
-            //     Logger::Log(text(), LogLevel::SUCCESS);
-            // }
+        //     // TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
+        //     // if (text)
+        //     // {
+        //     //     Logger::Log(text(), LogLevel::SUCCESS);
+        //     // }
 
-            if (!GetReceiveCommand) {
-                std::cout << "Failed to initialize message polling: GetReceiveCommand not found" << std::endl;
-                return;
-            }
-            else 
-            {
-                std::cout << "Message polling initialized" << std::endl;
-            }
+        //     if (!GetReceiveCommand) {
+        //         std::cout << "Failed to initialize message polling: GetReceiveCommand not found" << std::endl;
+        //         return;
+        //     }
+        //     else 
+        //     {
+        //         std::cout << "Message polling initialized" << std::endl;
+        //     }
 
-            while (messageThreadRunning) {
-                try {
-                    std::string message = GetReceiveCommand();
-                    if (!message.empty()) {
-                        // Store message in thread-safe queue
-                        std::lock_guard<std::mutex> lock(queueMutex);
-                        messageQueue.push(message);
-                        std::cout << " Received message: " << message << std::endl;
-                        std::cout << "Total messages: " << messageQueue.size() << std::endl;
-                    }
+        //     while (messageThreadRunning) {
+        //         try {
+        //             std::string message = GetReceiveCommand();
+        //             if (!message.empty()) {
+        //                 // Store message in thread-safe queue
+        //                 std::lock_guard<std::mutex> lock(queueMutex);
+        //                 messageQueue.push(message);
+        //                 std::cout << " Received message: " << message << std::endl;
+        //                 std::cout << "Total messages: " << messageQueue.size() << std::endl;
+        //             }
                     
-                    // Prevent tight polling
-                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
-                } catch (const std::exception& e) {
-                    std::cerr << "Message polling error: " << e.what() << std::endl;
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
+        //             // Prevent tight polling
+        //             std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        //         } catch (const std::exception& e) {
+        //             std::cerr << "Message polling error: " << e.what() << std::endl;
+        //             std::this_thread::sleep_for(std::chrono::seconds(1));
+        //         }
+        //     }
+        // });
+        // Spamming message
+        while (true)
+        {
+            static auto lastHeartbeat = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5)
+            {
+                auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEditorDLL(),"SendCommandToEngine");
+                SendCommand("Heartbeat");
+                lastHeartbeat = now;
             }
-        });
+        }
     }
 
     void StopMessagePolling() {
@@ -364,12 +463,12 @@ public:
         
         // Define loading steps
         steps = {
-            {"Loading Engine DLL...", [&]() { 
+            {"Loading Engine DLL...", [&]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(800));
                 return dllManager.LoadDLLs(); 
-            }, 20},
-            
+            }, 20},            
             {"Initializing Engine...", [&]() {
+                Debug::Logger::Log("Initializing Engine...");
                 auto Init = dllManager.GetFunction<EngineInitFunc>(dllManager.GetEngineDLL(), "EngineInit");
                 if (!Init) {
                     DLLManager::ShowError("Failed to find EngineInit function");
@@ -377,19 +476,10 @@ public:
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1200));
                 return Init("My First Project", 1280, 720);
+                Debug::Logger::Log("Engine initialized", Debug::LogLevel::SUCCESS);
             }, 30},
-            
-            {"Starting Editor Server...", [&]() {
-                StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
-                if (!StartServer) {
-                    DLLManager::ShowError("Failed to find StartServer function");
-                    return false;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                return StartServer();
-            }, 15},
-            
             {"Initializing Editor...", [&]() {
+                Debug::Logger::Log("Initializing Editor...");
                 auto InitEditor = dllManager.GetFunction<EditorInitFunc>(dllManager.GetEditorDLL(), "EditorInit");
                 if (!InitEditor) {
                     DLLManager::ShowError("Failed to find EditorInit function");
@@ -397,9 +487,21 @@ public:
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 return InitEditor("Ilmee Editor", 1280, 720);
-            }, 25},
-            
+                Debug::Logger::Log("Editor initialized", Debug::LogLevel::SUCCESS);
+            }, 25},           
+            {"Starting Editor Server...", [&]() {
+                Debug::Logger::Log("Starting Editor Server...");
+                StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
+                if (!StartServer) {
+                    DLLManager::ShowError("Failed to find StartServer function");
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                return StartServer();
+                // Debug::Logger::Log("Editor Server started", Debug::LogLevel::SUCCESS);
+            }, 15},            
             {"Connecting Editor to Engine...", [&]() {
+                Debug::Logger::Log("Connecting Editor to Engine...");
                 auto ConnectToEngine = dllManager.GetFunction<ConnectToEngineFunc>(
                     dllManager.GetEditorDLL(), 
                     "ConnectToEngine"
@@ -416,7 +518,7 @@ public:
                 }
                 
                 // Start message polling after successful connection
-                StartMessagePolling();
+                // StartMessagePolling();
                 
                 // Test message
                 auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
@@ -429,6 +531,7 @@ public:
                 }
                 
                 return true;
+                // Debug::Logger::Log("Editor connected to engine", Debug::LogLevel::SUCCESS);
             }, 10}
         };
     }
@@ -492,6 +595,10 @@ public:
         loadingWindow.ProcessMessages();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
+        // Start message loop in a separate thread
+        std::thread messageThread(&LaunchSequence::RunMessageLoop, this);
+        messageThread.detach(); // Let it run independently
+
         return true;
     }
     
@@ -509,7 +616,9 @@ public:
 
     // Modify the destructor to ensure clean shutdown
     ~LaunchSequence() {
-        StopMessagePolling();
+        messageThreadRunning = false;
+        this_thread::sleep_for(std::chrono::milliseconds(100));
+        // StopMessagePolling();
         std::cout  << "Destroying LaunchSequence" << std::endl;
     }
 };

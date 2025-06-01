@@ -116,6 +116,7 @@ public:
     std::vector<std::string> messages;
     std::mutex messagesMutex;
     static const size_t MAX_MESSAGES = 1000;
+    string currentMessageFrom27015 = "";
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 

@@ -360,6 +360,29 @@ namespace IlmeeeEditor {
 
         ImGui::End();
     }
+    
+        bool Editor::connectToEngine() {
+            std::cout << "Connecting to engine..." << std::endl;
+            return tcpClient.connectToEngine();
+        }
+
+        bool Editor::startServer() {
+            std::cout << "Starting server..." << std::endl;
+            return tcpClient.startServerCore();
+        }
+        
+        bool Editor::sendCommandToEngine(const std::string& command) {
+            std::cout << "Sending command to engine: " << command << std::endl;
+            return tcpClient.sendMessageToEngine(command);
+        }
+
+        std::string Editor::receiveMessageFromEngine() {
+            // std::cout << "Receiving message from engine..." << std::endl;
+            std::string msg = tcpClient.receiveMessageFromEngine();
+            // std::cout << "Message: " << msg << std::endl; 
+            return msg;
+        }
+
     // ========== C API Implementation ==========
     extern "C" {
         ILMEEEDITOR_API bool EditorInit(const char* title, int width, int height) {
@@ -406,7 +429,7 @@ namespace IlmeeeEditor {
             }
             return true;
         }
-
+        
         ILMEEEDITOR_API bool SendCommandToEngine(const char* command) {
             if (Editor::instance) {
                 return Editor::instance->sendCommandToEngine(std::string(command));
@@ -424,12 +447,13 @@ namespace IlmeeeEditor {
         }
 
         ILMEEEDITOR_API string GetCommandFromEngine() {
-            if (Editor::instance) {
+            // if (Editor::instance) {
                 std::string command = Editor::instance->receiveMessageFromEngine();  // Make sure this returns string
+                // cout << "Received command from engine: " << command << endl;
                 return command;
-            }
-            // LogError("Editor not initialized. Call EditorInit first.");
-            return "Still Empty";
+            // }
+            // // LogError("Editor not initialized. Call EditorInit first.");
+            // return "Still Empty";
         }
 
         ILMEEEDITOR_API string TestString() {

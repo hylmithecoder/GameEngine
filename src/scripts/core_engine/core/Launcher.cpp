@@ -43,44 +43,12 @@ int main(int argc, char* argv[]) {
     // This not working
     // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
     SendCommandToEngineFunc SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEngineDLL(), "SendCommandToEngine");
-    
-    TestString Test = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
-    if (Test) {
-        Logger::Log("Test: " + Test(), LogLevel::SUCCESS);
-    }
-    
-    ReceivedMessages messages = dllManager.GetFunction<ReceivedMessages>(dllManager.GetEditorDLL(), "GetCommandFromEngine");
-    if (messages)
-    {
-        Logger::Log("Pesan Di terima dari Editor", LogLevel::SUCCESS);
-        Logger::Log("Messages: " + messages(), LogLevel::SUCCESS);
-    }
 
     if (Run && Shutdown) {
         cout << "Running engine..." << endl;
-        // std::vector<std::string> messages = sequence.GetPendingMessages();
-        // for (const auto& msg : messages) {
-        //     cout << msg << endl;
-        // }
-        while (true)
-        {
-            SendCommand("Say Hi From Runtime");
-            Run();
-        }
-        // cout << "After Run" << endl;
-        // thread editorThread([&]() { RunEditor(); });
-        // editorThread.join();
-        // Shutdown();
-        // SendCommand("Exit");
-        // RunEditor();
-        // Shutdown();
-        // while (true)
-        // {
-        //     SendCommand("Hallo Guys if you see this in runtime this is just loop for test");
-        // }
+        Run();
     }
-    cout << "After Run" << endl;
-    Shutdown();
+
     CoUninitialize();
     return 0;
 }

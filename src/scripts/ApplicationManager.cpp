@@ -9,6 +9,7 @@
 #include <NetworkManager.hpp>
 #include "ui/Check_Environment.cpp"
 #include <Debugger.hpp>
+#include <future>
 
 class ApplicationManager {
 private:
@@ -28,6 +29,48 @@ private:
     std::mutex messagesMutex;
     static const size_t MAX_MESSAGES = 1000; // Limit buffer size
     
+    bool WaitForServerConnection(int timeoutSeconds = 30) {
+        Debug::Logger::Log("Waiting for server connection...");
+        
+        auto startTime = std::chrono::steady_clock::now();
+        bool connected = false;
+        
+        while (!connected) {
+            try {
+                // Try to connect
+                if (networkManager->connectToServer()) {
+                    Debug::Logger::Log("Successfully connected to server", Debug::LogLevel::SUCCESS);
+                    return true;
+                }
+                
+                // Check timeout
+                auto currentTime = std::chrono::steady_clock::now();
+                auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>
+                    (currentTime - startTime).count();
+                
+                if (elapsedSeconds >= timeoutSeconds) {
+                    Debug::Logger::Log("Connection timeout after " + 
+                        std::to_string(timeoutSeconds) + " seconds", Debug::LogLevel::CRASH);
+                    return false;
+                }
+                
+                // Update status every second
+                if (elapsedSeconds % 5 == 0) {
+                    Debug::Logger::Log("Waiting for server... " + 
+                        std::to_string(timeoutSeconds - elapsedSeconds) + " seconds remaining");
+                }
+                
+                // Small delay before next attempt
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                
+            } catch (const std::exception& e) {
+                Debug::Logger::Log("Connection attempt failed: " + 
+                    std::string(e.what()), Debug::LogLevel::WARNING);
+            }
+        }
+        
+        return false;
+    }
 public:
     ApplicationManager() {
         networkManager = std::make_unique<NetworkManager>();
@@ -104,11 +147,6 @@ public:
                 MessageBoxA(0, "Failed to start network server", "Error", MB_OK | MB_ICONERROR);
                 return false;
             }
-            // In your engine initialization
-            if (!networkManager->connectToServer()) {
-                Debug::Logger::Log("Failed to connect to editor", Debug::LogLevel::CRASH);
-                return false;
-            }
             
             Debug::Logger::Log("[IlmeeeEditor] Launching engine process...");
             STARTUPINFOA si = { sizeof(si) };
@@ -130,8 +168,27 @@ public:
             }
             
             // Wait for connection establishment
-            Debug::Logger::Log("[IlmeeeEditor] Waiting for engine connection...");
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            // Debug::Logger::Log("[IlmeeeEditor] Waiting for engine connection...");
+            // std::this_thread::sleep_for(std::chrono::seconds(1));
+            
+            // // Send initial configuration
+            // networkManager->sendMessage("init:MyGameProject");
+            // Debug::Logger::Log("[IlmeeeEditor] Engine launched successfully");
+            
+
+            // Wait for connection asynchronously
+            std::future<bool> connectionFuture = std::async(std::launch::async, 
+                [this]() { return WaitForServerConnection(30); });
+                
+            // Show connection status
+            while (connectionFuture.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+                // Debug::Logger::Log("Waiting for engine connection...", Debug::LogLevel::INFO);
+            }
+            
+            if (!connectionFuture.get()) {
+                Debug::Logger::Log("Failed to establish connection", Debug::LogLevel::CRASH);
+                return false;
+            }
             
             // Send initial configuration
             networkManager->sendMessage("init:MyGameProject");
@@ -158,14 +215,14 @@ public:
                 // Debug::Logger::Log("Wait for network message...");
                 std::string message = networkManager->receiveMessage();
                 if (!message.empty()) {
-                    Debug::Logger::Log("Received: " + message);
+                    Debug::Logger::Log("Received: " + message, Debug::LogLevel::SUCCESS);
                     ProcessNetworkMessage(message);
                     
                     // Push message to UI with thread safety
-                    {
-                        // std::lock_guard<std::mutex> lock(messagesMutex);
-                        // window->PushMessage(message);
-                    }
+                    // std::lock_guard<std::mutex> lock(messagesMutex);
+                    // window->PushMessage(message);
+                    // window->currentMessageFrom27015 = message;
+                    // Debug::Logger::Log("Pushed message to UI: " + window->currentMessageFrom27015, Debug::LogLevel::SUCCESS);
                 }
                 
                 // Check engine process
@@ -289,7 +346,7 @@ private:
         if (networkThread.joinable()) {
             try {
                 networkThread.join();
-                Debug::Logger::Log("Network thread joined successfully");
+                Debug::Logger::Log("Network thread joined successfully", Debug::LogLevel::SUCCESS);
             } catch (const std::exception& e) {
                 Debug::Logger::Log("Failed to join network thread: " + std::string(e.what()), Debug::LogLevel::WARNING);
             }
