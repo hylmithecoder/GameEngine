@@ -77,6 +77,7 @@ set(HEADERS
     src/header/core_engine/GLHeader.hpp
     src/header/core_engine/Debugger.hpp
     src/header/core_engine/NetworkManager.hpp
+    src/header/ui/Application.hpp
 )
 
 set(HEADER_GLSL
@@ -253,6 +254,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/src/header/ui
     ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/scripts/ui
     ${FFMPEG_DIR}
     ${NFD}/src/include
     ${JSON_DIR}

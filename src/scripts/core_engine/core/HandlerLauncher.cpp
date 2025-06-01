@@ -357,7 +357,8 @@ private:
                 if (!message.empty()) {
                     std::lock_guard<std::mutex> lock(queueMutex);
                     messageQueue.push(message);
-                    Debug::Logger::Log("Received: " + message, Debug::LogLevel::INFO);
+                    Debug::Logger::Log("Count From 27016: "+ to_string(messageQueue.size()), Debug::LogLevel::INFO);
+                    Debug::Logger::Log("[HandlerIlmeeeEngine] Received: " + message, Debug::LogLevel::INFO);                    
                 }
 
                 // Process window messages
@@ -594,7 +595,7 @@ public:
         loadingWindow.SetProgress(100);
         loadingWindow.ProcessMessages();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
+        Debug::Logger::Log("Launch Complete!", Debug::LogLevel::SUCCESS);
         // Start message loop in a separate thread
         std::thread messageThread(&LaunchSequence::RunMessageLoop, this);
         messageThread.detach(); // Let it run independently

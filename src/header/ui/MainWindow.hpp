@@ -8,6 +8,7 @@
 #include <SDL_ttf.h>
 #include <vector>
 #include <SceneRenderer2D.hpp>
+// #include <Application.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
 // #include <SDL_opengl.h>

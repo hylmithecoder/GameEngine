@@ -10,7 +10,7 @@
 #include <csignal>
 #include <vector>
 #include <functional>
-#include "scripts/ApplicationManager.cpp"
+#include <Application.hpp>
 #include "SceneRenderer2D.hpp"
 #include <Debugger.hpp>
 

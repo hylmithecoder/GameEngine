@@ -1,144 +1,68 @@
-#include <iostream>
-#include <memory>
-#include <thread>
-#include <atomic>
-#include <vector>
-#include <functional>
-#include <string>
-#include <MainWindow.hpp>
-#include <NetworkManager.hpp>
-#include "ui/Check_Environment.cpp"
-#include <Debugger.hpp>
-#include <future>
+#include <Application.hpp>
 
-class ApplicationManager {
-private:
-    std::unique_ptr<NetworkManager> networkManager;
-    std::unique_ptr<MainWindow> window;
-    std::unique_ptr<Environment> environment;
-    PROCESS_INFORMATION engineProcess = {0};
-    std::atomic<bool> isRunning{false};
-    std::atomic<bool> shouldExit{false};
-    std::vector<std::function<void()>> cleanupTasks;
+ApplicationManager::ApplicationManager() {
+    networkManager = std::make_unique<NetworkManager>();
+    environment = std::make_unique<Environment>();
+        
+    // Register cleanup tasks in reverse order of initialization
+    RegisterCleanupTask([this]() { CleanupWindow(); });
+    RegisterCleanupTask([this]() { CleanupNetwork(); });
+    RegisterCleanupTask([this]() { CleanupEngine(); });
+    RegisterCleanupTask([this]() { CleanupSDL(); });
+}
     
-    // Thread management
-    std::thread networkThread;
-    std::thread messageProcessorThread;
-    std::atomic<bool> networkThreadRunning{false};
+ApplicationManager::~ApplicationManager() {
+    Shutdown();
+}
 
-    std::mutex messagesMutex;
-    static const size_t MAX_MESSAGES = 1000; // Limit buffer size
-    
-    bool WaitForServerConnection(int timeoutSeconds = 30) {
-        Debug::Logger::Log("Waiting for server connection...");
-        
-        auto startTime = std::chrono::steady_clock::now();
-        bool connected = false;
-        
-        while (!connected) {
-            try {
-                // Try to connect
-                if (networkManager->connectToServer()) {
-                    Debug::Logger::Log("Successfully connected to server", Debug::LogLevel::SUCCESS);
-                    return true;
-                }
-                
-                // Check timeout
-                auto currentTime = std::chrono::steady_clock::now();
-                auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>
-                    (currentTime - startTime).count();
-                
-                if (elapsedSeconds >= timeoutSeconds) {
-                    Debug::Logger::Log("Connection timeout after " + 
-                        std::to_string(timeoutSeconds) + " seconds", Debug::LogLevel::CRASH);
-                    return false;
-                }
-                
-                // Update status every second
-                if (elapsedSeconds % 5 == 0) {
-                    Debug::Logger::Log("Waiting for server... " + 
-                        std::to_string(timeoutSeconds - elapsedSeconds) + " seconds remaining");
-                }
-                
-                // Small delay before next attempt
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                
-            } catch (const std::exception& e) {
-                Debug::Logger::Log("Connection attempt failed: " + 
-                    std::string(e.what()), Debug::LogLevel::WARNING);
-            }
-        }
-        
-        return false;
-    }
-public:
-    ApplicationManager() {
-        networkManager = std::make_unique<NetworkManager>();
-        environment = std::make_unique<Environment>();
-        
-        // Register cleanup tasks in reverse order of initialization
-        RegisterCleanupTask([this]() { CleanupWindow(); });
-        RegisterCleanupTask([this]() { CleanupNetwork(); });
-        RegisterCleanupTask([this]() { CleanupEngine(); });
-        RegisterCleanupTask([this]() { CleanupSDL(); });
-    }
-    
-    ~ApplicationManager() {
-        Shutdown();
-    }
-    
-    void RegisterCleanupTask(std::function<void()> task) {
-        cleanupTasks.insert(cleanupTasks.begin(), task);
-    }
-    
-    bool Initialize() {
-        try {
-            Debug::Logger::Log("Initializing Application Manager...");
+bool ApplicationManager::Initialize() {
+    try {
+        Debug::Logger::Log("Initializing Application Manager...");
             
-            // Initialize environment check
-            environment->detectDriveInfo();
-            environment->printEnvironment();
-            environment->printDriveInfo();
+        // Initialize environment check
+        environment->detectDriveInfo();
+        environment->printEnvironment();
+        environment->printDriveInfo();
             
-            // Set FFmpeg log level
-            av_log_set_level(AV_LOG_ERROR);
+        // Set FFmpeg log level
+        av_log_set_level(AV_LOG_ERROR);
             
-            // Initialize SDL
-            if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-                Debug::Logger::Log("SDL initialization failed: " + std::string(SDL_GetError()), Debug::LogLevel::CRASH);
-                return false;
-            }
-            
-            // Initialize TTF
-            if (TTF_Init() == -1) {
-                Debug::Logger::Log("TTF initialization failed: " + std::string(TTF_GetError()), Debug::LogLevel::CRASH);
-                return false;
-            }
-            
-            // Create main window
-            window = std::make_unique<MainWindow>("Ilmeee Editor", 1280, 720);
-            if (!window) {
-                Debug::Logger::Log("Failed to create main window", Debug::LogLevel::CRASH);
-                return false;
-            }
-            
-            // Print working directory
-            char cwd[512];
-            if (_getcwd(cwd, sizeof(cwd))) {
-                Debug::Logger::Log("Working Directory: " + std::string(cwd));
-            }
-            
-            // isRunning = true;
-            Debug::Logger::Log("Application Manager initialized successfully");
-            return true;
-            
-        } catch (const std::exception& e) {
-            Debug::Logger::Log("Exception during initialization: " + std::string(e.what()), Debug::LogLevel::CRASH);
+        // Initialize SDL
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+            Debug::Logger::Log("SDL initialization failed: " + std::string(SDL_GetError()), Debug::LogLevel::CRASH);
             return false;
         }
+            
+        // Initialize TTF
+        if (TTF_Init() == -1) {
+            Debug::Logger::Log("TTF initialization failed: " + std::string(TTF_GetError()), Debug::LogLevel::CRASH);
+            return false;
+        }
+            
+        // Create main window
+        window = std::make_unique<MainWindow>("Ilmeee Editor", 1280, 720);
+        if (!window) {
+            Debug::Logger::Log("Failed to create main window", Debug::LogLevel::CRASH);
+            return false;
+        }
+            
+        // Print working directory
+        char cwd[512];
+        if (_getcwd(cwd, sizeof(cwd))) {
+            Debug::Logger::Log("Working Directory: " + std::string(cwd));
+        }
+            
+        // isRunning = true;
+        Debug::Logger::Log("Application Manager initialized successfully");
+        return true;
+            
+    } catch (const std::exception& e) {
+        Debug::Logger::Log("Exception during initialization: " + std::string(e.what()), Debug::LogLevel::CRASH);
+        return false;
     }
+}
     
-    bool LaunchEngine() {
+    bool ApplicationManager::LaunchEngine() {
         try {
             Debug::Logger::Log("[IlmeeeEditor] Starting network server...");
             isRunning = true;
@@ -205,7 +129,7 @@ public:
         }
     }
     
-    void StartNetworkThread() {
+    void ApplicationManager::StartNetworkThread() {
         networkThreadRunning = true;
         networkThread = std::thread([this]() {
             Debug::Logger::Log("[IlmeeeEditor] Network thread started");
@@ -217,7 +141,9 @@ public:
                 if (!message.empty()) {
                     Debug::Logger::Log("Received: " + message, Debug::LogLevel::SUCCESS);
                     ProcessNetworkMessage(message);
-                    
+                    messagesFrom27015.push(message);
+                    Debug::Logger::Log("Count Message From 27015: " + to_string(messagesFrom27015.size()), Debug::LogLevel::SUCCESS);
+                    Debug::Logger::Log("Message From 27015: " + messagesFrom27015.back(), Debug::LogLevel::WARNING);
                     // Push message to UI with thread safety
                     // std::lock_guard<std::mutex> lock(messagesMutex);
                     // window->PushMessage(message);
@@ -254,7 +180,7 @@ public:
         });
     }
     
-    void ProcessNetworkMessage(const std::string& message) {
+    void ApplicationManager::ProcessNetworkMessage(const std::string& message) {
         if (message == "shutdown" || message == "exit") {
             Debug::Logger::Log("Received shutdown command from engine");
             shouldExit = true;
@@ -262,7 +188,7 @@ public:
         // Add more message processing as needed
     }
     
-    void Run() {
+    void ApplicationManager::Run() {
         if (!isRunning || !window) {
             Debug::Logger::Log("Cannot run - application not properly initialized", Debug::LogLevel::CRASH);
             return;
@@ -311,7 +237,7 @@ public:
         Debug::Logger::Log("Main application loop ended");
     }
     
-    void Shutdown() {
+    void ApplicationManager::Shutdown() {
         if (!isRunning) return;
         
         networkManager->sendMessage("Stop");
@@ -335,10 +261,9 @@ public:
         CleanupSDL();
         Debug::Logger::Log("Application shutdown complete");
     }
-    
-private:
+
     // Update CleanupNetwork method
-    void CleanupNetwork() {
+    void ApplicationManager::CleanupNetwork() {
         Debug::Logger::Log("Cleaning up network...");
         
         // Stop network thread first
@@ -365,7 +290,7 @@ private:
     }
 
     // Update CleanupEngine method
-    void CleanupEngine() {
+    void ApplicationManager::CleanupEngine() {
         Debug::Logger::Log("Cleaning up engine process...");
         
         if (engineProcess.hProcess) {
@@ -392,7 +317,7 @@ private:
     }
 
     // Update CleanupWindow method
-    void CleanupWindow() {
+    void ApplicationManager::CleanupWindow() {
         Debug::Logger::Log("Cleaning up window...");
         if (window) {
             window->clean(); // Add a cleanup method to MainWindow if not exists
@@ -403,11 +328,10 @@ private:
     }
 
     // Update CleanupSDL method
-    void CleanupSDL() {
+    void ApplicationManager::CleanupSDL() {
         Debug::Logger::Log("Cleaning up SDL...");
         TTF_Quit();
         SDL_Quit();
         // IMG_Quit(); // Add if using SDL_image
         Debug::Logger::Log("SDL cleaned up");
     }
-};
