@@ -666,6 +666,7 @@ void HandlerProject::DrawFolderGridView() {
     std::string rootDirectory = projectPath+"\\assets";
 
     ImGui::SetNextItemWidth(100);
+    // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
     ImGui::SliderFloat("Size", &thumbnailSize.x, 32.0f, 96.0f);
     thumbnailSize.y = thumbnailSize.x;
 
@@ -751,26 +752,8 @@ void HandlerProject::DrawFolderGridView() {
             ImGui::EndPopup();
         }
     }
-    
-
-    // if (ImGui::BeginPopupContextWindow("FileGridContentMenu", ImGuiPopupFlags_MouseButtonRight))
-    // {
-    //     if (ImGui::MenuItem("Create Folder"))
-    //     {
-    //         HandleCreateNewFolder(currentDirectory);
-    //     }
-    //     if (ImGui::MenuItem("New Script"))
-    //     {
-    //         HandleCreateNewFile(currentDirectory);
-    //     }
-    //     if (ImGui::MenuItem("New Shader"))
-    //     {
-    //         ShowNotification("New Shader", "You Click New Shader", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-    //     }
-
-    //     ImGui::EndPopup();
-    // }
     ImGui::EndChild();
+    // ImGui::PopStyleColor();
 }
 
 void HandlerProject::NewScripts(const std::string& scriptName) {
@@ -821,7 +804,8 @@ void HandlerProject::NewScripts(const std::string& scriptName) {
         string headerFullPath = headerPath + scriptName + ".hpp";
         ofstream headerFile(headerFullPath);
         if (headerFile.is_open()) {
-            headerFile << "#pragma once\n\n";
+            headerFile << "#pragma once\n";
+            headerFile << "#include <GameEngine.h>\n\n";
             headerFile << "class " << scriptName << " {\n";
             headerFile << "public:\n";
             headerFile << "    " << scriptName << "();\n";

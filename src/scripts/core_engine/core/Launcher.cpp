@@ -9,8 +9,8 @@
 using namespace std;
 using namespace Debug;
 
-typedef string (*TestString)();
 typedef string (*ReceivedMessages)();
+
 int main(int argc, char* argv[]) {
     // Initialize COM for modern UI effects
     CoInitialize(nullptr);

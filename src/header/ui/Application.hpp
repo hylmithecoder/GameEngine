@@ -14,7 +14,8 @@
 class ApplicationManager {
 private:
     std::unique_ptr<NetworkManager> networkManager;
-    std::unique_ptr<MainWindow> window;
+    MainWindow* window;
+    string lastMessageFrom27015;
     std::unique_ptr<Environment> environment;
     PROCESS_INFORMATION engineProcess = {0};
     std::atomic<bool> isRunning{false};

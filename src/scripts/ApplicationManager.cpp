@@ -40,7 +40,7 @@ bool ApplicationManager::Initialize() {
         }
             
         // Create main window
-        window = std::make_unique<MainWindow>("Ilmeee Editor", 1280, 720);
+        window = new MainWindow("Ilmeee Editor", 1280, 720);
         if (!window) {
             Debug::Logger::Log("Failed to create main window", Debug::LogLevel::CRASH);
             return false;
@@ -144,6 +144,7 @@ bool ApplicationManager::Initialize() {
                     messagesFrom27015.push(message);
                     Debug::Logger::Log("Count Message From 27015: " + to_string(messagesFrom27015.size()), Debug::LogLevel::SUCCESS);
                     Debug::Logger::Log("Message From 27015: " + messagesFrom27015.back(), Debug::LogLevel::WARNING);
+                    lastMessageFrom27015 = message;
                     // Push message to UI with thread safety
                     // std::lock_guard<std::mutex> lock(messagesMutex);
                     // window->PushMessage(message);
@@ -213,6 +214,14 @@ bool ApplicationManager::Initialize() {
                 if (!window->running()) {
                     Debug::Logger::Log("Window close requested");
                     break;
+                }
+
+                static auto lastHeartbeat = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
+                    window->PushMessage(lastMessageFrom27015);
+                    Debug::Logger::Log("Sending heartbeat to engine: "+lastMessageFrom27015, Debug::LogLevel::SUCCESS);
+                    lastHeartbeat = now;
                 }
                 
                 // Update and render
@@ -321,7 +330,6 @@ bool ApplicationManager::Initialize() {
         Debug::Logger::Log("Cleaning up window...");
         if (window) {
             window->clean(); // Add a cleanup method to MainWindow if not exists
-            window.reset();
             window = nullptr;
             Debug::Logger::Log("Window cleaned up");
         }

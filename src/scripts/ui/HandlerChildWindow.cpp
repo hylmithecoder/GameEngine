@@ -4,9 +4,11 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <Debugger.hpp>
 
-void MainWindow::RenderHierarchyWindow() {
+void MainWindow::RenderHierarchyWindow() {  
     ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
-
+    // ImVec2 pos = ImGui::GetWindowPos();
+    // ImVec2 size = ImGui::GetWindowSize();
+    // HandleBackground(pos, size);
     ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
 
     if (isLoadScene) {
@@ -48,7 +50,10 @@ void MainWindow::RenderHierarchyWindow() {
 }
 
 void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const std::string& assetPath , bool firstOpenProject) {
-    ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);    
+    ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
+    ImVec2 pos = ImGui::GetWindowPos();
+    ImVec2 size = ImGui::GetWindowSize();
+    HandleBackground(pos, size); // panggil di sini!
         // Debug::Logger::Log("Asset Folder: " + assetFolder.fullPath + "\nChildren: "+to_string(assetFolder.children.size()), Debug::LogLevel::INFO);
             if (firstOpenProject) {
                 ImGui::BeginGroup();
@@ -171,7 +176,10 @@ void MainWindow::RenderInspectorWindow() {
     strncpy(currentScriptName, currentScriptName, sizeof(currentScriptName) - 1);
     currentScriptName[sizeof(currentScriptName) - 1] = '\0'; // Ensure null-termination
     ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
-    
+    ImVec2 pos = ImGui::GetWindowPos();
+    ImVec2 size = ImGui::GetWindowSize();
+    HandleBackground(pos, size);
+
     ImGui::Text("Selected Object");
     ImGui::Separator();
     
@@ -460,7 +468,9 @@ void MainWindow::RenderSceneWindow() {
 }
 
 void MainWindow::RenderMainViewWindow() {
-    ImGui::Begin("Main View", nullptr, ImGuiWindowFlags_NoCollapse);
+    if (!showMainView) return;
+
+    ImGui::Begin("Main View", &showMainView, ImGuiWindowFlags_NoCollapse);
 
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Viewport")) {
@@ -624,64 +634,89 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSi
     }
 }
 
-// void MainWindow::RenderGameViewport() {
-//     ImVec2 contentSize = ImGui::GetContentRegionAvail();
-
-//     // Render game scene texture (pastikan sceneRenderer telah di-init)
-//     sceneRenderer2D->RenderSceneToUI();
-//     // GLuint texID = sceneRenderer2D->CreateShaderProgram("assets/shaders/shader.frag", "assets/shaders/shader.vert");
-//     // // GLuint texID = sceneRenderer2D->CreateWhiteTexture();
-//     // if (texID == 0) {
-//     //     // cout << "Viewport texture not initialized!" << endl;
-//     //     ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "⚠ Viewport texture not initialized!");
-//     // } else {
-//     //     cout << "Viewport texture initialized!" << texID << endl;
-//     //     ImGui::Image((ImTextureID)(intptr_t)texID, contentSize, ImVec2(0, 1), ImVec2(1, 0));
-//     // }
-
-//     // Optional debug footer
-//     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
-//     ImGui::Text("Game Viewport (Scene will render here)");
-// }
-
-
 void MainWindow::RenderConsoleWindow() {
     if (!showConsole) return;
     // Set window properties
     ImGui::Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
-    
+    ImVec2 pos = ImGui::GetWindowPos();
+    ImVec2 size = ImGui::GetWindowSize();
+    HandleBackground(pos, size);
+
     static int selectedTab = 0;
     ImGui::BeginTabBar("ConsoleTabs");
     
     if (ImGui::BeginTabItem("Output")) {
-        selectedTab = 0;
-        static char consoleBuffer[4096] = "Game initialized successfully.\nAll systems operational.\nReady to start...\n";
+        // Toolbar area
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+        ImGui::BeginChild("ConsoleToolbar", ImVec2(0, 30), false);
         
-        std::lock_guard<std::mutex> lock(messagesMutex);
-        for (const auto& message : messages) {
-            ImGui::TextWrapped("%s", message.c_str());
+        // Clear button with better styling
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        if(ImGui::Button("Clear", ImVec2(60, 24))) {
+            messages.clear();
         }
-        // Concatenate logFromIlmeeeEditor vector into a single string
+        ImGui::PopStyleColor(2);
+        
+        // Filter dropdown
+        ImGui::SameLine();
+        const char* filters[] = { "All", "Info", "Warning", "Error" };
+        static int currentFilter = 0;
+        ImGui::SetNextItemWidth(100);
+        ImGui::Combo("##Filter", &currentFilter, filters, IM_ARRAYSIZE(filters));
+        
+        // Search box
+        ImGui::SameLine();
+        static char searchBuffer[128] = "";
+        ImGui::SetNextItemWidth(-1); // Take remaining width
+        ImGui::InputTextWithHint("##search", "Search in console...", searchBuffer, IM_ARRAYSIZE(searchBuffer));
+        
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        
+        // Console output area
+        ImGui::BeginChild("ConsoleOutput", ImVec2(0, -5), true);
+        
+        // Style for console text
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
+        
+        static char consoleBuffer[4096];
         std::string combinedLog;
+        int number = 1;
+        
         for (const auto& line : messages) {
-            combinedLog += line + "\n";
+            // Filter messages based on selected filter
+            if (currentFilter == 0 || // All
+                (currentFilter == 1 && line.find("[INFO]") != std::string::npos) ||
+                (currentFilter == 2 && line.find("[WARNING]") != std::string::npos) ||
+                (currentFilter == 3 && line.find("[ERROR]") != std::string::npos)) {
+                
+                // Search filter
+                if (strlen(searchBuffer) == 0 || line.find(searchBuffer) != std::string::npos) {
+                    combinedLog += "[" + std::to_string(number++) + "] " + line + "\n";
+                }
+            }
         }
-        // Copy to buffer and ensure null-termination
+        
         strncpy(consoleBuffer, combinedLog.c_str(), sizeof(consoleBuffer) - 1);
         consoleBuffer[sizeof(consoleBuffer) - 1] = '\0';
-        ImGui::InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer), 
-                                 ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
-
+        
+        ImGui::InputTextMultiline("##console", 
+            consoleBuffer, 
+            IM_ARRAYSIZE(consoleBuffer),
+            ImVec2(-1, -1), 
+            ImGuiInputTextFlags_ReadOnly);
+        
+        // Auto-scroll
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
             ImGui::SetScrollHereY(1.0f);
         }
-
-        ImGui::EndTabItem();
-    }
-    
-    if (ImGui::BeginTabItem("Errors")) {
-        selectedTab = 1;
-        ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.4f, 1.0f), "No errors found.");
+        
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        ImGui::EndChild();
+        
         ImGui::EndTabItem();
     }
     
@@ -696,16 +731,7 @@ void MainWindow::RenderConsoleWindow() {
     ImGui::End();
 }
 
-void MainWindow::RenderMenuBar() {    
-    // static float volume = 1.0f;
-    // static bool isBackgroundChanged = false;
-    // static bool isBackgroundActived = false;
-    // CurrentBackground currentBg = static_cast<CurrentBackground>(currentBgInt);
-    // const char* backgroundOptions[] = {
-    //     "Shiroko",
-    //     "Shun (Small)"
-    // };
-
+void MainWindow::RenderMenuBar() {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
@@ -773,6 +799,7 @@ void MainWindow::RenderMenuBar() {
         }
 
         if (ImGui::BeginMenu("Windows")) {
+            if (ImGui::MenuItem("Main View", nullptr, &showMainView)) {}
             if (ImGui::MenuItem("Explorer", nullptr, &showExplorer)) {}
             if (ImGui::MenuItem("Inspector", nullptr, &showInspector)) {}
             if (ImGui::MenuItem("Scene", "Ctrl+1", &showScene)) {}
@@ -789,40 +816,48 @@ void MainWindow::RenderMenuBar() {
     }
 }
 
-void MainWindow::HandleBackground() {
-    if (isBackgroundActived)
-    {
-        if (isBackgroundChanged)
-        {
-            HandleUpdateBackground(currentBg);
-            isBackgroundChanged = false;
-        }
+void MainWindow::HandleBackground(const ImVec2& windowPos, const ImVec2& windowSize) {
+    if (!isBackgroundActived || backgroundTexture.TextureID == 0) return;
 
-        ImGuiIO& io = ImGui::GetIO();
-        // Menggunakan ImGui::GetBackgroundDrawList untuk menggambar di lapisan paling belakang
-        if (backgroundTexture.TextureID != 0) {
-            ImGui::SetNextWindowPos(ImVec2(0, 0));
-            ImGui::SetNextWindowSize(io.DisplaySize);
-            ImGui::SetNextWindowBgAlpha(volume); // <--- Bikin window background jadi transparan
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::Begin("Background", nullptr,
-                ImGuiWindowFlags_NoDecoration |
-                ImGuiWindowFlags_NoInputs |
-                // ImGuiWindowFlags_NoBringToFrontOnFocus |
-                ImGuiWindowFlags_NoNavFocus);
-            
-            ImGui::Image((ImTextureID)(intptr_t)backgroundTexture.TextureID, io.DisplaySize);
-            ImGui::End();
-            ImGui::PopStyleVar(2);
-        }
-    } 
-    else if (isBackgroundChanged)
-    {
+    // Update background jika ada perubahan
+    if (isBackgroundChanged) {
         HandleUpdateBackground(currentBg);
         isBackgroundChanged = false;
-    }    
+    }
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    float imageAspect = (float)backgroundTexture.Width / backgroundTexture.Height;
+    float windowAspect = windowSize.x / windowSize.y;
+
+    ImVec2 uv0(0, 0);
+    ImVec2 uv1(1, 1);
+
+    // Menyesuaikan UV supaya gambar tetap proporsional
+    if (windowAspect > imageAspect) {
+        float uvWidth = imageAspect / windowAspect;
+        float uvOffset = (1 - uvWidth) * 0.5f;
+        uv0.x = uvOffset;
+        uv1.x = 1 - uvOffset;
+    } else {
+        float uvHeight = windowAspect / imageAspect;
+        float uvOffset = (1 - uvHeight) * 0.5f;
+        uv0.y = uvOffset;
+        uv1.y = 1 - uvOffset;
+    }
+
+    // Gambar background di dalam window
+    ImVec4 tintColor(1.0f, 1.0f, 1.0f, volume); // Alpha dari volume
+    drawList->AddImage(
+        (ImTextureID)(intptr_t)backgroundTexture.TextureID,
+        windowPos,
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
+        uv0,
+        uv1,
+        ImGui::ColorConvertFloat4ToU32(tintColor)
+    );
 }
+
 
 void MainWindow::HandleSearch() {
     // Buffer pencarian dan container hasil pencarian.

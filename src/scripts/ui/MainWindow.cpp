@@ -1532,7 +1532,7 @@ void MainWindow::update() {
     
     // Render background SETELAH DockSpace tetapi SEBELUM semua window UI lainnya
     // Ini memastikan background ada di belakang semua window UI
-    HandleBackground();
+    // HandleBackground();
     
     // Menu bar
     RenderMenuBar();
@@ -1592,7 +1592,6 @@ void MainWindow::clean() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     glDeleteTextures(1, &videoPlayer->glTextureID);
-
     ImGui::DestroyContext();
 
     if (glContext)

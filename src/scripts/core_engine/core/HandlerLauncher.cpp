@@ -96,6 +96,17 @@ private:
 public:
     LoadingWindow() : hwnd(nullptr), progressBar(nullptr), statusLabel(nullptr) {}
     
+    
+    HICON LoadIconFromFile(const wchar_t* iconPath) {
+        return (HICON)LoadImageW(
+            NULL,
+            iconPath,
+            IMAGE_ICON,
+            0, 0,  // Use actual icon size
+            LR_LOADFROMFILE | LR_DEFAULTSIZE
+        );
+    }
+
     bool Create() {
         // Initialize common controls
         INITCOMMONCONTROLSEX icex;
@@ -136,6 +147,16 @@ public:
         
         if (!hwnd) return false;
         
+        // Load and set both large and small icons
+        HICON hIconLarge = LoadIconFromFile(L"assets/icons/app_icon.ico");
+        HICON hIconSmall = LoadIconFromFile(L"assets/icons/app_icon.ico");
+        
+        if (hIconLarge && hIconSmall) {
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconLarge);
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
+        } else {
+            Debug::Logger::Log("Failed to load window icons", Debug::LogLevel::WARNING);
+        }
         // Set window transparency
         SetLayeredWindowAttributes(hwnd, 0, 245, LWA_ALPHA);
         

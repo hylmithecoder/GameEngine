@@ -2,8 +2,9 @@
 // #include <GL/glew.h>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
+#include <glad/glad.h>
 #include "imgui_impl_opengl3.h"
-#include <stdio.h>
+#include <iostream>
 #include <SDL_main.h>
 #include <SDL.h>
 #include <windows.h>
@@ -18,7 +19,7 @@
 
 
 struct TextureData {
-    GLuint TextureID = 0;
+    ImTextureID TextureID = 0;
     int Width = 0;
     int Height = 0;
 };

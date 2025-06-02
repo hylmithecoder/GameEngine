@@ -100,13 +100,14 @@ public:
     Assets assets;
     float volume = 1.0f;
     bool isBackgroundChanged = false;
-    bool isBackgroundActived = false;
+    bool isBackgroundActived = true;
     bool isLoadScene = false;
     bool showExplorer = true;
     bool showInspector = true;
     bool showScene = true;
     bool showConsole = true;
     bool showHierarchy = true;
+    bool showMainView = true;
     string currentFilter = "";
     vector<string> logFromIlmeeeEditor = {
         "Welcome to Ilmeee Editor",
@@ -145,7 +146,7 @@ public:
     void RenderMainViewWindow();
     void RenderConsoleWindow();
     void RenderMenuBar();
-    void HandleBackground();
+    void HandleBackground(const ImVec2& windowPos, const ImVec2& windowSize);
     void HandleSearch();
     void RenderViewportToolbar();
     void RenderGameViewport();

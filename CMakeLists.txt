@@ -191,7 +191,7 @@ file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
-add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES})
+add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestBackground PRIVATE -mconsole)
 add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestGLEW PRIVATE -mconsole)
@@ -282,6 +282,7 @@ target_include_directories(TestBackground PRIVATE
     opengl32
     gdi32
     ${VULKAN_DIR}
+    ${GLAD_4_DIR}/include
     # GLES2
     # GLEW
     
