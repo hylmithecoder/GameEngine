@@ -139,6 +139,15 @@ bool MainWindow::init(const char* title) {
     Debug::Logger::Log("Main Window Successfully Initialized");
     
     sceneRenderer2D = new SceneRenderer2D(800, 600);
+    
+    glGenFramebuffers(1, &blurFBO);
+    glGenTextures(1, &blurTexture);
+    glBindTexture(GL_TEXTURE_2D, blurTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, blurWidth, blurHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, blurFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, blurTexture, 0);
     // viewPort.Init();
     return true;
 }
@@ -158,6 +167,10 @@ void MainWindow::HandleUpdateBackground(CurrentBackground currentBg)
         case Shun_Small:
             path = "assets/images/backgrounds/shun_small.webp";
             cout << "Current Background is: Shun" << endl;
+            break;
+        case Hanako_Swimsuit:
+            path = "assets/images/backgrounds/Hanako_Swimsuit.png";
+            cout << "Current Background is: Hanako" << endl;
             break;
         default:
             cout << "Unknown Background" << endl;

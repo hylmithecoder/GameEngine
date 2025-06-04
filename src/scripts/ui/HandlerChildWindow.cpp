@@ -819,7 +819,6 @@ void MainWindow::RenderMenuBar() {
 void MainWindow::HandleBackground(const ImVec2& windowPos, const ImVec2& windowSize) {
     if (!isBackgroundActived || backgroundTexture.TextureID == 0) return;
 
-    // Update background jika ada perubahan
     if (isBackgroundChanged) {
         HandleUpdateBackground(currentBg);
         isBackgroundChanged = false;
@@ -827,34 +826,49 @@ void MainWindow::HandleBackground(const ImVec2& windowPos, const ImVec2& windowS
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
+    // Calculate image dimensions while maintaining aspect ratio
     float imageAspect = (float)backgroundTexture.Width / backgroundTexture.Height;
     float windowAspect = windowSize.x / windowSize.y;
 
-    ImVec2 uv0(0, 0);
-    ImVec2 uv1(1, 1);
-
-    // Menyesuaikan UV supaya gambar tetap proporsional
+    // Calculate image size that maintains original aspect ratio
+    float imageWidth, imageHeight;
     if (windowAspect > imageAspect) {
-        float uvWidth = imageAspect / windowAspect;
-        float uvOffset = (1 - uvWidth) * 0.5f;
-        uv0.x = uvOffset;
-        uv1.x = 1 - uvOffset;
+        // Window is wider than image
+        imageHeight = windowSize.y;
+        imageWidth = imageHeight * imageAspect;
     } else {
-        float uvHeight = windowAspect / imageAspect;
-        float uvOffset = (1 - uvHeight) * 0.5f;
-        uv0.y = uvOffset;
-        uv1.y = 1 - uvOffset;
+        // Window is taller than image
+        imageWidth = windowSize.x;
+        imageHeight = imageWidth / imageAspect;
     }
 
-    // Gambar background di dalam window
-    ImVec4 tintColor(1.0f, 1.0f, 1.0f, volume); // Alpha dari volume
-    drawList->AddImage(
-        (ImTextureID)(intptr_t)backgroundTexture.TextureID,
+    // Calculate position to center the image
+    float imageX = windowPos.x + (windowSize.x - imageWidth) * 0.5f;
+    float imageY = windowPos.y + (windowSize.y - imageHeight) * 0.5f;
+
+    // Extract Color
+    float r, g, b;
+    r = assets.r;
+    g = assets.g;
+    b = assets.b;
+    // Debug::Logger::Log("Dominant Color: " + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b), Debug::LogLevel::INFO);
+    // First draw the dominant color background for the entire window
+    ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+        r, g, b, volume));
+    drawList->AddRectFilled(
         windowPos,
         ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
-        uv0,
-        uv1,
-        ImGui::ColorConvertFloat4ToU32(tintColor)
+        fillColor
+    );
+
+    // Then draw the actual image maintaining its aspect ratio
+    drawList->AddImage(
+        (ImTextureID)(intptr_t)backgroundTexture.TextureID,
+        ImVec2(imageX, imageY),
+        ImVec2(imageX + imageWidth, imageY + imageHeight),
+        ImVec2(0, 0),
+        ImVec2(1, 1),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, volume))
     );
 }
 

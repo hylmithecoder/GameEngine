@@ -90,6 +90,7 @@ public:
     SceneRenderer2D* sceneRenderer2D = nullptr;
     HandlerProject projectHandler;
     TextureData backgroundTexture;
+    Color backgroundColor;
     SwrContext* swrContext = nullptr;
     bool isOnlyAudio = false;
     bool isOnlyRenderImage = false;
@@ -100,7 +101,7 @@ public:
     Assets assets;
     float volume = 1.0f;
     bool isBackgroundChanged = false;
-    bool isBackgroundActived = true;
+    bool isBackgroundActived = false;
     bool isLoadScene = false;
     bool showExplorer = true;
     bool showInspector = true;
@@ -125,13 +126,19 @@ public:
     {
         Shiroko, 
         Shun_Small,
+        Hanako_Swimsuit,
         Background_Count
     };
     CurrentBackground currentBg = static_cast<CurrentBackground>(currentBgInt);
-    const char* backgroundOptions[2] = {
+    const char* backgroundOptions[3] = {
         "Shiroko",
-        "Shun (Small)"
+        "Shun (Small)",
+        "Hanako (Swimsuit)"
     };
+    GLuint blurFBO, blurTexture;
+    int screenWidth, screenHeight;
+    int blurWidth = screenWidth / 4;
+    int blurHeight = screenHeight / 4;
    
     bool processVideoPacket(AVPacket* pkt);
     void processAudioPacket(AVPacket* pkt);
