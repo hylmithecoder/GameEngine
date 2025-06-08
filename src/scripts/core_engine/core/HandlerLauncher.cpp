@@ -10,6 +10,7 @@
 #include <mutex>
 #include <windowsx.h>
 #include <queue>
+#include <condition_variable>
 using namespace Debug;
 using namespace std;
 #pragma comment(lib, "comctl32.lib")
@@ -25,6 +26,7 @@ typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
 typedef string (*GetCommandFunc)();
 typedef string (*TestString)();
+typedef void (*ExecuteCommandFunc)();
 
 // Loading window class
 class LoadingWindow {
@@ -338,6 +340,10 @@ private:
     std::queue<std::string> messageQueue;
     std::mutex queueMutex;
 
+    std::atomic<bool> isProcessingMessage{false};
+    std::condition_variable messageCV;
+    std::mutex processingMutex;
+
     void RunMessageLoop() {
         Debug::Logger::Log("Starting message loop...", Debug::LogLevel::INFO);
         messageThreadRunning = true;
@@ -352,37 +358,66 @@ private:
             "GetCommandFromEngine"
         );
 
-        StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
-            if (!StartServer) {
-                DLLManager::ShowError("Failed to find StartServer function");
-            }
+        // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(
+        //     dllManager.GetEditorDLL(), 
+        //     "EditorRun"
+        // );
+        // RunEditor();
 
         if (!SendCommand || !GetReceiveCommand) {
             Debug::Logger::Log("Failed to initialize message functions", Debug::LogLevel::CRASH);
             return;
         }
 
+        std::atomic<bool> processingMessage{false};
+        
         while (messageThreadRunning) {
             try {
-                // Send heartbeat every 5 seconds
+                if (!processingMessage) {
+                    std::string message = GetReceiveCommand();
+                    if (!message.empty()) {
+                        processingMessage = true;
+                        
+                        // Process message in a separate task
+                        std::thread([this, message, &processingMessage]() {
+                            try {
+                                std::lock_guard<std::mutex> lock(queueMutex);
+                                messageQueue.push(message);
+                                Debug::Logger::Log("[HandlerIlmeeeEngine] Received: " + message, Debug::LogLevel::INFO);
+                                
+                                if (message == "LoadScene") {
+                                    Debug::Logger::Log("Processing LoadScene command...");
+                                    auto HandlerMethodExecute = dllManager.GetFunction<ExecuteCommandFunc>(
+                                        dllManager.GetEditorDLL(),
+                                        message.c_str() // Use specific function name
+                                    );
+                                    
+                                    if (HandlerMethodExecute) {
+                                        HandlerMethodExecute();
+                                    }
+                                }
+                                
+                                processingMessage = false;
+                            } catch (const std::exception& e) {
+                                Debug::Logger::Log("Message processing error: " + std::string(e.what()), 
+                                    Debug::LogLevel::CRASH);
+                                processingMessage = false;
+                            }
+                        }).detach();
+                    }
+                }
+
+                // Heartbeat check
                 static auto lastHeartbeat = std::chrono::steady_clock::now();
                 auto now = std::chrono::steady_clock::now();
-                
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
-                    SendCommand("Heartbeat");
+                    if (SendCommand) {
+                        SendCommand("Info Heartbeat");
+                    }
                     lastHeartbeat = now;
                 }
 
-                // Check for incoming messages
-                std::string message = GetReceiveCommand();
-                if (!message.empty()) {
-                    std::lock_guard<std::mutex> lock(queueMutex);
-                    messageQueue.push(message);
-                    Debug::Logger::Log("Count From 27016: "+ to_string(messageQueue.size()), Debug::LogLevel::INFO);
-                    Debug::Logger::Log("[HandlerIlmeeeEngine] Received: " + message, Debug::LogLevel::INFO);                    
-                }
-
-                // Process window messages
+                // Process Windows messages
                 MSG msg;
                 while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                     TranslateMessage(&msg);
@@ -393,10 +428,10 @@ private:
                     }
                 }
 
-                // Prevent tight loop
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
             } catch (const std::exception& e) {
-                Debug::Logger::Log("Message loop error: " + std::string(e.what()), Debug::LogLevel::CRASH);
+                Debug::Logger::Log("Message loop error: " + std::string(e.what()), 
+                    Debug::LogLevel::CRASH);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         }
@@ -543,14 +578,14 @@ public:
                 // StartMessagePolling();
                 
                 // Test message
-                auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
-                    dllManager.GetEditorDLL(), 
-                    "SendCommandToEngine"
-                );
+                // auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
+                //     dllManager.GetEditorDLL(), 
+                //     "SendCommandToEngine"
+                // );
                 
-                if (SendCommand) {
-                    SendCommand("[HandlerLauncher] Communication initialized");
-                }
+                // if (SendCommand) {
+                //     SendCommand("[HandlerLauncher] Communication initialized");
+                // }
                 
                 return true;
                 // Debug::Logger::Log("Editor connected to engine", Debug::LogLevel::SUCCESS);

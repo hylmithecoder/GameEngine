@@ -1220,32 +1220,20 @@ void HandlerProject::SearchFileOrFolder(const AssetFile& node, const std::string
 
 void HandlerProject::NewScene(const std::string& name) {
     std::string sceneFolder = projectPath + "/assets/scenes";
-    fs::create_directories(sceneFolder);  // pastikan foldernya ada
+    fs::create_directories(sceneFolder);
 
     std::string fullPath = sceneFolder + "/" + name + ".ilmeescene";
 
-    // 1. Buat file scene kosong
-    std::ofstream outFile(fullPath);
-    if (outFile.is_open()) {
-        outFile << "{\n\t\"sceneName\": \"" << name << "\",\n\t\"objects\": []\n}";
-        outFile.close();
+    std::vector<SceneObject> defaultObjects = {
+        { "Camera", 0, 0, 100, 100, 0, 1, 1, "assets/camera.png" },
+        { "Light",  0, 0, 100, 100, 0, 1, 1, "assets/light.png" }
+    };
 
-        // 2. Load langsung file ke currentScene (gunakan SceneSerializer)
-        try {
-            // currentScene = serializer.LoadScene(fullPath);
+    WriteBinaryScene(fullPath, name, defaultObjects);
 
-            ShowNotification("Scene Created & Loaded",
-                             "Scene " + name + " berhasil dibuat dan dimuat.",
-                             ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-        } catch (const std::exception& e) {
-            ShowNotification("Load Failed",
-                             std::string("Scene dibuat tapi gagal dimuat: ") + e.what(),
-                             ImVec4(1.0f, 0.5f, 0.2f, 1.0f));
-        }
-    } else {
-        ShowNotification("Failed", "Gagal membuat scene!",
-                         ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-    }
+    ShowNotification("Scene Created",
+                     "Binary scene " + name + " berhasil dibuat.",
+                     ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
 }
 
 

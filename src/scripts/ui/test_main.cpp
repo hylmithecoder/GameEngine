@@ -81,8 +81,8 @@ int main(int argc, char* argv[])
     }
 
     // Cleanup
-    if (backgroundTexture.TextureID != 0)
-        glDeleteTextures(1, &backgroundTexture.TextureID);
+    // if (backgroundTexture.TextureID != 0)
+    //     glDeleteTextures(1, &backgroundTexture.TextureID);
 
     ImGui_ImplOpenGL3_Shutdown(); // Core
     ImGui_ImplSDL2_Shutdown();  // Core

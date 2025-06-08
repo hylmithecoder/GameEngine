@@ -193,6 +193,49 @@ public:
     void DrawNavigationBar();
     void DrawQuickAccessPanel();
     void HandlerOpenFileWithExtensionName(AssetFile& currentNode);
+    
+    struct SceneObject {
+        std::string name;
+        float x, y, width, height, rotation, scaleX, scaleY;
+        std::string spritePath;
+    };
+
+    void WriteBinaryScene(const std::string& fullPath, const std::string& sceneName, const std::vector<SceneObject>& objects) {
+        std::ofstream out(fullPath, std::ios::binary);
+        if (!out) return;
+
+        // Write magic header
+        out.write("ILMEEESC", 8);
+
+        // Write scene name
+        uint8_t sceneLen = static_cast<uint8_t>(sceneName.size());
+        out.write(reinterpret_cast<const char*>(&sceneLen), 1);
+        out.write(sceneName.data(), sceneLen);
+
+        // Write object count
+        uint8_t count = static_cast<uint8_t>(objects.size());
+        out.write(reinterpret_cast<const char*>(&count), 1);
+
+        for (const auto& obj : objects) {
+            uint8_t nameLen = static_cast<uint8_t>(obj.name.size());
+            out.write(reinterpret_cast<const char*>(&nameLen), 1);
+            out.write(obj.name.data(), nameLen);
+
+            out.write(reinterpret_cast<const char*>(&obj.x), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.y), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.width), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.height), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.rotation), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.scaleX), sizeof(float));
+            out.write(reinterpret_cast<const char*>(&obj.scaleY), sizeof(float));
+
+            uint8_t spriteLen = static_cast<uint8_t>(obj.spritePath.size());
+            out.write(reinterpret_cast<const char*>(&spriteLen), 1);
+            out.write(obj.spritePath.data(), spriteLen);
+        }
+
+        out.close();
+    }
 
     std::vector<Notification> notifications;
     Assets assets;
@@ -216,7 +259,6 @@ public:
     std::string fileTargetImport = "";
 
     void OpenFile();
-    void NewProject();
     void OpenFolder();
     void OpenProject(const char* folderPath);
     void DrawAssetTree(const AssetFile& node);

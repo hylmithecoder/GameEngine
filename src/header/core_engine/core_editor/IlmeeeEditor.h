@@ -29,6 +29,7 @@ namespace IlmeeeEditor {
         std::vector<std::unique_ptr<EditorWindow>> windows;
         std::function<void()> onProjectOpenedCallback;
         TCPConnection tcpClient;
+        string projectPath;
 
     public:
         static std::unique_ptr<Editor> instance;
@@ -43,6 +44,7 @@ namespace IlmeeeEditor {
 
         // Project management
         void CreateProject(const std::string& name, const std::string& path);
+        void LoadScene();
         void OpenProject(const std::string& path);
         void CloseProject();
         
@@ -170,6 +172,7 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool StartServer();
         ILMEEEDITOR_API bool SendCommandToEngine(const char* command);
         ILMEEEDITOR_API bool ConnectToEngine();
+        ILMEEEDITOR_API void LoadScene();
         ILMEEEDITOR_API string GetCommandFromEngine();
         ILMEEEDITOR_API string TestString();
     }

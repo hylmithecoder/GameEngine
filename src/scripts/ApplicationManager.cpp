@@ -139,11 +139,11 @@ bool ApplicationManager::Initialize() {
                 // Debug::Logger::Log("Wait for network message...");
                 std::string message = networkManager->receiveMessage();
                 if (!message.empty()) {
-                    Debug::Logger::Log("Received: " + message, Debug::LogLevel::SUCCESS);
+                    // Debug::Logger::Log("Received: " + message, Debug::LogLevel::SUCCESS);
                     ProcessNetworkMessage(message);
                     messagesFrom27015.push(message);
-                    Debug::Logger::Log("Count Message From 27015: " + to_string(messagesFrom27015.size()), Debug::LogLevel::SUCCESS);
-                    Debug::Logger::Log("Message From 27015: " + messagesFrom27015.back(), Debug::LogLevel::WARNING);
+                    // Debug::Logger::Log("Count Message From 27015: " + to_string(messagesFrom27015.size()), Debug::LogLevel::SUCCESS);
+                    // Debug::Logger::Log("Message From 27015: " + messagesFrom27015.back(), Debug::LogLevel::WARNING);
                     lastMessageFrom27015 = message;
                     // Push message to UI with thread safety
                     // std::lock_guard<std::mutex> lock(messagesMutex);
@@ -220,7 +220,7 @@ bool ApplicationManager::Initialize() {
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
                     window->PushMessage(lastMessageFrom27015);
-                    Debug::Logger::Log("Sending heartbeat to engine: "+lastMessageFrom27015, Debug::LogLevel::SUCCESS);
+                    // Debug::Logger::Log("Sending heartbeat to engine: "+lastMessageFrom27015, Debug::LogLevel::SUCCESS);
                     lastHeartbeat = now;
                 }
                 

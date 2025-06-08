@@ -1,5 +1,10 @@
 #pragma once
 // #include <glad/glad.h>
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include "imgui.h"
@@ -8,6 +13,7 @@
 #include <SDL_ttf.h>
 #include <vector>
 #include <SceneRenderer2D.hpp>
+#include <NetworkManager.hpp>
 // #include <Application.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
@@ -114,12 +120,13 @@ public:
         "Welcome to Ilmeee Editor",
         "This is a log message",
         "You can see logs here",
-        "Enjoy your coding experience!"
+        "Enjoy your game dev experience!"
     };
     std::vector<std::string> messages;
     std::mutex messagesMutex;
     static const size_t MAX_MESSAGES = 1000;
     string currentMessageFrom27015 = "";
+    std::unique_ptr<NetworkManager> networkManager;
     // list<string> currentName = {"Shiroko", "Shun_Small"};
 
     enum CurrentBackground 

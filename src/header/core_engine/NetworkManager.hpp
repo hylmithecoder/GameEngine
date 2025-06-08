@@ -168,7 +168,7 @@ private:
                 buffer[bytesReceived] = '\0';
                 std::lock_guard<std::mutex> lock(receiveMutex_);
                 messageQueue_.push(std::string(buffer, bytesReceived));
-                Debug::Logger::Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
+                // Debug::Logger::Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
             }
             else if (bytesReceived == 0) {
                 Debug::Logger::Log("Client disconnected", Debug::LogLevel::WARNING);

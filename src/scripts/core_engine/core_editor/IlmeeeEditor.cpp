@@ -8,7 +8,9 @@
 #include <sstream>
 #include <iomanip>
 #include <windows.h>
-
+#include <fstream>
+#include <nfd.hpp>
+namespace fs = std::filesystem;
 namespace IlmeeeEditor {
 
     // Static member initialization
@@ -167,6 +169,68 @@ namespace IlmeeeEditor {
     }
 
     // ========== Editor Implementation ==========
+    struct SceneObject {
+        std::string name;
+        float x, y, width, height, rotation, scaleX, scaleY;
+        std::string spritePath;
+    };
+
+    struct SceneData {
+        std::string sceneName;
+        std::vector<SceneObject> objects;
+    };
+
+    SceneData DeserializeScene(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("Failed to open file.");
+
+        char magic[8];
+        in.read(magic, 8);
+        if (strncmp(magic, "ILMEEESC", 8) != 0) {
+            throw std::runtime_error("Invalid scene file (magic header mismatch).");
+        }
+
+        SceneData scene;
+
+        // Read scene name
+        uint8_t sceneNameLen;
+        in.read(reinterpret_cast<char*>(&sceneNameLen), 1);
+        scene.sceneName.resize(sceneNameLen);
+        in.read(&scene.sceneName[0], sceneNameLen);
+
+        // Read object count
+        uint8_t objCount;
+        in.read(reinterpret_cast<char*>(&objCount), 1);
+
+        for (int i = 0; i < objCount; ++i) {
+            SceneObject obj;
+
+            // Read name
+            uint8_t nameLen;
+            in.read(reinterpret_cast<char*>(&nameLen), 1);
+            obj.name.resize(nameLen);
+            in.read(&obj.name[0], nameLen);
+
+            // Read floats
+            in.read(reinterpret_cast<char*>(&obj.x), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.y), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.width), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.height), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.rotation), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.scaleX), sizeof(float));
+            in.read(reinterpret_cast<char*>(&obj.scaleY), sizeof(float));
+
+            // Read spritePath
+            uint8_t spriteLen;
+            in.read(reinterpret_cast<char*>(&spriteLen), 1);
+            obj.spritePath.resize(spriteLen);
+            in.read(&obj.spritePath[0], spriteLen);
+
+            scene.objects.push_back(obj);
+        }
+
+        return scene;
+    }
     Editor::Editor() {
         LogInfo("Editor instance created");
     }
@@ -190,26 +254,26 @@ namespace IlmeeeEditor {
         // This is typically handled by the main application loop
         while (true) {
             // Update all windows
-            for (auto& window : windows) {
-                if (window && window->IsOpen()) {
-                    sendCommandToEngine("UpdateWindow " + window->GetTitle());
-                    window->Update();
-                    window->Render();
-                }
-            }
-            std::this_thread::sleep_for(chrono::milliseconds(16));
+            // for (auto& window : windows) {
+            //     if (window && window->IsOpen()) {
+            //         sendCommandToEngine("UpdateWindow " + window->GetTitle());
+            //         window->Update();
+            //         window->Render();
+            //     }
+            // }
+            // std::this_thread::sleep_for(chrono::milliseconds(16));
 
-            // Remove closed windows
-            windows.erase(
-                std::remove_if(windows.begin(), windows.end(),
-                    [](const std::unique_ptr<EditorWindow>& window) {
-                        return !window || !window->IsOpen();
-                    }),
-                windows.end()
-            );
+            // // Remove closed windows
+            // windows.erase(
+            //     std::remove_if(windows.begin(), windows.end(),
+            //         [](const std::unique_ptr<EditorWindow>& window) {
+            //             return !window || !window->IsOpen();
+            //         }),
+            //     windows.end()
+            // );
 
             // Break condition would be implemented based on your needs
-            break; // Placeholder break
+            // break; // Placeholder break
         }
     }
 
@@ -288,6 +352,51 @@ namespace IlmeeeEditor {
         }
         
         LogSuccess("Project opened successfully");
+    }
+
+    void Editor::LoadScene() {
+        NFD::Guard nfdGuard;
+        NFD::UniquePath outPath;
+
+        // Prepare filters for scene files
+        nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+
+        try {
+            // Show open file dialog
+            nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
+            
+            if (result == NFD_OKAY && outPath.get() != nullptr) {
+                std::string scenePath = outPath.get();
+                
+                // Validate file extension
+                if (fs::path(scenePath).extension() != ".ilmeescene") {
+                    LogError("Invalid scene file format");
+                    return;
+                }
+
+                // Try to load the scene
+                try {
+                    SceneData loaded = DeserializeScene(scenePath);
+
+                    // Update editor state or pass to renderer or UI system
+                    LogInfo("Scene Loaded: " + loaded.sceneName);
+                    for (const auto& obj : loaded.objects) {
+                        LogInfo("Loaded Object: " + obj.name + " at (" + std::to_string(obj.x) + ", " + std::to_string(obj.y) + ")");
+                        // TODO: Tambahkan ke internal scene renderer atau canvas editor
+                    }
+                    // Update scene state
+                    
+                } catch (const std::exception& e) {
+                    LogError(std::string("Failed to load scene: ") + e.what());
+                }
+            } else if (result == NFD_CANCEL) {
+                // User cancelled - no need for notification
+            } else {
+
+            }
+        } catch (const std::exception& e) {
+        }
+        // Extract just the filename from the full path
     }
 
     void Editor::CloseProject() {
@@ -460,6 +569,12 @@ namespace IlmeeeEditor {
             // LogWarning("Hello from libIlmeeeEditor.dll");
             return "Hello from libIlmeeeEditor.dll";
         }
+
+        ILMEEEDITOR_API void LoadScene() {
+            if (Editor::instance) {
+                Editor::instance->LoadScene();
+            }
+        }
     }
 } // namespace IlmeeeEditor
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -468,8 +583,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
             break;
         case DLL_THREAD_ATTACH: {
-            IlmeeeEditor::LogSuccess("This is runtime DLL");
-            IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
+            // IlmeeeEditor::LogSuccess("This is runtime DLL");
+            // IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
             break;
         }
         case DLL_THREAD_DETACH:

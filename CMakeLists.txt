@@ -275,6 +275,7 @@ target_include_directories(TestBackground PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
     ${FFMPEG_DIR}
     ${STB}
     ${GLFW}/include

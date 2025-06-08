@@ -742,7 +742,8 @@ void MainWindow::RenderMenuBar() {
                 projectHandler.OpenFolder();
             }
             if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
-                projectHandler.OpenScene();
+                // projectHandler.OpenScene();
+                networkManager->sendMessage("LoadScene");
             }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {}
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {}
