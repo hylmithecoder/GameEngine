@@ -29,7 +29,6 @@ namespace IlmeeeEditor {
         std::vector<std::unique_ptr<EditorWindow>> windows;
         std::function<void()> onProjectOpenedCallback;
         TCPConnection tcpClient;
-        string projectPath;
 
     public:
         static std::unique_ptr<Editor> instance;
@@ -58,6 +57,8 @@ namespace IlmeeeEditor {
         bool startServer();
         bool sendCommandToEngine(const std::string& command);
         std::string receiveMessageFromEngine();
+        
+        string projectPath;
     };
     
     class ILMEEEDITOR_API Project {
@@ -174,6 +175,6 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool ConnectToEngine();
         ILMEEEDITOR_API void LoadScene();
         ILMEEEDITOR_API string GetCommandFromEngine();
-        ILMEEEDITOR_API string TestString();
+        ILMEEEDITOR_API string SetProjectPath();
     }
 } // namespace GameEditor

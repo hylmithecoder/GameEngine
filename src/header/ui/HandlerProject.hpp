@@ -198,6 +198,8 @@ public:
         std::string name;
         float x, y, width, height, rotation, scaleX, scaleY;
         std::string spritePath;
+        int parentId = -1; // -1 kalau root
+        std::vector<int> children; // index ke child objects
     };
 
     void WriteBinaryScene(const std::string& fullPath, const std::string& sceneName, const std::vector<SceneObject>& objects) {

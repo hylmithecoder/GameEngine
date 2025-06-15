@@ -1496,7 +1496,7 @@ void MainWindow::update() {
             projectHandler.OpenFolder();
             projectRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
             string assetFile = projectHandler.projectPath+"\\assets\\scenes\\MyFirstScene.ilmeescene";
-            networkManager->sendMessage("Send Project Path: "+projectHandler.projectPath);
+            networkManager->sendMessage(projectHandler.projectPath);
             cout << assetFile << endl;
             projectHandler.currentScene = projectHandler.serializer.LoadScene(assetFile);
             // create asset folder in project

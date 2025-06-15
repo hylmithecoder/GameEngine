@@ -25,7 +25,7 @@ typedef bool (*StartServerFunc)();
 typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
 typedef string (*GetCommandFunc)();
-typedef string (*TestString)();
+typedef string (*SetProjectPathFunc)();
 typedef void (*ExecuteCommandFunc)();
 
 // Loading window class
@@ -364,11 +364,11 @@ private:
         // );
         // RunEditor();
 
-        auto LoadScene = dllManager.GetFunction<ExecuteCommandFunc>(
-            dllManager.GetEditorDLL(), 
-            "LoadScene"
-        );
-        LoadScene();
+        // auto LoadScene = dllManager.GetFunction<ExecuteCommandFunc>(
+        //     dllManager.GetEditorDLL(), 
+        //     "LoadScene"
+        // );
+        // LoadScene();
 
         if (!SendCommand || !GetReceiveCommand) {
             Debug::Logger::Log("Failed to initialize message functions", Debug::LogLevel::CRASH);
@@ -384,18 +384,42 @@ private:
                     if (!message.empty()) {
                         processingMessage = true;
                         
-                        // Process message in a separate task
                         std::thread([this, message, &processingMessage]() {
                             try {
                                 std::lock_guard<std::mutex> lock(queueMutex);
                                 messageQueue.push(message);
                                 Debug::Logger::Log("[HandlerIlmeeeEngine] Received: " + message, Debug::LogLevel::INFO);
                                 
+                                // Check if message contains directory info
+                                // if (message.find("C:/") || message.find("E:/") != string::npos || message.find("F:/")) {
+                                //     auto SetProjectPath = dllManager.GetFunction<ExecuteCommandFunc>(
+                                //         dllManager.GetEditorDLL(),
+                                //         "SetProjectPath"
+                                //     );
+                                //     Debug::Logger::Log("Current path now: "+message);
+                                //     if (SetProjectPath) {
+                                //         // Extract path from message
+                                //         std::string path = message;
+                                //         SetProjectPath();
+                                //         Debug::Logger::Log("Set project path: " + path, Debug::LogLevel::INFO);
+                                //     }
+                                // } else 
+                                if (message == "E:\\Game Engine Folder\\My First Project") {
+                                    auto SetProjectPath = dllManager.GetFunction<SetProjectPathFunc>(
+                                        dllManager.GetEditorDLL(),
+                                        "SetProjectPath"
+                                    );
+                                    if (SetProjectPath)
+                                    {
+                                        Debug::Logger::Log("Set project path: " + message, Debug::LogLevel::SUCCESS);
+                                        SetProjectPath();
+                                    }
+                                }
                                 if (message == "LoadScene") {
                                     Debug::Logger::Log("Processing LoadScene command...");
                                     auto HandlerMethodExecute = dllManager.GetFunction<ExecuteCommandFunc>(
                                         dllManager.GetEditorDLL(),
-                                        message.c_str() // Use specific function name
+                                        message.c_str()
                                     );
                                     
                                     if (HandlerMethodExecute) {
@@ -418,7 +442,7 @@ private:
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
                     if (SendCommand) {
-                        SendCommand("Info Heartbeat");
+                        // SendCommand("Info Heartbeat");
                     }
                     lastHeartbeat = now;
                 }
@@ -443,75 +467,6 @@ private:
         }
     }
     
-    void StartMessagePolling() {
-        messageThreadRunning = true;
-        Logger::Log("Starting message polling...", LogLevel::SUCCESS);
-
-        TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
-        if (text)
-        {
-            Logger::Log(text(), LogLevel::SUCCESS);
-        }
-
-        // GetCommandFunc text = dllManager.GetFunction<GetCommandFunc>(dllManager.GetEditorDLL(), "GetCommandFromEngine");
-        // if (text)
-        // {
-        //     Logger::Log(text(), LogLevel::SUCCESS);
-        // }
-        // messagePollingThread = std::thread([this]() {
-        //     auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
-        //         dllManager.GetEditorDLL(), 
-        //         "GetCommandFromEngine"
-        //     );
-            
-        //     // TestString text = dllManager.GetFunction<TestString>(dllManager.GetEditorDLL(), "TestString");
-        //     // if (text)
-        //     // {
-        //     //     Logger::Log(text(), LogLevel::SUCCESS);
-        //     // }
-
-        //     if (!GetReceiveCommand) {
-        //         std::cout << "Failed to initialize message polling: GetReceiveCommand not found" << std::endl;
-        //         return;
-        //     }
-        //     else 
-        //     {
-        //         std::cout << "Message polling initialized" << std::endl;
-        //     }
-
-        //     while (messageThreadRunning) {
-        //         try {
-        //             std::string message = GetReceiveCommand();
-        //             if (!message.empty()) {
-        //                 // Store message in thread-safe queue
-        //                 std::lock_guard<std::mutex> lock(queueMutex);
-        //                 messageQueue.push(message);
-        //                 std::cout << " Received message: " << message << std::endl;
-        //                 std::cout << "Total messages: " << messageQueue.size() << std::endl;
-        //             }
-                    
-        //             // Prevent tight polling
-        //             std::this_thread::sleep_for(std::chrono::milliseconds(16));
-        //         } catch (const std::exception& e) {
-        //             std::cerr << "Message polling error: " << e.what() << std::endl;
-        //             std::this_thread::sleep_for(std::chrono::seconds(1));
-        //         }
-        //     }
-        // });
-        // Spamming message
-        while (true)
-        {
-            static auto lastHeartbeat = std::chrono::steady_clock::now();
-            auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5)
-            {
-                auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(dllManager.GetEditorDLL(),"SendCommandToEngine");
-                SendCommand("Heartbeat");
-                lastHeartbeat = now;
-            }
-        }
-    }
-
     void StopMessagePolling() {
         messageThreadRunning = false;
         if (messagePollingThread.joinable()) {

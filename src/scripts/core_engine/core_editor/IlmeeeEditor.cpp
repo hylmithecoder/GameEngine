@@ -10,9 +10,10 @@
 #include <windows.h>
 #include <fstream>
 #include <nfd.hpp>
+#include <json.hpp>
+using json = nlohmann::json;
 namespace fs = std::filesystem;
 namespace IlmeeeEditor {
-
     // Static member initialization
     std::unique_ptr<Editor> Editor::instance = nullptr;
     std::map<std::string, int> recentlyOpened;
@@ -172,7 +173,9 @@ namespace IlmeeeEditor {
     struct SceneObject {
         std::string name;
         float x, y, width, height, rotation, scaleX, scaleY;
-        std::string spritePath;
+        std::string spritePath;        
+        int parentId = -1; // -1 kalau root
+        std::vector<int> children; // index ke child objects
     };
 
     struct SceneData {
@@ -231,6 +234,30 @@ namespace IlmeeeEditor {
 
         return scene;
     }
+
+    
+    std::string SerializeSceneToJson(const SceneData& scene) {
+        json j;
+        j["sceneName"] = scene.sceneName;
+        j["objects"] = json::array();
+
+        for (const auto& obj : scene.objects) {
+            j["objects"].push_back({
+                {"name", obj.name},
+                {"x", obj.x},
+                {"y", obj.y},
+                {"width", obj.width},
+                {"height", obj.height},
+                {"spritePath", obj.spritePath},
+                {"rotation", obj.rotation},
+                {"scaleX", obj.scaleX},
+                {"scaleY", obj.scaleY}
+            });
+        }
+
+        return j.dump(4); // pretty print with 4-space indent
+    }
+
     Editor::Editor() {
         LogInfo("Editor instance created");
     }
@@ -358,46 +385,50 @@ namespace IlmeeeEditor {
         NFD::Guard nfdGuard;
         NFD::UniquePath outPath;
 
-        // Prepare filters for scene files
         nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
 
         try {
-            // Show open file dialog
-            nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
-            
+            nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, SetProjectPath().c_str());
+
             if (result == NFD_OKAY && outPath.get() != nullptr) {
                 std::string scenePath = outPath.get();
-                
-                // Validate file extension
+
                 if (fs::path(scenePath).extension() != ".ilmeescene") {
                     LogError("Invalid scene file format");
                     return;
                 }
 
-                // Try to load the scene
                 try {
+                    // Deserialisasi scene
                     SceneData loaded = DeserializeScene(scenePath);
-
-                    // Update editor state or pass to renderer or UI system
                     LogInfo("Scene Loaded: " + loaded.sceneName);
                     for (const auto& obj : loaded.objects) {
                         LogInfo("Loaded Object: " + obj.name + " at (" + std::to_string(obj.x) + ", " + std::to_string(obj.y) + ")");
-                        // TODO: Tambahkan ke internal scene renderer atau canvas editor
                     }
-                    // Update scene state
-                    
+
+                    // Simpan JSON sementara
+                    std::string tempScenePath = SetProjectPath() + "/TempScene_" + loaded.sceneName + ".json";
+                    std::ofstream tempOut(tempScenePath);
+                    if (!tempOut) {
+                        LogError("Failed to write temp scene file");
+                        return;
+                    }
+
+                    tempOut << SerializeSceneToJson(loaded); // Pastikan kamu punya fungsi ini
+                    tempOut.close();
+
+                    // Kirim path ke engine
+                    SendCommandToEngine(("LoadSceneFromFile: " + tempScenePath).c_str());
+
                 } catch (const std::exception& e) {
                     LogError(std::string("Failed to load scene: ") + e.what());
                 }
-            } else if (result == NFD_CANCEL) {
-                // User cancelled - no need for notification
-            } else {
-
             }
         } catch (const std::exception& e) {
+            LogError(std::string("Exception in LoadScene: ") + e.what());
         }
-        // Extract just the filename from the full path
     }
+
 
     void Editor::CloseProject() {
         if (!projects.empty()) {
@@ -565,9 +596,11 @@ namespace IlmeeeEditor {
             // return "Still Empty";
         }
 
-        ILMEEEDITOR_API string TestString() {
+        ILMEEEDITOR_API string SetProjectPath() {
             // LogWarning("Hello from libIlmeeeEditor.dll");
-            return "Hello from libIlmeeeEditor.dll";
+            std::string currentProjectPath = Editor::instance->receiveMessageFromEngine();
+            LogInfo("Received project path from engine: " + currentProjectPath);
+            return currentProjectPath;
         }
 
         ILMEEEDITOR_API void LoadScene() {

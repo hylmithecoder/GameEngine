@@ -79,7 +79,7 @@ public:
 
         // socketCore_ = accept(socketCore_, NULL, NULL);
         // closesocket(socketCore_);
-        // isConnected_ = true;
+        isConnected_ = true;
         
         // if (socketCore_ == INVALID_SOCKET) return false;
         
@@ -87,7 +87,6 @@ public:
         listenThread_ = std::thread(&TCPConnection::listenForConnectionsEngine, this);
         cout << "Server dll started on port " << PORTCore << " and socket " << socketCore_ << endl;
 
-        isConnected_ = true;
         return true;
     }
 

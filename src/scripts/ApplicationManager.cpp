@@ -216,12 +216,10 @@ bool ApplicationManager::Initialize() {
                     break;
                 }
 
-                static auto lastHeartbeat = std::chrono::steady_clock::now();
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
+                if (!lastMessageFrom27015.empty())
+                {
                     window->PushMessage(lastMessageFrom27015);
-                    // Debug::Logger::Log("Sending heartbeat to engine: "+lastMessageFrom27015, Debug::LogLevel::SUCCESS);
-                    lastHeartbeat = now;
+                    lastMessageFrom27015.clear();
                 }
                 
                 // Update and render
