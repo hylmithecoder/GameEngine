@@ -103,8 +103,8 @@ bool MainWindow::init(const char* title) {
 
     // Inisialisasi ImGui
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    ui::CreateContext();
+    ImGuiIO& io = ui::GetIO();
     
     string fontPath = "assets/fonts/zh-cn.ttf";
     io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 13.0f);
@@ -185,8 +185,8 @@ void MainWindow::HandleUpdateBackground(CurrentBackground currentBg)
 void MainWindow::setTheme(bool dark) {
     if (dark) {
         // Dark theme dengan warna yang lebih modern
-        ImGui::StyleColorsDark();
-        ImGuiStyle& style = ImGui::GetStyle();
+        ui::StyleColorsDark();
+        ImGuiStyle& style = ui::GetStyle();
         
         style.WindowPadding = ImVec2(12, 12);
         style.FramePadding = ImVec2(8, 6);
@@ -223,8 +223,8 @@ void MainWindow::setTheme(bool dark) {
         colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.41f, 0.68f, 1.00f);
     } else {
         // Light theme yang elegan
-        ImGui::StyleColorsLight();
-        ImGuiStyle& style = ImGui::GetStyle();
+        ui::StyleColorsLight();
+        ImGuiStyle& style = ui::GetStyle();
         
         style.WindowPadding = ImVec2(12, 12);
         style.FramePadding = ImVec2(8, 6);
@@ -1334,23 +1334,23 @@ void MainWindow::renderVideoPlayer() {
     static bool isOnlyRender = isOnlyRenderImage;
     static bool isOnlyAd = isOnlyAudio;
 
-    ImGui::Begin("Video Player", nullptr, ImGuiWindowFlags_NoCollapse);
+    ui::Begin("Video Player", nullptr, ImGuiWindowFlags_NoCollapse);
 
     // Input file video
-    ImGui::InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
-    ImGui::SameLine();
-    if (ImGui::Button("Open")) {
+    ui::InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
+    ui::SameLine();
+    if (ui::Button("Open")) {
         if (strlen(videoPath) > 0) {
             openVideo(videoPath);
             paused = false;
         }
     }
 
-    ImGui::Checkbox("Loop Video", &loopVideo);
-    ImGui::SameLine();
-    ImGui::Checkbox("Only Render Image", &isOnlyRender);
-    ImGui::SameLine();
-    ImGui::Checkbox("Only Audio", &isOnlyAd);
+    ui::Checkbox("Loop Video", &loopVideo);
+    ui::SameLine();
+    ui::Checkbox("Only Render Image", &isOnlyRender);
+    ui::SameLine();
+    ui::Checkbox("Only Audio", &isOnlyAd);
 
     if (videoPlayer->isPlaying) {     
         // cout << "Is Audio Play " << isOnlyAd << endl;   
@@ -1381,33 +1381,33 @@ void MainWindow::renderVideoPlayer() {
         renderVideoFrame();
 
         // Kontrol video
-        ImGui::Separator();
-        if (ImGui::Button(paused ? "Play" : "Pause")) {
+        ui::Separator();
+        if (ui::Button(paused ? "Play" : "Pause")) {
             paused = !paused;
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Stop")) {
+        ui::SameLine();
+        if (ui::Button("Stop")) {
             av_seek_frame(videoPlayer->formatContext, videoPlayer->videoStream, 0, AVSEEK_FLAG_BACKWARD);
             videoPlayer->currentTime = 0;
             paused = true;
         }
 
-        ImGui::Text("Time: %.2f / %.2f", videoPlayer->currentTime, videoPlayer->duration);
+        ui::Text("Time: %.2f / %.2f", videoPlayer->currentTime, videoPlayer->duration);
 
         // Informasi video
-        ImGui::Text("Resolution: %dx%d | FPS: %.2f", 
+        ui::Text("Resolution: %dx%d | FPS: %.2f", 
                     videoPlayer->width, videoPlayer->height, videoPlayer->fps);
         if (!isOnlyRender | isOnlyAd) {
-            ImGui::Separator();
-            ImGui::Text("Frequency: %d | Channels: %d", 
+            ui::Separator();
+            ui::Text("Frequency: %d | Channels: %d", 
                     videoPlayer->audioCodecContext->sample_rate, videoPlayer->audioCodecContext->ch_layout.nb_channels);
         }
         
     } else {
-        ImGui::Text("No video loaded. Please open a video file.");
+        ui::Text("No video loaded. Please open a video file.");
     }
 
-    ImGui::End();
+    ui::End();
 }
 
 void MainWindow::renderVideoFrame() {
@@ -1417,7 +1417,7 @@ void MainWindow::renderVideoFrame() {
         float aspectRatio = static_cast<float>(videoPlayer->width) / static_cast<float>(videoPlayer->height);
 
         // Hitung dimensi tampilan
-        ImVec2 contentSize = ImGui::GetContentRegionAvail();
+        ImVec2 contentSize = ui::GetContentRegionAvail();
         float displayWidth = contentSize.x;
         float displayHeight = displayWidth / aspectRatio;
 
@@ -1430,10 +1430,10 @@ void MainWindow::renderVideoFrame() {
         float posX = (contentSize.x - displayWidth) * 0.5f;
         float posY = (contentSize.y - displayHeight) * 0.5f;
 
-        ImGui::SetCursorPos(ImVec2(posX, posY));
+        ui::SetCursorPos(ImVec2(posX, posY));
 
         // Render frame video
-        ImGui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
+        ui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
              ImVec2(displayWidth, displayHeight));
     }
 }

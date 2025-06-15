@@ -364,6 +364,12 @@ private:
         // );
         // RunEditor();
 
+        auto LoadScene = dllManager.GetFunction<ExecuteCommandFunc>(
+            dllManager.GetEditorDLL(), 
+            "LoadScene"
+        );
+        LoadScene();
+
         if (!SendCommand || !GetReceiveCommand) {
             Debug::Logger::Log("Failed to initialize message functions", Debug::LogLevel::CRASH);
             return;

@@ -9,10 +9,12 @@
 #include <string>
 #include <algorithm>
 #include <iostream>
+#include <windows.h>
 #include <string>
 #include <nfd.hpp>
 #include <filesystem>
 #include <ctime>
+#include <Debugger.hpp>
 using namespace std;
 
 struct Project {
@@ -49,7 +51,7 @@ private:
 public:
     IlmeeHub() {
         // Initialize sample projects
-        projects.push_back({"Awesome Game", "/home/user/projects/awesome_game", "v1.2.3", "2 days ago", "Epic adventure game with stunning graphics", true, 0, ImVec4(0.8f, 0.2f, 0.2f, 1.0f)});
+        projects.push_back({"Awesome Game", "E:/Game Engine Folder/My First Project", "v1.2.3", "2 days ago", "Epic adventure game with stunning graphics", true, 0, ImVec4(0.8f, 0.2f, 0.2f, 1.0f)});
         projects.push_back({"Data Visualizer", "/home/user/projects/data_viz", "v0.8.1", "1 week ago", "Interactive data visualization tool", false, 1, ImVec4(0.2f, 0.8f, 0.2f, 1.0f)});
         projects.push_back({"Audio Engine", "/home/user/projects/audio_engine", "v2.1.0", "3 days ago", "High-performance audio processing library", true, 3, ImVec4(0.8f, 0.6f, 0.2f, 1.0f)});
         projects.push_back({"Image Editor", "/home/user/projects/img_editor", "v1.0.0", "5 days ago", "Lightweight image editing application", false, 2, ImVec4(0.6f, 0.2f, 0.8f, 1.0f)});
@@ -191,9 +193,9 @@ public:
         }
         
         // Project name
-        ImGui::PushFont(nullptr); // Would use medium font
+        // ImGui::PushFont(nullptr); // Would use medium font
         ImGui::Text("%s", project.name.c_str());
-        ImGui::PopFont();
+        // ImGui::PopFont();
         
         // Version and last modified
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "v%s", project.version.c_str());
@@ -202,13 +204,52 @@ public:
         
         // Description
         ImGui::TextWrapped("%s", project.description.c_str());
-        
+        // Debug::Logger::Log("Project Path: "+project.path);
         // Action buttons
-        ImGui::SetCursorPosY(cardSize.y - 35);
         ImGui::PushStyleColor(ImGuiCol_Button, project.accentColor);
         if (ImGui::Button("Open", ImVec2(60, 25))) {
             selectedProject = index;
-            // Launch project
+            
+            // Get the current executable path
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            std::filesystem::path currentPath = std::filesystem::path(exePath).parent_path();
+            Debug::Logger::Log("Current executable path: " + currentPath.string() + " ExePath: " + exePath, Debug::LogLevel::INFO);
+            // Construct editor path
+            std::filesystem::path editorPath = currentPath / "GameEngineSDL.exe";
+            Debug::Logger::Log("Editor Path: "+editorPath.string());
+            // Prepare process information
+            STARTUPINFOA si;
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+            ZeroMemory(&pi, sizeof(pi));
+            
+            // Command line arguments including project path
+            std::string cmdLine = "\"" + editorPath.string() + "\"";
+            Debug::Logger::Log("Command line: " + cmdLine);
+            // Launch editor
+            if (CreateProcessA(
+                editorPath.string().c_str(),
+                (LPSTR)cmdLine.c_str(),
+                NULL,
+                NULL,
+                FALSE,
+                0,
+                NULL,
+                project.path.c_str(),  // Set working directory to project path
+                &si,
+                &pi
+            )) {
+                Debug::Logger::Log("Launched editor with project: " + project.path);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            } else {
+                DWORD error = GetLastError();
+                std::string errorMsg = "Failed to launch editor. Error code: " + std::to_string(error);
+                Debug::Logger::Log(errorMsg, Debug::LogLevel::CRASH);
+                MessageBoxA(NULL, errorMsg.c_str(), "Error", MB_OK | MB_ICONERROR);
+            }
         }
         ImGui::PopStyleColor();
         

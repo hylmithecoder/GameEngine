@@ -636,6 +636,7 @@ target_link_libraries(HandlerIlmeeeEngine PRIVATE
 target_link_libraries(IlmeeeHub PRIVATE
     ${SDL2_DIR}/lib/x64/SDL2.lib
     ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
     OpenGL::GL
     ${LIBRARY}/avformat.lib
     ${LIBRARY}/avcodec.lib 
