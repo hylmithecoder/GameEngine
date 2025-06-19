@@ -4,7 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <sys/stat.h>
-#include <direct.h>
+// #include <direct.h>
 #include <ctime>
 #include <chrono>
 #include <functional>
@@ -19,7 +19,7 @@
 #include <unordered_map>
 #include <imgui.h>
 #include <assets.hpp>
-#include <stb_image.h>
+#include <stb/stb_image.h>
 #include <ranges>
 #include <algorithm>
 #include <nfd.h>
@@ -38,7 +38,7 @@ private:
         time_t now = time(0);
         struct tm tstruct;
         char buf[80];
-        localtime_s(&tstruct, &now);
+        localtime_r(&now, &tstruct);
         strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
         return std::string(buf);
     }

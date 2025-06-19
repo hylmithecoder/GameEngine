@@ -1,9 +1,17 @@
 #pragma once
 
-#ifdef GAMEENGINE_EXPORTS
-#define GAMEENGINE_API __declspec(dllexport)
+#if defined(_WIN32) || defined(_WIN64)
+    #ifdef GAMEENGINE_EXPORTS
+        #define GAMEENGINE_API __declspec(dllexport)
+    #else
+        #define GAMEENGINE_API __declspec(dllimport)
+    #endif
 #else
-#define GAMEENGINE_API __declspec(dllimport)
+    #ifdef GAMEENGINE_EXPORTS
+        #define GAMEENGINE_API __attribute__((visibility("default")))
+    #else
+        #define GAMEENGINE_API
+    #endif
 #endif
 
 #include <memory>

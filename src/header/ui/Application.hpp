@@ -9,6 +9,10 @@
 #include <NetworkManager.hpp>
 #include <Check_Environment.cpp>
 #include <Debugger.hpp>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <signal.h>
 #include <future>
 
 class ApplicationManager {
@@ -17,7 +21,7 @@ private:
     MainWindow* window;
     string lastMessageFrom27015;
     std::unique_ptr<Environment> environment;
-    PROCESS_INFORMATION engineProcess = {0};
+    pid_t engineProcessId = -1;
     std::atomic<bool> isRunning{false};
     std::atomic<bool> shouldExit{false};
     std::vector<std::function<void()>> cleanupTasks;

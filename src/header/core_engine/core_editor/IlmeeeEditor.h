@@ -1,10 +1,19 @@
 #pragma once
 
-#ifdef ILMEEEDITOR_EXPORTS
-#define ILMEEEDITOR_API __declspec(dllexport)
+#if defined(_WIN32) || defined(_WIN64)
+    #ifdef ILMEEEDITOR_EXPORTS
+        #define ILMEEEDITOR_API __declspec(dllexport)
+    #else
+        #define ILMEEEDITOR_API __declspec(dllimport)
+    #endif
 #else
-#define ILMEEEDITOR_API __declspec(dllimport)
+    #ifdef ILMEEEDITOR_EXPORTS
+        #define ILMEEEDITOR_API __attribute__((visibility("default")))
+    #else
+        #define ILMEEEDITOR_API
+    #endif
 #endif
+
 
 #include <string>
 #include <vector>
@@ -13,6 +22,7 @@
 #include <imgui.h>
 #include <glad/glad.h>
 #include <SDL.h>
+#include <map>
 #include <imgui_impl_sdl2.h>
 #include <TCPConnection.hpp>
 using namespace std;

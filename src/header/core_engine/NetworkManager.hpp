@@ -1,14 +1,22 @@
 #pragma once
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
 #include <string>
 #include <thread>
 #include <queue>
 #include <mutex>
+#include <vector>
 #include <Debugger.hpp>
+#include <string.h>
 using namespace std;
-#pragma comment(lib, "ws2_32.lib")
+// #pragma comment(lib, "ws2_32.lib")
 
+typedef int SOCKET;
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
 class NetworkManager {
 public:
     static const int PORT = 27015;
@@ -18,10 +26,10 @@ public:
         socket_(INVALID_SOCKET), 
         isRunning_(false),
         isConnected_(false) {
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            throw std::runtime_error("WSAStartup failed");
-        }
+        // WSADATA wsaData;
+        // if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        //     throw std::runtime_error("WSAStartup failed");
+        // }
     }
 
     bool startServer() {
@@ -40,19 +48,19 @@ public:
         int opt = 1;
         if (setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) == SOCKET_ERROR) {
             Debug::Logger::Log("setsockopt failed", Debug::LogLevel::CRASH);
-            closesocket(socket_);
+            close(socket_);
             return false;
         }
 
-        if (bind(socket_, (SOCKADDR*)&service, sizeof(service)) == SOCKET_ERROR) {
+        if (bind(socket_, (struct sockaddr*)&service, sizeof(service)) == SOCKET_ERROR) {
             Debug::Logger::Log("Bind failed", Debug::LogLevel::CRASH);
-            closesocket(socket_);
+            close(socket_);
             return false;
         }
 
         if (listen(socket_, SOMAXCONN) == SOCKET_ERROR) {
             Debug::Logger::Log("Listen failed", Debug::LogLevel::CRASH);
-            closesocket(socket_);
+            close(socket_);
             return false;
         }
 
@@ -69,25 +77,22 @@ public:
     bool connectToServer() {
         socketCore_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (socketCore_ == INVALID_SOCKET) {
-            int errorCode = WSAGetLastError();
-            Debug::Logger::Log("Failed to create client socket: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
+            Debug::Logger::Log("Failed to create client socket: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
             return false;
         }
 
         sockaddr_in clientService;
         clientService.sin_family = AF_INET;
-        if (InetPton(AF_INET, "127.0.0.1", &clientService.sin_addr.s_addr) == 0) {
-            int errorCode = WSAGetLastError();
-            Debug::Logger::Log("Failed to convert IP address: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
+        if (inet_pton(AF_INET, "127.0.0.1", &clientService.sin_addr) <= 0) {
+            Debug::Logger::Log("Failed to convert IP address: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
             return false;
         }
         clientService.sin_port = htons(27016);
 
         try {            
-            if (connect(socketCore_, (SOCKADDR*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
-                int errorCode = WSAGetLastError();
-                Debug::Logger::Log("Connection failed: " + std::to_string(errorCode) + " - " + std::string(strerror(errorCode)), Debug::LogLevel::CRASH);
-                closesocket(socketCore_);
+            if (connect(socketCore_, (struct sockaddr*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
+                Debug::Logger::Log("Connection failed: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
+                close(socketCore_);
                 return false;
             }
         }
@@ -96,10 +101,7 @@ public:
         }
 
         isConnected_ = true;
-        // isRunning_ = true;
-
-        // Start receive thread for client
-        // receiveThread_ = std::thread(&NetworkManager::handleMessages, this);
+        
         char ipStr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(clientService.sin_addr), ipStr, INET_ADDRSTRLEN);
         Debug::Logger::Log("Connected to server: " + std::string(ipStr) + " on port " + std::to_string(ntohs(clientService.sin_port)), Debug::LogLevel::SUCCESS);
@@ -112,13 +114,12 @@ public:
 
         std::lock_guard<std::mutex> lock(sendMutex_);
         int bytesSent = send(socketCore_, message.c_str(), message.length(), 0);
-        // Debug::Logger::Log("[IlmeeeEngine] Sending: " + message, Debug::LogLevel::INFO);
         if (bytesSent == SOCKET_ERROR) {
-            Debug::Logger::Log("Send failed: " + to_string(WSAGetLastError()), Debug::LogLevel::CRASH);
+            Debug::Logger::Log("Send failed: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
             return false;
         }
         
-        Debug::Logger::Log("Sent to: " + to_string(socketCore_) + to_string(bytesSent) +" And Message: "  + message);
+        Debug::Logger::Log("Sent to: " + std::to_string(socketCore_) + std::to_string(bytesSent) + " And Message: " + message);
         return true;
     }
 
@@ -136,7 +137,7 @@ public:
     void stop() {
         isRunning_ = false;
         if (socket_ != INVALID_SOCKET) {
-            closesocket(socket_);
+            close(socket_);
         }
         if (listenThread_.joinable()) {
             listenThread_.join();
@@ -179,7 +180,7 @@ private:
                 break;
             }
         }
-        closesocket(clientSocket);
+        close(clientSocket);
     }
 
     void handleMessages() {

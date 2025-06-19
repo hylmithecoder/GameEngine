@@ -7,7 +7,7 @@
 #include <iostream>
 #include <SDL_main.h>
 #include <SDL.h>
-#include <windows.h>
+// #include <windows.h>
 #include <string>
 #include <cstdlib>
 #include <algorithm>

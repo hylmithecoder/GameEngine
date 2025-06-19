@@ -1,81 +1,111 @@
 #include <Debugger.hpp>
 #include "MainWindow.hpp"
 using namespace Debug;
+namespace fs = std::filesystem;
 
 void HandlerProject::OpenFolder() {
-    NFD::Guard nfdGuard;
-
-    // auto-freeing memory
-    NFD::UniquePath outPath;
-
-    // show the dialog
-    nfdresult_t result = NFD::PickFolder(outPath);
-        if (result == NFD_OKAY) {
-            cout << outPath.get() << endl;
-            OpenProject(outPath.get());
-        } else if (result == NFD_CANCEL) {
-            cout << "User pressed cancel." << endl;
-        } else {
-            cout << "Error: " << NFD::GetError() << endl;
-        }
+    GtkWidget *dialog;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+    
+    dialog = gtk_file_chooser_dialog_new("Select Project Folder",
+                                      NULL,
+                                      action,
+                                      "_Cancel",
+                                      GTK_RESPONSE_CANCEL,
+                                      "_Open",
+                                      GTK_RESPONSE_ACCEPT,
+                                      NULL);
+    
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        cout << filename << endl;
+        OpenProject(filename);
+        g_free(filename);
+    }
+    
+    gtk_widget_destroy(dialog);
 }
 
 void HandlerProject::SaveNewScene() {
-    NFD_Init();
+    GtkWidget *dialog;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SAVE;
+    
+    dialog = gtk_file_chooser_dialog_new("Save Scene",
+                                      NULL,
+                                      action,
+                                      "_Cancel",
+                                      GTK_RESPONSE_CANCEL,
+                                      "_Save",
+                                      GTK_RESPONSE_ACCEPT,
+                                      NULL);
 
-    nfdchar_t* savePath;
+    // Set default filename
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), "Untitled.ilmeescene");
+    
+    // Add file filter for scene files
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Scene Files");
+    gtk_file_filter_add_pattern(filter, "*.ilmeescene");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
 
-    // prepare filters for the dialog
-    nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
-
-    // show the dialog
-    nfdresult_t result = NFD_SaveDialog(&savePath, filterItem, 1, NULL, "Untitled.ilmeescene");
-    if (result == NFD_OKAY) {
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        
         // Extract just the filename from the full path
-        std::string fullPath = savePath;
-        std::string filename = fs::path(fullPath).stem().string();
+        std::string fullPath = filename;
+        std::string sceneName = fs::path(fullPath).stem().string();
         
         // Create the scene with just the filename
-        NewScene(filename);
+        NewScene(sceneName);
         
-        // remember to free the memory
-        NFD_FreePath(savePath);
+        g_free(filename);
         
-        ShowNotification("Scene Created", "Created new scene: " + filename, 
+        ShowNotification("Scene Created", 
+            "Created new scene: " + sceneName, 
             ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-    } else if (result == NFD_CANCEL) {
-        puts("User pressed cancel.");
-    } else {
-        printf("Error: %s\n", NFD_GetError());
-        ShowNotification("Error", "Failed to create scene", 
-            ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
-
-    NFD_Quit();
+    
+    gtk_widget_destroy(dialog);
 }
 
 void HandlerProject::OpenScene() {
-    NFD::Guard nfdGuard;
-    NFD::UniquePath outPath;
+    GtkWidget *dialog;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
+    
+    dialog = gtk_file_chooser_dialog_new("Open Scene",
+                                      NULL,
+                                      action,
+                                      "_Cancel",
+                                      GTK_RESPONSE_CANCEL,
+                                      "_Open",
+                                      GTK_RESPONSE_ACCEPT,
+                                      NULL);
 
-    // Prepare filters for scene files
-    nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+    // Add file filter for scene files
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Scene Files");
+    gtk_file_filter_add_pattern(filter, "*.ilmeescene");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+    
+    // Set initial folder to project path if it exists
+    if (!projectPath.empty()) {
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), projectPath.c_str());
+    }
 
     try {
-        // Show open file dialog
-        nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
-        
-        if (result == NFD_OKAY && outPath.get() != nullptr) {
-            std::string scenePath = outPath.get();
+        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+            char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+            std::string scenePath = filename;
             
             // Validate file extension
             if (fs::path(scenePath).extension() != ".ilmeescene") {
                 ShowNotification("Error", "Invalid scene file format", 
                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                g_free(filename);
+                gtk_widget_destroy(dialog);
                 return;
             }
 
-            // Try to load the scene
             try {
                 currentScene = serializer.LoadScene(scenePath);
                 std::string sceneName = fs::path(scenePath).stem().string();
@@ -92,50 +122,77 @@ void HandlerProject::OpenScene() {
                     "Failed to load scene: " + std::string(e.what()),
                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             }
-        } else if (result == NFD_CANCEL) {
-            // User cancelled - no need for notification
-        } else {
-            ShowNotification("Error", 
-                "Failed to open file dialog: " + std::string(NFD::GetError()),
-                ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            
+            g_free(filename);
         }
     } catch (const std::exception& e) {
         ShowNotification("Error", 
             "Unexpected error: " + std::string(e.what()),
             ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
+    
+    gtk_widget_destroy(dialog);
 }
 
 void HandlerProject::OpenFile() {
-    NFD::Guard nfdGuard;
-    NFD::UniquePathSet outPaths;
-
-    // Define supported file types
-    nfdfilteritem_t filterItem[4] = {
-        {"Source Files", "c,cpp,h,hpp"},
-        {"Images", "png,jpg,jpeg,gif,bmp"},
-        {"Audio", "mp3,wav,ogg"},
-        {"Video", "mp4,mkv,avi,mov"}
-    };
-
-    // Show the dialog with filters for multiple selection
-    nfdresult_t result = NFD::OpenDialogMultiple(outPaths, filterItem, 4);
+    GtkWidget *dialog;
+    GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
     
-    if (result == NFD_OKAY) {
-        nfdpathsetsize_t numPaths;
-        NFD::PathSet::Count(outPaths, numPaths);
+    dialog = gtk_file_chooser_dialog_new("Open File",
+                                      NULL,
+                                      action,
+                                      "_Cancel",
+                                      GTK_RESPONSE_CANCEL,
+                                      "_Open",
+                                      GTK_RESPONSE_ACCEPT,
+                                      NULL);
+    
+    // Set multiple selection
+    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+    
+    // Add file filters
+    GtkFileFilter *source_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(source_filter, "Source Files");
+    gtk_file_filter_add_pattern(source_filter, "*.cpp");
+    gtk_file_filter_add_pattern(source_filter, "*.h");
+    gtk_file_filter_add_pattern(source_filter, "*.hpp");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), source_filter);
+    
+    GtkFileFilter *image_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(image_filter, "Images");
+    gtk_file_filter_add_pattern(image_filter, "*.png");
+    gtk_file_filter_add_pattern(image_filter, "*.jpg");
+    gtk_file_filter_add_pattern(image_filter, "*.jpeg");
+    gtk_file_filter_add_pattern(image_filter, "*.gif");
+    gtk_file_filter_add_pattern(image_filter, "*.bmp");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), image_filter);
 
-        for (nfdpathsetsize_t i = 0; i < numPaths; ++i) {
-            NFD::UniquePathSetPath path;
-            NFD::PathSet::GetPath(outPaths, i, path);
+
+    GtkFileFilter *audio_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(audio_filter, "Audio Files");
+    gtk_file_filter_add_pattern(audio_filter, "*.mp3");
+    gtk_file_filter_add_pattern(audio_filter, "*.wav");
+    gtk_file_filter_add_pattern(audio_filter, "*.ogg");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), audio_filter);
+
+    GtkFileFilter *video_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(video_filter, "Video Files");
+    gtk_file_filter_add_pattern(video_filter, "*.mp4");
+    gtk_file_filter_add_pattern(video_filter, "*.avi");
+    gtk_file_filter_add_pattern(video_filter, "*.mkv");
+    gtk_file_filter_add_pattern(video_filter, "*.mov");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), video_filter);
+    
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        GSList *filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+        int numPaths = g_slist_length(filenames);
+        
+        for (GSList *list = filenames; list != NULL; list = list->next) {
+            std::string currentFile = (char*)list->data;
+            std::cout << "Selected file: " << currentFile << std::endl;
             
-            std::string currentFile = path.get();
-            std::cout << "Selected file " << i + 1 << ": " << currentFile << std::endl;
-            
-            // Store the current file path
             fileTargetImport = currentFile;
             
-            // Determine appropriate subfolder based on file extension
             std::string ext = fs::path(currentFile).extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             
@@ -149,29 +206,24 @@ void HandlerProject::OpenFile() {
             } else if (ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov") {
                 targetFolder = projectPath + "/assets/video";
             } else {
-                targetFolder = projectPath + "/assets"; // Default to main assets folder
+                targetFolder = projectPath + "/assets";
             }
-
-            // Create target folder if it doesn't exist
-            fs::create_directories(targetFolder);
             
-            // Import the current file
+            fs::create_directories(targetFolder);
             HandleImport(targetFolder);
+            g_free(list->data);
         }
-
-        // Show summary notification
+        
+        g_slist_free(filenames);
+        
         if (numPaths > 0) {
             ShowNotification("Import Complete", 
                 "Imported " + std::to_string(numPaths) + " file(s)", 
                 ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
         }
-        
-    } else if (result == NFD_CANCEL) {
-        std::cout << "User cancelled file selection." << std::endl;
-    } else {
-        std::cout << "Error: " << NFD::GetError() << std::endl;
-        ShowNotification("Error", "Failed to open file dialog", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
+    
+    gtk_widget_destroy(dialog);
 }
 
 void HandlerProject::OpenProject(const char* folderPath) {
@@ -200,7 +252,7 @@ void HandlerProject::OpenProject(const char* folderPath) {
 
     for (const auto& dir : directories) {
         string fullPath = string(folderPath) + dir;
-        if (_mkdir(fullPath.c_str()) != 0 && errno != EEXIST) {
+        if (mkdir(fullPath.c_str(), 0755) != 0 && errno != EEXIST) {
             cerr << "Error creating directory: " << fullPath << endl;
         }
     }
@@ -302,12 +354,12 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
                     }
                     // Opsi Delete
                     if (ImGui::MenuItem(" Delete")) {
-                        if (MessageBoxA(NULL,
-                            ("Are you sure you want to delete " + node.name + "?").c_str(),
-                            "Confirm Delete",
-                            MB_YESNO | MB_ICONWARNING) == IDYES) {
+                        // if (MessageBoxA(NULL,
+                        //     ("Are you sure you want to delete " + node.name + "?").c_str(),
+                        //     "Confirm Delete",
+                        //     MB_YESNO | MB_ICONWARNING) == IDYES) {
                             DeleteFolder(node.fullPath);
-                        }
+                        // }
                     }
 
                     // Panggil method untuk membuat file baru di folder yang diklik
@@ -436,12 +488,12 @@ void HandlerProject::DrawAssetTree(const AssetFile& node) {
             }
             
             if (ImGui::MenuItem(" Delete")) {
-                if (MessageBoxA(NULL,
-                    ("Are you sure you want to delete " + node.name + "?").c_str(),
-                    "Confirm Delete",
-                    MB_YESNO | MB_ICONWARNING) == IDYES) {
+                // if (MessageBoxA(NULL,
+                //     ("Are you sure you want to delete " + node.name + "?").c_str(),
+                //     "Confirm Delete",
+                //     MB_YESNO | MB_ICONWARNING) == IDYES) {
                     DeleteFileOrFolder(node.fullPath);
-                }
+                // }
             }
             
             if (ImGui::MenuItem(" Edit")) {
@@ -622,16 +674,16 @@ void HandlerProject::DrawFileExplorer(AssetFile& node)
             }
             
             if (ImGui::MenuItem("Delete")) {
-                if (MessageBoxA(NULL,
-                    ("Are you sure you want to delete " + node.name + "?").c_str(),
-                    "Confirm Delete",
-                    MB_YESNO | MB_ICONWARNING) == IDYES) {
+                // if (MessageBoxA(NULL,
+                //     ("Are you sure you want to delete " + node.name + "?").c_str(),
+                //     "Confirm Delete",
+                //     MB_YESNO | MB_ICONWARNING) == IDYES) {
                     if (node.isDirectory) {
                         DeleteFolder(node.fullPath);
                     } else {
                         DeleteFileOrFolder(node.fullPath);
                     }
-                }
+                // }
             }
 
 
@@ -762,8 +814,11 @@ void HandlerProject::NewScripts(const std::string& scriptName) {
     string fullPath = scriptPath + scriptName + ".cpp";
     
     // Create scripts directory if it doesn't exist
-    if (_mkdir(scriptPath.c_str()) != 0 && errno != EEXIST || _mkdir(headerPath.c_str()) != 0 && errno != EEXIST) {
-        cerr << "Error creating scripts directory" << endl;
+    try {
+        std::filesystem::create_directories(scriptPath);
+        std::filesystem::create_directories(headerPath);
+    } catch (const std::filesystem::filesystem_error& e) {
+        cerr << "Error creating directories: " << e.what() << endl;
         return;
     }
 
@@ -818,13 +873,13 @@ void HandlerProject::NewScripts(const std::string& scriptName) {
 
         cout << "Created script: " << fullPath << endl;
         cout << "Created Header: " << headerFullPath << endl;
-        if (MessageBoxA(NULL, 
-            ("New script created successfully. Do you want to open the file?"),
-            "GameEngine SDL",
-            MB_YESNO | MB_ICONINFORMATION) == IDYES)
-        {
+        // if (MessageBoxA(NULL, 
+        //     ("New script created successfully. Do you want to open the file?"),
+        //     "GameEngine SDL",
+        //     MB_YESNO | MB_ICONINFORMATION) == IDYES)
+        // {
             OpenFile(projectPath);
-        }
+        // }
     } else {
         cerr << "Error creating script file: " << fullPath << endl;
     }

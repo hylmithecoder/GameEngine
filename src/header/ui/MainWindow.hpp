@@ -1,19 +1,22 @@
 #pragma once
 // #include <glad/glad.h>
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <windows.h>
-#include <ws2tcpip.h>
+// #define WIN32_LEAN_AND_MEAN
+// #include <winsock2.h>
+// #include <windows.h>
+// #include <ws2tcpip.h>
 
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
+#include <imgui_impl_opengl3.h>
 #include <SDL_ttf.h>
 #include <vector>
 #include <SceneRenderer2D.hpp>
 #include <NetworkManager.hpp>
+#include <gtk/gtk.h>
+#include <glib.h>
 // #include <Application.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
@@ -34,6 +37,7 @@ private:
     // char objectName[128] = "Player";
     // float position[3] = {0.0f, 0.0f, 0.0f};
     
+    bool showConfirmDialog(const char* message, const char* title);
     void set_window_icon();
     void setTheme(bool dark);
     bool openVideo(const char* filePath);

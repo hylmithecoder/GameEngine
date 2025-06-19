@@ -200,10 +200,10 @@ void SceneRenderer2D::RenderSceneToTexture(const Scene& scene) {
     // Draw all objects in the scene
     for (const auto& obj : scene.objects) {
         GLuint tex = textureManager.LoadTexture(obj.spritePath);
-        if (tex != 0) {
-            DrawSprite(tex, obj.x, obj.y, obj.width, obj.height, 
-                      obj.rotation, obj.scaleX, obj.scaleY);
-        }
+        // if (tex != 0) {
+        //     DrawSprite(tex, obj.x, obj.y, obj.width, obj.height, 
+        //               obj.rotation, obj.scaleX, obj.scaleY);
+        // }
     }
     
     // Draw selection gizmo for selected object

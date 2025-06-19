@@ -1,16 +1,22 @@
-#include <Windows.h>
+// #include <Windows.h>
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <string>
 #include <functional>
-#include <CommCtrl.h>
+#include <gtk-3.0/gtk/gtk.h>
+#include <dlfcn.h>
+// #include <CommCtrl.h>
 #include <atomic>
 #include <Debugger.hpp>
 #include <mutex>
-#include <windowsx.h>
+// #include <windowsx.h>
 #include <queue>
 #include <condition_variable>
+#include <gtk-3.0/gtk/gtktypes.h>
+#include <gtk-3.0/gtk/gtkwindow.h>
+#include <gtk-3.0/gtk/gtkdialog.h>
+#include <gtk-3.0/gtk/gtkwidget.h>
 using namespace Debug;
 using namespace std;
 #pragma comment(lib, "comctl32.lib")
@@ -31,262 +37,219 @@ typedef void (*ExecuteCommandFunc)();
 // Loading window class
 class LoadingWindow {
 private:
-    HWND hwnd;
-    HWND progressBar;
-    HWND statusLabel;
+    GtkWidget* window = nullptr;
+    GtkWidget* progressBar = nullptr;
+    GtkWidget* statusLabel = nullptr;
+    GtkWidget* titleLabel = nullptr;
+    GtkWidget* versionLabel = nullptr;
     std::thread loadingThread;
     bool isVisible = false;
-    bool isDragging = false;
-    POINT dragOffset = {0, 0};
-    HBITMAP logoBitmap = nullptr;
-
-    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-        LoadingWindow* window = reinterpret_cast<LoadingWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-        
-        switch (uMsg) {
-        case WM_NCHITTEST: {
-            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            RECT rc;
-            GetWindowRect(hwnd, &rc);
-            if (pt.y <= rc.top + 30) { // Top drag area
-                return HTCAPTION;
-            }
-            return HTCLIENT;
+    
+    // GTK CSS for styling
+    const char* css_style = R"(
+        .loading-window {
+            background: linear-gradient(to bottom, #252729, #181a1c);
+            border: 1px solid #464646;
+            border-radius: 15px;
         }
         
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            
-            // Draw background with Unity-style gradient
-            RECT rect;
-            GetClientRect(hwnd, &rect);
-            
-            TRIVERTEX vertex[2];
-            vertex[0].x = 0;
-            vertex[0].y = 0;
-            vertex[0].Red = 0x2500;    // Dark gray-blue
-            vertex[0].Green = 0x2700;
-            vertex[0].Blue = 0x2900;
-            vertex[0].Alpha = 0x0000;
-            
-            vertex[1].x = rect.right;
-            vertex[1].y = rect.bottom;
-            vertex[1].Red = 0x1800;    // Darker gray-blue
-            vertex[1].Green = 0x1A00;
-            vertex[1].Blue = 0x1C00;
-            vertex[1].Alpha = 0x0000;
-            
-            GRADIENT_RECT gRect = {0, 1};
-            GradientFill(hdc, vertex, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
-            
-            // Draw subtle border
-            HPEN hPen = CreatePen(PS_SOLID, 1, RGB(70, 70, 70));
-            SelectObject(hdc, hPen);
-            Rectangle(hdc, 0, 0, rect.right, rect.bottom);
-            DeleteObject(hPen);
-            
-            EndPaint(hwnd, &ps);
-            return 0;
+        .title-label {
+            font-family: 'Ubuntu', sans-serif;
+            font-size: 28px;
+            font-weight: bold;
+            color: white;
         }
         
-        default:
-            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+        .status-label {
+            font-family: 'Ubuntu', sans-serif;
+            font-size: 16px;
+            color: #cccccc;
         }
+        
+        .version-label {
+            font-family: 'Ubuntu', sans-serif;
+            font-size: 16px;
+            color: #888888;
+        }
+        
+        .loading-progress {
+            color: #4890e8;
+        }
+    )";
+    
+    static void on_window_destroy(GtkWidget* widget, gpointer data) {
+        LoadingWindow* window = static_cast<LoadingWindow*>(data);
+        window->isVisible = false;
+    }
+    
+    void ApplyCSS() {
+        GtkCssProvider* provider = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(provider, css_style, -1, nullptr);
+        
+        GtkStyleContext* context = gtk_widget_get_style_context(window);
+        gtk_style_context_add_provider(context, GTK_STYLE_PROVIDER(provider), 
+                                     GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        
+        g_object_unref(provider);
     }
     
 public:
-    LoadingWindow() : hwnd(nullptr), progressBar(nullptr), statusLabel(nullptr) {}
+    LoadingWindow() = default;
     
-    
-    HICON LoadIconFromFile(const wchar_t* iconPath) {
-        return (HICON)LoadImageW(
-            NULL,
-            iconPath,
-            IMAGE_ICON,
-            0, 0,  // Use actual icon size
-            LR_LOADFROMFILE | LR_DEFAULTSIZE
-        );
-    }
-
     bool Create() {
-        // Initialize common controls
-        INITCOMMONCONTROLSEX icex;
-        icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-        icex.dwICC = ICC_PROGRESS_CLASS;
-        InitCommonControlsEx(&icex);
-        
-        // Register window class
-        const wchar_t* className = L"IlmeeLoadingWindow";
-        WNDCLASSW wc = {};
-        wc.lpfnWndProc = WindowProc;
-        wc.hInstance = GetModuleHandle(nullptr);
-        wc.lpszClassName = className;
-        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.hbrBackground = nullptr; // Custom painting
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        
-        if (!RegisterClassW(&wc)) {
+        // Initialize GTK if not already done
+        if (!gtk_init_check(nullptr, nullptr)) {
+            cerr << "Failed to initialize GTK" << endl;
             return false;
         }
         
-        // Create window
-        int windowWidth = 480;
-        int windowHeight = 200;
-        int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-        int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-        int x = (screenWidth - windowWidth) / 2;
-        int y = (screenHeight - windowHeight) / 2;
+        // Create main window
+        window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(GTK_WINDOW(window), "Ilmee Game Engine");
+        gtk_window_set_default_size(GTK_WINDOW(window), 480, 200);
+        gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
+        gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+        gtk_window_set_decorated(GTK_WINDOW(window), TRUE);
         
-        hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_APPWINDOW,
-            className,
-            L"Ilmee Game Engine",
-            WS_POPUP | WS_THICKFRAME, // Add WS_THICKFRAME for resizable borders
-            x, y, windowWidth, windowHeight,
-            nullptr, nullptr, GetModuleHandle(nullptr), nullptr
-        );
-        
-        if (!hwnd) return false;
-        
-        // Load and set both large and small icons
-        HICON hIconLarge = LoadIconFromFile(L"assets/icons/app_icon.ico");
-        HICON hIconSmall = LoadIconFromFile(L"assets/icons/app_icon.ico");
-        
-        if (hIconLarge && hIconSmall) {
-            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconLarge);
-            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
-        } else {
-            Debug::Logger::Log("Failed to load window icons", Debug::LogLevel::WARNING);
+        // Set window icon
+        GError* error = nullptr;
+        GdkPixbuf* icon = gdk_pixbuf_new_from_file("assets/icons/app_icon.png", &error);
+        if (icon) {
+            gtk_window_set_icon(GTK_WINDOW(window), icon);
+            g_object_unref(icon);
+        } else if (error) {
+            cout << "Warning: Failed to load window icon: " << error->message << endl;
+            g_error_free(error);
         }
-        // Set window transparency
-        SetLayeredWindowAttributes(hwnd, 0, 245, LWA_ALPHA);
         
-        // Create rounded window region
-        HRGN region = CreateRoundRectRgn(0, 0, windowWidth, windowHeight, 15, 15);
-        SetWindowRgn(hwnd, region, TRUE);
+        // Create main container
+        GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+        gtk_container_add(GTK_CONTAINER(window), vbox);
+        gtk_container_set_border_width(GTK_CONTAINER(vbox), 20);
         
-        // Create title with custom font
-        HFONT titleFont = CreateFontW(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
-            
-        HWND titleLabel = CreateWindowW(L"STATIC", L"ILMEE ENGINE",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            0, 20, windowWidth, 40,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        SendMessage(titleLabel, WM_SETFONT, (WPARAM)titleFont, TRUE);
+        // Create title label
+        titleLabel = gtk_label_new("ILMEE ENGINE");
+        gtk_widget_set_halign(titleLabel, GTK_ALIGN_CENTER);
+        gtk_style_context_add_class(gtk_widget_get_style_context(titleLabel), "title-label");
+        gtk_box_pack_start(GTK_BOX(vbox), titleLabel, FALSE, FALSE, 0);
         
-        // Create modern progress bar
-        progressBar = CreateWindowW(PROGRESS_CLASSW, nullptr,
-            WS_VISIBLE | WS_CHILD | PBS_SMOOTH,
-            40, 120, windowWidth - 80, 4, // Make it thinner
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-            
-        // Set progress bar colors
-        SendMessage(progressBar, PBM_SETBARCOLOR, 0, RGB(72, 144, 232)); // Blue
-        SendMessage(progressBar, PBM_SETBKCOLOR, 0, RGB(45, 45, 48));    // Dark gray
+        // Add some spacing
+        GtkWidget* spacer1 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_widget_set_size_request(spacer1, -1, 20);
+        gtk_box_pack_start(GTK_BOX(vbox), spacer1, FALSE, FALSE, 0);
         
-        // Create status label with custom font
-        HFONT statusFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
-            
-        statusLabel = CreateWindowW(L"STATIC", L"Initializing...",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, 90, windowWidth - 40, 20,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        SendMessage(statusLabel, WM_SETFONT, (WPARAM)statusFont, TRUE);
+        // Create status label
+        statusLabel = gtk_label_new("Initializing...");
+        gtk_widget_set_halign(statusLabel, GTK_ALIGN_CENTER);
+        gtk_style_context_add_class(gtk_widget_get_style_context(statusLabel), "status-label");
+        gtk_box_pack_start(GTK_BOX(vbox), statusLabel, FALSE, FALSE, 0);
+        
+        // Create progress bar
+        progressBar = gtk_progress_bar_new();
+        gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(progressBar), FALSE);
+        gtk_style_context_add_class(gtk_widget_get_style_context(progressBar), "loading-progress");
+        gtk_box_pack_start(GTK_BOX(vbox), progressBar, FALSE, FALSE, 10);
+        
+        // Add bottom spacer
+        GtkWidget* spacer2 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_widget_set_size_request(spacer2, -1, 10);
+        gtk_box_pack_start(GTK_BOX(vbox), spacer2, TRUE, TRUE, 0);
         
         // Create version label
-        HWND versionLabel = CreateWindowW(L"STATIC", L"v1.0.0",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, windowHeight - 30, windowWidth - 40, 20,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        SendMessage(versionLabel, WM_SETFONT, (WPARAM)statusFont, TRUE);
+        versionLabel = gtk_label_new("v1.0.0");
+        gtk_widget_set_halign(versionLabel, GTK_ALIGN_CENTER);
+        gtk_style_context_add_class(gtk_widget_get_style_context(versionLabel), "version-label");
+        gtk_box_pack_start(GTK_BOX(vbox), versionLabel, FALSE, FALSE, 0);
+        
+        // Apply CSS styling
+        ApplyCSS();
+        gtk_style_context_add_class(gtk_widget_get_style_context(window), "loading-window");
+        
+        // Connect destroy signal
+        g_signal_connect(window, "destroy", G_CALLBACK(on_window_destroy), this);
         
         return true;
     }
     
     void Show() {
-        if (hwnd) {
-            ShowWindow(hwnd, SW_SHOW);
-            UpdateWindow(hwnd);
+        if (window) {
+            gtk_widget_show_all(window);
             isVisible = true;
         }
     }
     
     void Hide() {
-        if (hwnd) {
-            ShowWindow(hwnd, SW_HIDE);
+        if (window) {
+            gtk_widget_hide(window);
             isVisible = false;
         }
     }
     
-    void SetProgress(int percentage) {
+    void SetProgress(double progress) {
         if (progressBar) {
-            SendMessage(progressBar, PBM_SETPOS, percentage, 0);
+            // Ensure we're on the main thread for GTK operations
+            g_idle_add([](gpointer data) -> gboolean {
+                auto* args = static_cast<pair<GtkWidget*, double>*>(data);
+                gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(args->first), args->second);
+                delete args;
+                return G_SOURCE_REMOVE;
+            }, new pair<GtkWidget*, double>(progressBar, progress));
         }
     }
     
-    void SetStatus(const std::wstring& status) {
+    void SetStatus(const string& status) {
         if (statusLabel) {
-            SetWindowTextW(statusLabel, status.c_str());
+            // Ensure we're on the main thread for GTK operations
+            g_idle_add([](gpointer data) -> gboolean {
+                auto* args = static_cast<pair<GtkWidget*, string*>*>(data);
+                gtk_label_set_text(GTK_LABEL(args->first), args->second->c_str());
+                delete args->second;
+                delete args;
+                return G_SOURCE_REMOVE;
+            }, new pair<GtkWidget*, string*>(statusLabel, new string(status)));
         }
     }
     
-    void ProcessMessages() {
-        MSG msg;
-        while (PeekMessage(&msg, hwnd, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+    void Destroy() {
+        if (window) {
+            gtk_widget_destroy(window);
+            window = nullptr;
+            isVisible = false;
         }
     }
     
-    void StartLoadingAnimation() {
-        loadingThread = std::thread([this]() {
-            int dots = 0;
-            while (isVisible) {
-                std::wstring baseText = L"Loading";
-                for (int i = 0; i < dots; ++i) {
-                    baseText += L".";
-                }
-                SetStatus(baseText);
-                dots = (dots + 1) % 4;
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            }
-        });
+    bool IsVisible() const {
+        return isVisible;
     }
     
     ~LoadingWindow() {
-        if (loadingThread.joinable()) {
-            isVisible = false;
-            loadingThread.join();
-        }
-        if (hwnd) {
-            DestroyWindow(hwnd);
-        }
+        Destroy();
     }
 };
 
-// Utility class for DLL management
-class DLLManager {
+
+class LibraryManager {
 private:
-    HMODULE engineDLL = nullptr;
-    HMODULE editorDLL = nullptr;
+    void* engineLib = nullptr;
+    void* editorLib = nullptr;
     
 public:
-    const vector<string> IlmeeEngine = {"libIlmeeeEngine.dll", "libIlmeeeEditor.dll"};
-    bool LoadDLLs() {
-        engineDLL = LoadLibraryA(("bin/" + IlmeeEngine[0]).c_str());
-        if (!engineDLL) {
-            ShowError("Failed to load libIlmeeeEngine.dll");
+    const vector<string> IlmeeEngine = {"libIlmeeeEngine.so", "libIlmeeeEditor.so"};
+    
+    bool LoadLibraries() {
+        // Load engine library
+        string enginePath = "lib/" + IlmeeEngine[0];
+        engineLib = dlopen(enginePath.c_str(), RTLD_LAZY);
+        if (!engineLib) {
+            ShowError(("Failed to load " + IlmeeEngine[0] + ": " + dlerror()).c_str());
             return false;
         }
         
-        editorDLL = LoadLibraryA(("bin/" + IlmeeEngine[1]).c_str());
-        if (!editorDLL) {
-            ShowError("Failed to load libIlmeeeEditor.dll");
+        // Load editor library
+        string editorPath = "lib/" + IlmeeEngine[1];
+        editorLib = dlopen(editorPath.c_str(), RTLD_LAZY);
+        if (!editorLib) {
+            ShowError(("Failed to load " + IlmeeEngine[1] + ": " + dlerror()).c_str());
             Cleanup();
             return false;
         }
@@ -295,38 +258,108 @@ public:
     }
     
     template<typename T>
-    T GetFunction(HMODULE dll, const char* functionName) {
-        return reinterpret_cast<T>(GetProcAddress(dll, functionName));
+    T GetFunction(void* lib, const char* functionName) {
+        // Clear any existing error
+        dlerror();
+        
+        void* symbol = dlsym(lib, functionName);
+        char* error = dlerror();
+        if (error != nullptr) {
+            ShowError(("Failed to get function " + string(functionName) + ": " + error).c_str());
+            return nullptr;
+        }
+        
+        return reinterpret_cast<T>(symbol);
     }
     
     void Cleanup() {
-        if (editorDLL) {
-            FreeLibrary(editorDLL);
-            editorDLL = nullptr;
+        if (editorLib) {
+            dlclose(editorLib);
+            editorLib = nullptr;
         }
-        if (engineDLL) {
-            FreeLibrary(engineDLL);
-            engineDLL = nullptr;
+        if (engineLib) {
+            dlclose(engineLib);
+            engineLib = nullptr;
         }
     }
     
-    HMODULE GetEngineDLL() const { return engineDLL; }
-    HMODULE GetEditorDLL() const { return editorDLL; }
+    void* GetEngineLib() const { return engineLib; }
+    void* GetEditorLib() const { return editorLib; }
     
     static void ShowError(const char* message) {
-        MessageBoxA(nullptr, message, "Ilmee Launcher - Error", MB_ICONERROR);
-    }
-    
-    ~DLLManager() {
-        Cleanup();
+        // Use GTK message dialog instead of MessageBox
+        GtkWidget* dialog = gtk_message_dialog_new(
+            nullptr,
+            GTK_DIALOG_MODAL,
+            GTK_MESSAGE_ERROR,
+            GTK_BUTTONS_OK,
+            "%s", message
+        );
+        gtk_window_set_title(GTK_WINDOW(dialog), "Ilmee Launcher - Error");
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
     }
 };
+
+// Utility class for DLL management
+// class DLLManager {
+// private:
+//     HMODULE engineDLL = nullptr;
+//     HMODULE editorDLL = nullptr;
+    
+// public:
+//     const vector<string> IlmeeEngine = {"libIlmeeeEngine.dll", "libIlmeeeEditor.dll"};
+//     bool LoadDLLs() {
+//         engineDLL = LoadLibraryA(("bin/" + IlmeeEngine[0]).c_str());
+//         if (!engineDLL) {
+//             ShowError("Failed to load libIlmeeeEngine.dll");
+//             return false;
+//         }
+        
+//         editorDLL = LoadLibraryA(("bin/" + IlmeeEngine[1]).c_str());
+//         if (!editorDLL) {
+//             ShowError("Failed to load libIlmeeeEditor.dll");
+//             Cleanup();
+//             return false;
+//         }
+        
+//         return true;
+//     }
+    
+//     template<typename T>
+//     T GetFunction(HMODULE dll, const char* functionName) {
+//         return reinterpret_cast<T>(GetProcAddress(dll, functionName));
+//     }
+    
+//     void Cleanup() {
+//         if (editorDLL) {
+//             FreeLibrary(editorDLL);
+//             editorDLL = nullptr;
+//         }
+//         if (engineDLL) {
+//             FreeLibrary(engineDLL);
+//             engineDLL = nullptr;
+//         }
+//     }
+    
+//     HMODULE GetEngineDLL() const { return engineDLL; }
+//     HMODULE GetEditorDLL() const { return editorDLL; }
+    
+//     static void ShowError(const char* message) {
+//         MessageBoxA(nullptr, message, "Ilmee Launcher - Error", MB_ICONERROR);
+//     }
+    
+//     ~DLLManager() {
+//         Cleanup();
+//     }
+// };
 
 // Main loading sequence
 class LaunchSequence {
 private:
     LoadingWindow& loadingWindow;
-    DLLManager& dllManager;
+    // DLLManager& dllManager;
+    LibraryManager& libManager;
     
     struct LoadingStep {
         std::string description;
@@ -348,13 +381,13 @@ private:
         Debug::Logger::Log("Starting message loop...", Debug::LogLevel::INFO);
         messageThreadRunning = true;
 
-        auto SendCommand = dllManager.GetFunction<SendCommandToEngineFunc>(
-            dllManager.GetEditorDLL(), 
+        auto SendCommand = libManager.GetFunction<SendCommandToEngineFunc>(
+            libManager.GetEditorLib(), 
             "SendCommandToEngine"
         );
 
-        auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
-            dllManager.GetEditorDLL(), 
+        auto GetReceiveCommand = libManager.GetFunction<GetCommandFunc>(
+            libManager.GetEditorLib(),
             "GetCommandFromEngine"
         );
 
@@ -405,8 +438,8 @@ private:
                                 //     }
                                 // } else 
                                 if (message == "E:\\Game Engine Folder\\My First Project") {
-                                    auto SetProjectPath = dllManager.GetFunction<SetProjectPathFunc>(
-                                        dllManager.GetEditorDLL(),
+                                    auto SetProjectPath = libManager.GetFunction<SetProjectPathFunc>(
+                                        libManager.GetEditorLib(),
                                         "SetProjectPath"
                                     );
                                     if (SetProjectPath)
@@ -417,8 +450,8 @@ private:
                                 }
                                 if (message == "LoadScene") {
                                     Debug::Logger::Log("Processing LoadScene command...");
-                                    auto HandlerMethodExecute = dllManager.GetFunction<ExecuteCommandFunc>(
-                                        dllManager.GetEditorDLL(),
+                                    auto HandlerMethodExecute = libManager.GetFunction<ExecuteCommandFunc>(
+                                        libManager.GetEditorLib(),
                                         message.c_str()
                                     );
                                     
@@ -448,12 +481,18 @@ private:
                 }
 
                 // Process Windows messages
-                MSG msg;
-                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                    if (msg.message == WM_QUIT) {
-                        messageThreadRunning = false;
+                // MSG msg;
+                // while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                //     TranslateMessage(&msg);
+                //     DispatchMessage(&msg);
+                //     if (msg.message == WM_QUIT) {
+                //         messageThreadRunning = false;
+                //         break;
+                //     }
+                // }
+                while (g_main_context_iteration(NULL, FALSE)) {
+                    // Process all pending GTK events
+                    if (!messageThreadRunning) {
                         break;
                     }
                 }
@@ -476,20 +515,20 @@ private:
     
 public:
     // Ui loading sequence
-    LaunchSequence(LoadingWindow& window, DLLManager& dll) 
-        : loadingWindow(window), dllManager(dll) {
+    LaunchSequence(LoadingWindow& window, LibraryManager& dllManager) 
+        : loadingWindow(window), libManager(dllManager) {
         
         // Define loading steps
         steps = {
             {"Loading Engine DLL...", [&]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(800));
-                return dllManager.LoadDLLs(); 
+                return libManager.LoadLibraries(); 
             }, 20},            
             {"Initializing Engine...", [&]() {
                 Debug::Logger::Log("Initializing Engine...");
-                auto Init = dllManager.GetFunction<EngineInitFunc>(dllManager.GetEngineDLL(), "EngineInit");
+                auto Init = libManager.GetFunction<EngineInitFunc>(libManager.GetEngineLib(), "EngineInit");
                 if (!Init) {
-                    DLLManager::ShowError("Failed to find EngineInit function");
+                    LibraryManager::ShowError("Failed to find EngineInit function");
                     return false;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1200));
@@ -498,9 +537,9 @@ public:
             }, 30},
             {"Initializing Editor...", [&]() {
                 Debug::Logger::Log("Initializing Editor...");
-                auto InitEditor = dllManager.GetFunction<EditorInitFunc>(dllManager.GetEditorDLL(), "EditorInit");
+                auto InitEditor = libManager.GetFunction<EditorInitFunc>(libManager.GetEditorLib(), "EditorInit");
                 if (!InitEditor) {
-                    DLLManager::ShowError("Failed to find EditorInit function");
+                    LibraryManager::ShowError("Failed to find EditorInit function");
                     return false;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -509,9 +548,9 @@ public:
             }, 25},           
             {"Starting Editor Server...", [&]() {
                 Debug::Logger::Log("Starting Editor Server...");
-                StartServerFunc StartServer = dllManager.GetFunction<StartServerFunc>(dllManager.GetEditorDLL(), "StartServer");
+                StartServerFunc StartServer = libManager.GetFunction<StartServerFunc>(libManager.GetEditorLib(), "StartServer");
                 if (!StartServer) {
-                    DLLManager::ShowError("Failed to find StartServer function");
+                    LibraryManager::ShowError("Failed to find StartServer function");
                     return false;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(600));
@@ -520,18 +559,18 @@ public:
             }, 15},            
             {"Connecting Editor to Engine...", [&]() {
                 Debug::Logger::Log("Connecting Editor to Engine...");
-                auto ConnectToEngine = dllManager.GetFunction<ConnectToEngineFunc>(
-                    dllManager.GetEditorDLL(), 
+                auto ConnectToEngine = libManager.GetFunction<ConnectToEngineFunc>(
+                    libManager.GetEditorLib(), 
                     "ConnectToEngine"
                 );
                 
                 if (!ConnectToEngine) {
-                    DLLManager::ShowError("Failed to find ConnectToEngine function");
+                    LibraryManager::ShowError("Failed to find ConnectToEngine function");
                     return false;
                 }
 
                 if (!ConnectToEngine()) {
-                    DLLManager::ShowError("Failed to connect editor to engine");
+                    LibraryManager::ShowError("Failed to connect editor to engine");
                     return false;
                 }
                 
@@ -556,8 +595,8 @@ public:
 
     // Dont Use Like This is not safe TODO: You should create a string method with asyncron to handle receive message from Ui Editor
     string GetEngineMessage() {
-        auto GetReceiveCommand = dllManager.GetFunction<GetCommandFunc>(
-            dllManager.GetEditorDLL(), 
+        auto GetReceiveCommand = libManager.GetFunction<GetCommandFunc>(
+            libManager.GetEditorLib(), 
             "GetCommandFromEngine"
         );
         
@@ -592,9 +631,8 @@ public:
         
         for (const auto& step : steps) {
             // Update status
-            std::wstring wideDesc(step.description.begin(), step.description.end());
-            loadingWindow.SetStatus(wideDesc);
-            loadingWindow.ProcessMessages();
+            loadingWindow.SetStatus(step.description);
+            // loadingWindow.ProcessMessages();
             
             // Execute step
             if (!step.action()) {
@@ -605,12 +643,12 @@ public:
             currentProgress += step.progressWeight;
             int percentage = (currentProgress * 100) / totalProgress;
             loadingWindow.SetProgress(percentage);
-            loadingWindow.ProcessMessages();
+            // loadingWindow.ProcessMessages();
         }
         
-        loadingWindow.SetStatus(L"Launch Complete!");
+        loadingWindow.SetStatus("Launch Complete!");
         loadingWindow.SetProgress(100);
-        loadingWindow.ProcessMessages();
+        // loadingWindow.ProcessMessages();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         Debug::Logger::Log("Launch Complete!", Debug::LogLevel::SUCCESS);
         // Start message loop in a separate thread

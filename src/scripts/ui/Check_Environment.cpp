@@ -1,18 +1,22 @@
-#include <windows.h>
 #include <iostream>
-// #include <string>
 #include <vector>
-#include <tchar.h>
-#include <sysinfoapi.h>
 #include <array>
 #include <cstdlib>
 #include <sstream>
 #include <iomanip>
 #include <utility>
-#include <winioctl.h>
 #include <cstdint>
+#include <fstream>
+#include <string>
+#include <algorithm>
+#include <filesystem>
+#include <unistd.h>
+#include <sys/utsname.h>
+#include <sys/sysinfo.h>
 
 using namespace std;
+namespace fs = std::filesystem;
+
 class Environment {
 public:
     void detectDriveInfo();
@@ -27,7 +31,7 @@ public:
     }
 
     void printEnvironment() const {
-        cout << "System Architecture: " << (is64Bit ? "64-bit" : "32-bit") << endl;
+        cout << "System Architecture: " << architecture << endl;
         cout << "CPU: " << cpuName << endl;
         cout << "GPU(s):" << (gpuNames.empty() ? " None Detected" : "") << endl;
         for (const auto& name : gpuNames) {
@@ -38,179 +42,244 @@ public:
         cout << "OS: " << osVersion << endl;
         cout << "Drives:\n";
         for (const auto& drive : drives) {
-            cout << "  - " << drive.letter << ": [" << drive.type << "] (" << drive.mediaType << ")\n";
+            cout << "  - " << drive.device << " [" << drive.type << "] Size: " << drive.size << " GB" << endl;
         }
-        // cout  << "Checking "<< drivePath << "...\n";
-        // cout << getTBWFromSmartCtl(drivePath) << endl;
     }
 
-    void printDriveInfo(){        
-        cout  << "Checking "<< drivePath << "...\n";
-        cout << getTBWFromSmartCtl(drivePath) << endl;
+    void printDriveInfo() {        
+        cout << "Checking drives for TBW information...\n";
+        detectDriveInfo();
     }
 
 private:
     vector<pair<string, string>> getSmartctlDevices();
     string runCommand(const string& command);
+    string readFile(const string& filename);
+    
     struct DriveInfo {
-        string letter;
+        string device;
         string type;
-        string mediaType;
+        string size;
     };
 
-    bool is64Bit = false;
+    string architecture;
     int coreCount = 0;
     unsigned long long totalRAM_MB = 0;
     string cpuName;
     string osVersion;
     vector<string> gpuNames;
     vector<DriveInfo> drives;
-    string drivePath = "/dev/sdb"; // Total Bytes Written
 
     void detectArchitecture() {
-        SYSTEM_INFO sysInfo;
-        GetNativeSystemInfo(&sysInfo);
-        is64Bit = (sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64);
+        struct utsname unameData;
+        if (uname(&unameData) == 0) {
+            architecture = unameData.machine;
+            if (architecture == "x86_64") {
+                architecture = "64-bit";
+            } else if (architecture == "i386" || architecture == "i686") {
+                architecture = "32-bit";
+            } else {
+                architecture += " (Unknown bit-ness)";
+            }
+        } else {
+            architecture = "Unknown";
+        }
     }
 
     void detectCPUName() {
-        HKEY hKey;
-        if (RegOpenKeyEx(HKEY_LOCAL_MACHINE,
-                         TEXT("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"),
-                         0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-            TCHAR buffer[256];
-            DWORD size = sizeof(buffer);
-            DWORD type = REG_SZ;
-            if (RegQueryValueEx(hKey, TEXT("ProcessorNameString"), NULL, &type, (LPBYTE)buffer, &size) == ERROR_SUCCESS) {
-                cpuName = buffer;
+        ifstream cpuinfo("/proc/cpuinfo");
+        string line;
+        while (getline(cpuinfo, line)) {
+            if (line.find("model name") != string::npos) {
+                size_t pos = line.find(": ");
+                if (pos != string::npos) {
+                    cpuName = line.substr(pos + 2);
+                    break;
+                }
             }
-            RegCloseKey(hKey);
+        }
+        if (cpuName.empty()) {
+            cpuName = "Unknown CPU";
         }
     }
 
     void detectCoreCount() {
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        coreCount = sysInfo.dwNumberOfProcessors;
+        coreCount = sysconf(_SC_NPROCESSORS_ONLN);
     }
 
     void detectMemory() {
-        MEMORYSTATUSEX memStat;
-        memStat.dwLength = sizeof(memStat);
-        if (GlobalMemoryStatusEx(&memStat)) {
-            totalRAM_MB = static_cast<unsigned long long>(memStat.ullTotalPhys) / (1024 * 1024);
+        struct sysinfo si;
+        if (sysinfo(&si) == 0) {
+            totalRAM_MB = (si.totalram * si.mem_unit) / (1024 * 1024);
         }
     }
 
     void detectOSVersion() {
-        OSVERSIONINFOEX osvi = {};
-        osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-
-        if (GetVersionEx((OSVERSIONINFO*)&osvi)) {
-            osVersion = "Windows " + to_string(osvi.dwMajorVersion) + "." + to_string(osvi.dwMinorVersion);
+        // Try reading /etc/os-release first
+        ifstream osRelease("/etc/os-release");
+        string line;
+        string name, version;
+        
+        while (getline(osRelease, line)) {
+            if (line.find("NAME=") == 0) {
+                name = line.substr(5);
+                // Remove quotes
+                if (name.front() == '"' && name.back() == '"') {
+                    name = name.substr(1, name.length() - 2);
+                }
+            } else if (line.find("VERSION=") == 0) {
+                version = line.substr(8);
+                // Remove quotes
+                if (version.front() == '"' && version.back() == '"') {
+                    version = version.substr(1, version.length() - 2);
+                }
+            }
+        }
+        
+        if (!name.empty()) {
+            osVersion = name;
+            if (!version.empty()) {
+                osVersion += " " + version;
+            }
         } else {
-            osVersion = "Unknown Windows Version";
+            // Fallback to uname
+            struct utsname unameData;
+            if (uname(&unameData) == 0) {
+                osVersion = string(unameData.sysname) + " " + string(unameData.release);
+            } else {
+                osVersion = "Unknown Linux";
+            }
         }
     }
 
     void detectGPU() {
-        DISPLAY_DEVICE dd;
-        dd.cb = sizeof(dd);
-        for (DWORD i = 0; EnumDisplayDevices(NULL, i, &dd, 0); ++i) {
-            gpuNames.emplace_back(dd.DeviceString);
+        // Try to detect GPU via lspci
+        string lspciOutput = runCommand("lspci | grep -i vga");
+        if (!lspciOutput.empty()) {
+            istringstream iss(lspciOutput);
+            string line;
+            while (getline(iss, line)) {
+                size_t pos = line.find(": ");
+                if (pos != string::npos) {
+                    gpuNames.push_back(line.substr(pos + 2));
+                }
+            }
+        }
+        
+        // Also try 3D controller (for discrete GPUs)
+        string gpu3dOutput = runCommand("lspci | grep -i '3d controller'");
+        if (!gpu3dOutput.empty()) {
+            istringstream iss(gpu3dOutput);
+            string line;
+            while (getline(iss, line)) {
+                size_t pos = line.find(": ");
+                if (pos != string::npos) {
+                    gpuNames.push_back(line.substr(pos + 2));
+                }
+            }
         }
     }
 
     void detectDrives() {
-        DWORD drivesBitmask = GetLogicalDrives();
-        for (char letter = 'A'; letter <= 'Z'; ++letter) {
-            if (!(drivesBitmask & (1 << (letter - 'A')))) continue;
-
-            string rootPath = string(1, letter) + ":\\";
-            UINT driveType = GetDriveTypeA(rootPath.c_str());
-            string typeStr;
-            switch (driveType) {
-                case DRIVE_FIXED: typeStr = "Fixed"; break;
-                case DRIVE_REMOVABLE: typeStr = "Removable"; break;
-                case DRIVE_CDROM: typeStr = "CD-ROM"; break;
-                default: typeStr = "Other"; break;
+        // Read from /proc/partitions to get block devices
+        string lsblkOutput = runCommand("lsblk -d -n -o NAME,TYPE,SIZE | grep disk");
+        istringstream iss(lsblkOutput);
+        string line;
+        
+        while (getline(iss, line)) {
+            istringstream lineStream(line);
+            string device, type, size;
+            lineStream >> device >> type >> size;
+            
+            if (!device.empty()) {
+                drives.push_back({"/dev/" + device, type, size});
             }
-
-            string mediaType = "Unknown";
-
-            // Coba buka handle ke drive fisik
-            string physicalPath = "\\\\.\\" + string(1, letter) + ":";
-            HANDLE hDevice = CreateFileA(
-                physicalPath.c_str(),
-                0,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                NULL,
-                OPEN_EXISTING,
-                0,
-                NULL
-            );
-
-            if (hDevice != INVALID_HANDLE_VALUE) {
-                STORAGE_PROPERTY_QUERY query = {};
-                query.PropertyId = StorageDeviceSeekPenaltyProperty;
-                query.QueryType = PropertyStandardQuery;
-
-                DEVICE_SEEK_PENALTY_DESCRIPTOR seekPenalty = {};
-                DWORD bytesReturned = 0;
-
-                if (DeviceIoControl(
-                        hDevice,
-                        IOCTL_STORAGE_QUERY_PROPERTY,
-                        &query, sizeof(query),
-                        &seekPenalty, sizeof(seekPenalty),
-                        &bytesReturned, NULL)) {
-                    mediaType = seekPenalty.IncursSeekPenalty ? "HDD" : "SSD";
-                }
-
-                CloseHandle(hDevice);
-            }
-
-            drives.push_back({ string(1, letter), typeStr, mediaType });
         }
     }
     
-    string getTBWFromSmartCtl(const string& physicalDrivePath) {
-        string command = "smartctl -a " + physicalDrivePath + " 2>&1";
-        array<char, 512> buffer;
+    string getTBWFromSmartCtl(const string& devicePath, const string& deviceType = "") {
+        string command = "smartctl -a";
+        if (!deviceType.empty()) {
+            command += " -d " + deviceType;
+        }
+        command += " " + devicePath + " 2>&1";
+        
+        string output = runCommand(command);
         string result = "TBW: Unavailable";
-    
-        FILE* pipe = _popen(command.c_str(), "r");
-        if (!pipe) return "TBW: Failed to open smartctl";
-    
-        while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-            string line = buffer.data();
-    
-            // Untuk NVMe (umumnya)
+        
+        istringstream iss(output);
+        string line;
+        
+        while (getline(iss, line)) {
+            // For NVMe drives
             if (line.find("Data Units Written") != string::npos) {
-                result = "TBW (Data Units Written): " + line.substr(line.find(":") + 1);
+                cout << "  " << line << "\n";
+                // Extract the value and calculate TBW
+                size_t pos = line.find_last_of(" ");
+                if (pos != string::npos) {
+                    try {
+                        string valueStr = line.substr(pos + 1);
+                        // Remove any non-numeric characters except comma
+                        valueStr.erase(remove_if(valueStr.begin(), valueStr.end(), 
+                                     [](char c) { return !isdigit(c) && c != ','; }), valueStr.end());
+                        valueStr.erase(remove(valueStr.begin(), valueStr.end(), ','), valueStr.end());
+                        
+                        uint64_t value = stoull(valueStr);
+                        double tbw = value * 512.0 * 1000.0 / (1024.0 * 1024.0 * 1024.0 * 1024.0);
+                        result = "Estimated TBW: " + to_string(tbw) + " TB";
+                    } catch (const exception& e) {
+                        result = "TBW: Error parsing value";
+                    }
+                }
                 break;
             }
-    
-            // Untuk SATA (opsional alternatif)
+            
+            // For SATA drives
             if (line.find("Total_LBAs_Written") != string::npos) {
-                result = "TBW (LBAs Written): " + line.substr(line.find_last_of(" ") + 1);
+                cout << "  " << line << "\n";
+                size_t pos = line.find_last_of(" ");
+                if (pos != string::npos) {
+                    try {
+                        string valueStr = line.substr(pos + 1);
+                        uint64_t value = stoull(valueStr);
+                        double tbw = value * 512.0 / (1024.0 * 1024.0 * 1024.0 * 1024.0);
+                        result = "Estimated TBW: " + to_string(tbw) + " TB";
+                    } catch (const exception& e) {
+                        result = "TBW: Error parsing value";
+                    }
+                }
+                break;
+            }
+            
+            // Alternative for some SATA drives
+            if (line.find("Host_Writes_32MiB") != string::npos) {
+                cout << "  " << line << "\n";
+                size_t pos = line.find_last_of(" ");
+                if (pos != string::npos) {
+                    try {
+                        string valueStr = line.substr(pos + 1);
+                        uint64_t value = stoull(valueStr);
+                        double tbw = value * 32.0 / 1024.0; // Convert 32MiB units to TB
+                        result = "Estimated TBW: " + to_string(tbw) + " TB";
+                    } catch (const exception& e) {
+                        result = "TBW: Error parsing value";
+                    }
+                }
                 break;
             }
         }
-    
-        _pclose(pipe);
+        
         return result;
     }
 };
 
 inline vector<pair<string, string>> Environment::getSmartctlDevices() {
     vector<pair<string, string>> devices;
-    FILE* pipe = popen("smartctl --scan", "r");
-    if (!pipe) return devices;
-
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        string line = buffer;
+    string output = runCommand("smartctl --scan");
+    
+    istringstream iss(output);
+    string line;
+    while (getline(iss, line)) {
         size_t devStart = line.find("/dev/");
         if (devStart != string::npos) {
             string devPath = line.substr(devStart, line.find(" ", devStart) - devStart);
@@ -222,7 +291,6 @@ inline vector<pair<string, string>> Environment::getSmartctlDevices() {
             devices.emplace_back(devPath, devType);
         }
     }
-    pclose(pipe);
     return devices;
 }
 
@@ -239,56 +307,47 @@ inline string Environment::runCommand(const string& command) {
     return result;
 }
 
+inline string Environment::readFile(const string& filename) {
+    ifstream file(filename);
+    if (!file.is_open()) return "";
+    
+    string content;
+    string line;
+    while (getline(file, line)) {
+        content += line + "\n";
+    }
+    return content;
+}
+
 inline void Environment::detectDriveInfo() {
     cout << "\n[Drive Info with TBW]" << endl;
     auto devices = getSmartctlDevices();
 
-    for (const auto& [path, type] : devices) {
-        string command = "smartctl -a -d " + type + " " + path + " 2>&1";
-        cout << "Running command: " << command << endl;
-        string output = runCommand(command);
+    if (devices.empty()) {
+        cout << "No devices found via smartctl --scan. Trying common device paths..." << endl;
+        // Try common device paths
+        vector<string> commonPaths = {"/dev/sda", "/dev/sdb", "/dev/sdc", "/dev/nvme0n1", "/dev/nvme1n1"};
+        for (const auto& path : commonPaths) {
+            if (fs::exists(path)) {
+                devices.emplace_back(path, "");
+            }
+        }
+    }
 
-        if (output.find("Unable to detect device type") != string::npos ||
-            output.find("Permission denied") != string::npos)
-        {
-            cout << path << " (" << type << "): Unavailable or inaccessible.\n";
+    for (const auto& [path, type] : devices) {
+        cout << "\nChecking device: " << path;
+        if (!type.empty()) {
+            cout << " (type: " << type << ")";
+        }
+        cout << endl;
+        
+        // Check if we have permission to access the device
+        if (access(path.c_str(), R_OK) != 0) {
+            cout << "  Permission denied. Try running as root (sudo).\n";
             continue;
         }
-
-        cout << path << " (" << type << "):\n";
-
-        istringstream iss(output);
-        string line;
-        bool tbwShown = false;
-
-        while (getline(iss, line)) {
-            if (line.find("Data Units Written") != string::npos) {
-                cout << "  " << line << "\n";
-                size_t pos = line.find_last_of(" ");
-                if (pos != string::npos) {
-                    string valueStr = line.substr(pos + 1);
-                    uint64_t value = stoull(valueStr);
-                    double tbw = value * 512.0 * 1000.0 / (1024.0 * 1024.0 * 1024.0 * 1024.0);
-                    cout << "  Estimated TBW: " << tbw << " TB\n";
-                    tbwShown = true;
-                }
-            }
         
-            if (line.find("Total_LBAs_Written") != string::npos ||
-                line.find("Host_Writes_32MiB") != string::npos) {
-                cout << "  " << line << "\n";
-                size_t pos = line.find_last_of(" ");
-                if (pos != string::npos) {
-                    string valueStr = line.substr(pos + 1);
-                    uint64_t value = stoull(valueStr);
-                    double tbw = value * 512.0 / (1024.0 * 1024.0 * 1024.0 * 1024.0);
-                    cout << "  Estimated TBW: " << tbw << " TB\n";
-                    tbwShown = true;
-                }
-            }
-        }        
-
-        if (!tbwShown)
-            cout << "  TBW info not found.\n";
+        string tbwInfo = getTBWFromSmartCtl(path, type);
+        cout << "  " << tbwInfo << "\n";
     }
 }

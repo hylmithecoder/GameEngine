@@ -7,11 +7,15 @@
 #include "FFmpegWrapper.hpp"
 #include <fstream>
 #include <libavformat/avformat.h>
-#include <stb_image.h>
+#include <stb/stb.h>
 #include <SDL_opengl.h>
+#include <gtk-3.0/gtk/gtk.h>
 #include "assets.hpp"
 // #include <backends/imgui_impl_opengl3.h>
 #include <Debugger.hpp>
+#include <gtk-3.0/gtk/gtktypes.h>
+#include <glib-2.0/glib/gtypes.h>
+#include <gtk-3.0/gtk/gtkmain.h>
 using namespace std;
 namespace ui = ImGui;
 
@@ -32,6 +36,30 @@ MainWindow::~MainWindow() {
         delete videoPlayer;
     }
     clean();
+}
+
+// Add this helper function at the top of your file
+bool MainWindow::showConfirmDialog(const char* message, const char* title) {
+    GtkWidget *dialog;
+    gint response;
+
+    // Initialize GTK if not already done
+    if (!gtk_init_check(nullptr, nullptr)) {
+        Debug::Logger::Log("Failed to initialize GTK", Debug::LogLevel::CRASH);
+        return false;
+    }
+
+    dialog = gtk_message_dialog_new(nullptr,
+                                  GTK_DIALOG_MODAL,
+                                  GTK_MESSAGE_WARNING,
+                                  GTK_BUTTONS_YES_NO,
+                                  "%s", message);
+    gtk_window_set_title(GTK_WINDOW(dialog), title);
+    
+    response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    return response == GTK_RESPONSE_YES;
 }
 
 void MainWindow::set_window_icon() {
@@ -1488,26 +1516,23 @@ void MainWindow::update() {
 
     // assetRoot = projectHandler.BuildAssetTree("E:/Game Engine Folder/My First Project/");
     if (!firstOpenProject) {
-        if (MessageBoxA(NULL, 
-            ("You Must Be Open Project First?"),
-            "Confirm Open",
-            MB_YESNO | MB_ICONWARNING) == IDYES)
-        {            
+        if (showConfirmDialog("You Must Be Open Project First?", "Confirm Open")) {
+            // ...handle YES response...
             projectHandler.OpenFolder();
             projectRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
-            string assetFile = projectHandler.projectPath+"\\assets\\scenes\\MyFirstScene.ilmeescene";
+            string assetFile = projectHandler.projectPath+"/assets/scenes/MyFirstScene.ilmeescene";
             networkManager->sendMessage(projectHandler.projectPath);
             cout << assetFile << endl;
             projectHandler.currentScene = projectHandler.serializer.LoadScene(assetFile);
             // create asset folder in project
             assetFolder = projectRoot.children[0];
-            assetPath = projectHandler.projectPath+"\\assets";
+            assetPath = projectHandler.projectPath+"/assets";
             projectHandler.currentDirectory = assetPath;
             isLoadScene = true;
             // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;
+        }                   
         }
-    }
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {

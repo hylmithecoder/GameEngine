@@ -8,7 +8,7 @@
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_vulkan.h>
 #include <SDL_ttf.h>
-#include <windows.h>
+// #include <windows.h>
 #include <map>
 #include <iomanip>
 
@@ -668,6 +668,6 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    return main(__argc, __argv);
-}
+// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+//     return main(__argc, __argv);
+// }

@@ -1,6 +1,6 @@
 #pragma once
 
-#define VK_USE_PLATFORM_WIN32_KHR
+// #define VK_USE_PLATFORM_WIN32_KHR
 #include <SDL.h>
 #include <vulkan/vulkan.h>
 #include <vector>

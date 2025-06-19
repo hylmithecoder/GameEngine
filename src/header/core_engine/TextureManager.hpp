@@ -3,7 +3,7 @@
 #include <GLHeader.hpp>
 #include <string>
 #include <unordered_map>
-#include <stb_image.h>
+#include <stb/stb_image.h>
 
 class TextureManager {
 public:

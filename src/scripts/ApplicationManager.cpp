@@ -48,7 +48,7 @@ bool ApplicationManager::Initialize() {
             
         // Print working directory
         char cwd[512];
-        if (_getcwd(cwd, sizeof(cwd))) {
+        if (getcwd(cwd, sizeof(cwd))) {
             Debug::Logger::Log("Working Directory: " + std::string(cwd));
         }
             
@@ -62,72 +62,60 @@ bool ApplicationManager::Initialize() {
     }
 }
     
-    bool ApplicationManager::LaunchEngine() {
-        try {
-            Debug::Logger::Log("[IlmeeeEditor] Starting network server...");
-            isRunning = true;
-            if (!networkManager->startServer()) {
-                Debug::Logger::Log("Failed to start network server", Debug::LogLevel::CRASH);
-                MessageBoxA(0, "Failed to start network server", "Error", MB_OK | MB_ICONERROR);
-                return false;
-            }
-            
-            Debug::Logger::Log("[IlmeeeEditor] Launching engine process...");
-            STARTUPINFOA si = { sizeof(si) };
-            std::string command = "HandlerIlmeeeEngine.exe -project MyGameProject";
-            
-            BOOL result = CreateProcessA(
-                nullptr, 
-                const_cast<char*>(command.c_str()), 
-                nullptr, nullptr, FALSE, 
-                CREATE_NEW_PROCESS_GROUP, // Allow proper termination
-                nullptr, nullptr, &si, &engineProcess
-            );
-            
-            if (!result) {
-                DWORD error = GetLastError();
-                Debug::Logger::Log("Failed to launch engine. Error code: " + std::to_string(error), Debug::LogLevel::CRASH);
-                MessageBoxA(0, "Failed to launch HandlerIlmeeeEngine.exe", "Error", MB_OK | MB_ICONERROR);
-                return false;
-            }
-            
-            // Wait for connection establishment
-            // Debug::Logger::Log("[IlmeeeEditor] Waiting for engine connection...");
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
-            
-            // // Send initial configuration
-            // networkManager->sendMessage("init:MyGameProject");
-            // Debug::Logger::Log("[IlmeeeEditor] Engine launched successfully");
-            
-
-            // Wait for connection asynchronously
-            std::future<bool> connectionFuture = std::async(std::launch::async, 
-                [this]() { return WaitForServerConnection(30); });
-                
-            // Show connection status
-            while (connectionFuture.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
-                // Debug::Logger::Log("Waiting for engine connection...", Debug::LogLevel::INFO);
-            }
-            
-            if (!connectionFuture.get()) {
-                Debug::Logger::Log("Failed to establish connection", Debug::LogLevel::CRASH);
-                return false;
-            }
-            
-            // Send initial configuration
-            networkManager->sendMessage("init:MyGameProject");
-            Debug::Logger::Log("[IlmeeeEditor] Engine launched successfully");
-            
-            // Start network processing thread
-            StartNetworkThread();
-            
-            return true;
-            
-        } catch (const std::exception& e) {
-            Debug::Logger::Log("Exception during engine launch: " + std::string(e.what()), Debug::LogLevel::CRASH);
+bool ApplicationManager::LaunchEngine() {
+    try {
+        Debug::Logger::Log("[IlmeeeEditor] Starting network server...");
+        isRunning = true;
+        if (!networkManager->startServer()) {
+            Debug::Logger::Log("Failed to start network server", Debug::LogLevel::CRASH);
             return false;
         }
+        
+        Debug::Logger::Log("[IlmeeeEditor] Launching engine process...");
+        
+        pid_t pid = fork();
+        if (pid == -1) {
+            // Fork failed
+            Debug::Logger::Log("Failed to fork process: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
+            return false;
+        }
+        else if (pid == 0) {
+            // Child process
+            execl("./HandlerIlmeeeEngine", "HandlerIlmeeeEngine", "-project", "MyGameProject", nullptr);
+            // If execl returns, it failed
+            exit(1);
+        }
+        else {
+            // Parent process
+            engineProcessId = pid;
+        }
+
+        // Wait for connection asynchronously
+        std::future<bool> connectionFuture = std::async(std::launch::async, 
+            [this]() { return WaitForServerConnection(30); });
+        
+        // Show connection status
+        while (connectionFuture.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            // Waiting for connection
+        }
+        
+        if (!connectionFuture.get()) {
+            Debug::Logger::Log("Failed to establish connection", Debug::LogLevel::CRASH);
+            return false;
+        }
+        
+        networkManager->sendMessage("init:MyGameProject");
+        Debug::Logger::Log("[IlmeeeEditor] Engine launched successfully");
+        
+        StartNetworkThread();
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        Debug::Logger::Log("Exception during engine launch: " + std::string(e.what()), Debug::LogLevel::CRASH);
+        return false;
     }
+}
     
     void ApplicationManager::StartNetworkThread() {
         networkThreadRunning = true;
@@ -153,10 +141,24 @@ bool ApplicationManager::Initialize() {
                 }
                 
                 // Check engine process
-                if (engineProcess.hProcess) {
-                    DWORD exitCode;
-                    if (GetExitCodeProcess(engineProcess.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-                        Debug::Logger::Log("Engine process has terminated unexpectedly", Debug::LogLevel::CRASH);
+                if (engineProcessId > 0) {
+                    int status;
+                    pid_t result = waitpid(engineProcessId, &status, WNOHANG);
+                    
+                    if (result == engineProcessId) {
+                        // Process has terminated
+                        if (WIFEXITED(status)) {
+                            Debug::Logger::Log("Engine process has terminated with exit code: " + 
+                                std::to_string(WEXITSTATUS(status)), Debug::LogLevel::CRASH);
+                        } else if (WIFSIGNALED(status)) {
+                            Debug::Logger::Log("Engine process was terminated by signal: " + 
+                                std::to_string(WTERMSIG(status)), Debug::LogLevel::CRASH);
+                        }
+                        shouldExit = true;
+                        break;
+                    } else if (result == -1) {
+                        Debug::Logger::Log("Error checking engine process status: " + 
+                            std::string(strerror(errno)), Debug::LogLevel::CRASH);
                         shouldExit = true;
                         break;
                     }
@@ -227,11 +229,17 @@ bool ApplicationManager::Initialize() {
                 window->render();
                 
                 // Check engine process status
-                if (engineProcess.hProcess) {
-                    DWORD exitCode;
-                    if (GetExitCodeProcess(engineProcess.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                if (engineProcessId > 0) {
+                    int status;
+                    pid_t result = waitpid(engineProcessId, &status, WNOHANG);
+                    
+                    if (result == engineProcessId) {
+                        // Process has terminated
                         Debug::Logger::Log("Engine process has terminated");
                         shouldExit = true;
+                    } else if (result == -1) {
+                        // Error occurred
+                        Debug::Logger::Log("Error checking engine process status: " + std::string(strerror(errno)), Debug::LogLevel::WARNING);
                     }
                 }
                 
@@ -297,31 +305,28 @@ bool ApplicationManager::Initialize() {
     }
 
     // Update CleanupEngine method
-    void ApplicationManager::CleanupEngine() {
-        Debug::Logger::Log("Cleaning up engine process...");
+void ApplicationManager::CleanupEngine() {
+    Debug::Logger::Log("Cleaning up engine process...");
+    
+    if (engineProcessId > 0) {
+        // First try graceful shutdown
+        kill(engineProcessId, SIGTERM);
         
-        if (engineProcess.hProcess) {
-            // First try graceful shutdown
-            DWORD exitCode;
-            if (GetExitCodeProcess(engineProcess.hProcess, &exitCode) && exitCode == STILL_ACTIVE) {
-                // Send termination signal
-                GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, GetProcessId(engineProcess.hProcess));
-                
-                // Wait for process to end
-                DWORD waitResult = WaitForSingleObject(engineProcess.hProcess, 2000);
-                if (waitResult == WAIT_TIMEOUT) {
-                    Debug::Logger::Log("Engine not responding to graceful shutdown, force terminating...", Debug::LogLevel::WARNING);
-                    TerminateProcess(engineProcess.hProcess, 1);
-                }
-            }
-            
-            // Ensure handles are closed
-            CloseHandle(engineProcess.hProcess);
-            CloseHandle(engineProcess.hThread);
-            memset(&engineProcess, 0, sizeof(engineProcess));
-            Debug::Logger::Log("Engine process cleaned up");
+        // Wait for process to end
+        int status;
+        pid_t result = waitpid(engineProcessId, &status, WNOHANG);
+        
+        if (result == 0) {
+            // Process still running, wait a bit then force kill
+            sleep(2);
+            kill(engineProcessId, SIGKILL);
+            waitpid(engineProcessId, nullptr, 0);
         }
+        
+        engineProcessId = -1;
+        Debug::Logger::Log("Engine process cleaned up");
     }
+}
 
     // Update CleanupWindow method
     void ApplicationManager::CleanupWindow() {

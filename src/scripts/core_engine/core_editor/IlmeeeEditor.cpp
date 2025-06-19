@@ -7,10 +7,13 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
-#include <windows.h>
+// #include <windows.h>
 #include <fstream>
 #include <nfd.hpp>
 #include <json.hpp>
+#ifdef _WIN32
+    #include <windows.h>
+#endif
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 namespace IlmeeeEditor {
@@ -30,32 +33,52 @@ namespace IlmeeeEditor {
 
     // ========== Debugger Implementation ==========
     void Debugger::LogInfo(const std::string& message) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, 9); // Blue
-        std::cout << "[INFO] " << message << std::endl;
-        SetConsoleTextAttribute(hConsole, 15); // Reset to default
-    }
+    #ifdef _WIN32
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, 9); // Blue
+            std::cout << "[INFO] ";
+            SetConsoleTextAttribute(hConsole, 15);
+    #else
+            std::cout << "\033[1;34m[INFO]\033[0m ";
+    #endif
+            std::cout << message << std::endl;
+        }
 
-    void Debugger::LogWarning(const std::string& message) {        
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, 14); // Yellow
-        std::cout << "[WARNING] " << message << std::endl;
-        SetConsoleTextAttribute(hConsole, 15); // Reset to default
-    }
+        void Debugger::LogWarning(const std::string& message) {
+    #ifdef _WIN32
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, 14); // Yellow
+            std::cout << "[WARNING] ";
+            SetConsoleTextAttribute(hConsole, 15);
+    #else
+            std::cout << "\033[1;33m[WARNING]\033[0m ";
+    #endif
+            std::cout << message << std::endl;
+        }
 
-    void Debugger::LogError(const std::string& message) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, 12); // Red
-        std::cerr << "[ERROR] " << message << std::endl;
-        SetConsoleTextAttribute(hConsole, 15); // Reset to default
-    }
+        void Debugger::LogError(const std::string& message) {
+    #ifdef _WIN32
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, 12); // Red
+            std::cerr << "[ERROR] ";
+            SetConsoleTextAttribute(hConsole, 15);
+    #else
+            std::cerr << "\033[1;31m[ERROR]\033[0m ";
+    #endif
+            std::cerr << message << std::endl;
+        }
 
-    void Debugger::LogSuccess(const std::string& message) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, 10); // Green
-        std::cout << "[SUCCESS] " << message << std::endl;
-        SetConsoleTextAttribute(hConsole, 15); // Reset to default
-    }
+        void Debugger::LogSuccess(const std::string& message) {
+    #ifdef _WIN32
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, 10); // Green
+            std::cout << "[SUCCESS] ";
+            SetConsoleTextAttribute(hConsole, 15);
+    #else
+            std::cout << "\033[1;32m[SUCCESS]\033[0m ";
+    #endif
+            std::cout << message << std::endl;
+        }
 
     // Global logging functions
     void LogInfo(const std::string& message) {
@@ -610,21 +633,31 @@ namespace IlmeeeEditor {
         }
     }
 } // namespace IlmeeeEditor
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    switch (ul_reason_for_call) {
-        case DLL_PROCESS_ATTACH:
-            IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
-            break;
-        case DLL_THREAD_ATTACH: {
-            // IlmeeeEditor::LogSuccess("This is runtime DLL");
-            // IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
-            break;
-        }
-        case DLL_THREAD_DETACH:
-            break;
-        case DLL_PROCESS_DETACH:
-            IlmeeeEditor::LogInfo("IlmeeeEditor DLL unloaded");
-            break;
-    }
-    return TRUE;
+// BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+//     switch (ul_reason_for_call) {
+//         case DLL_PROCESS_ATTACH:
+//             IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
+//             break;
+//         case DLL_THREAD_ATTACH: {
+//             // IlmeeeEditor::LogSuccess("This is runtime DLL");
+//             // IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
+//             break;
+//         }
+//         case DLL_THREAD_DETACH:
+//             break;
+//         case DLL_PROCESS_DETACH:
+//             IlmeeeEditor::LogInfo("IlmeeeEditor DLL unloaded");
+//             break;
+//     }
+//     return TRUE;
+// }
+
+__attribute__((constructor))
+void OnLibraryLoad() {
+    IlmeeeEditor::LogInfo("IlmeeeEditor .so loaded");
+}
+
+__attribute__((destructor))
+void OnLibraryUnload() {
+    IlmeeeEditor::LogInfo("IlmeeeEditor .so unloaded");
 }

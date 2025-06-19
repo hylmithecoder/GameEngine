@@ -1,142 +1,110 @@
 #pragma once
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>        // close
+#include <errno.h>
 #include <string>
 #include <functional>
 #include <thread>
 #include <mutex>
 #include <queue>
-#include <IlmeeeEditor.h>
-#include <string>
+#include <vector>
 #include <iostream>
-using namespace std;
 
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "wsock32.lib")
 namespace IlmeeeEditor {
+
 class TCPConnection {
 public:
     static const int PORT = 27015;
     static const int PORTCore = 27016;
-    
-    TCPConnection() : socket_(INVALID_SOCKET), isConnected_(false) {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
-    }
-    
+
+    TCPConnection() : socket_(-1), socketCore_(-1), isConnected_(false) {}
+
     ~TCPConnection() {
         disconnectFromEngine();
-        WSACleanup();
     }
 
     bool startServerCore() {
-        cout << "Starting server core..." << endl;
-        socketCore_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socketCore_ == INVALID_SOCKET)
-        {
-            cout << "Failed to create server socket" << endl;
+        std::cout << "Starting server core..." << std::endl;
+        socketCore_ = socket(AF_INET, SOCK_STREAM, 0);
+        if (socketCore_ < 0) {
+            perror("Socket creation failed");
             return false;
         }
 
-        sockaddr_in service;
+        int opt = 1;
+        if (setsockopt(socketCore_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+            perror("setsockopt failed");
+            close(socketCore_);
+            return false;
+        }
+
+        sockaddr_in service{};
         service.sin_family = AF_INET;
         service.sin_addr.s_addr = INADDR_ANY;
         service.sin_port = htons(PORTCore);
 
-        // if (bind(socketCore_, (SOCKADDR*)&service, sizeof(service)) == SOCKET_ERROR) {
-        //     closesocket(socketCore_);
-        //     cout << "Bind failed" << endl;
-        //     return false;
-        // }
-
-        // if (listen(socketCore_, SOMAXCONN) == SOCKET_ERROR) {
-        //     closesocket(socketCore_);
-        //     cout << "Listen failed" << endl;
-        //     return false;
-        // }
-
-        // Enable socket reuse
-        int opt = 1;
-        if (setsockopt(socketCore_, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) == SOCKET_ERROR) {
-            cout << "setsockopt failed" << endl;
-            closesocket(socketCore_);
+        if (bind(socketCore_, (sockaddr*)&service, sizeof(service)) < 0) {
+            perror("Bind failed");
+            close(socketCore_);
             return false;
         }
 
-        if (bind(socketCore_, (SOCKADDR*)&service, sizeof(service)) == SOCKET_ERROR) {
-            cout << "Bind failed" << endl;
-            closesocket(socketCore_);
+        if (listen(socketCore_, SOMAXCONN) < 0) {
+            perror("Listen failed");
+            close(socketCore_);
             return false;
         }
 
-        if (listen(socketCore_, SOMAXCONN) == SOCKET_ERROR) {
-            cout << "Listen failed" << endl;
-            closesocket(socketCore_);
-            return false;
-        }
-
-        // socketCore_ = accept(socketCore_, NULL, NULL);
-        // closesocket(socketCore_);
         isConnected_ = true;
-        
-        // if (socketCore_ == INVALID_SOCKET) return false;
-        
-        // Start listener thread
         listenThread_ = std::thread(&TCPConnection::listenForConnectionsEngine, this);
-        cout << "Server dll started on port " << PORTCore << " and socket " << socketCore_ << endl;
-
+        std::cout << "Server core started on port " << PORTCore << std::endl;
         return true;
     }
 
     bool connectToEngine() {
-        socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socket_ == INVALID_SOCKET) return false;
-
-        sockaddr_in clientService;
-        clientService.sin_family = AF_INET;
-        InetPton(AF_INET, "127.0.0.1", &clientService.sin_addr.s_addr);
-        clientService.sin_port = htons(PORT);
-
-        if (connect(socket_, (SOCKADDR*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
-            closesocket(socket_);
+        socket_ = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket_ < 0) {
+            perror("Socket creation failed");
             return false;
         }
-        cout << "Connected To Server: " << inet_ntoa(clientService.sin_addr) << ":" << ntohs(clientService.sin_port) << " Family: " << clientService.sin_family << endl;
+
+        sockaddr_in clientService{};
+        clientService.sin_family = AF_INET;
+        clientService.sin_port = htons(PORT);
+        inet_pton(AF_INET, "127.0.0.1", &clientService.sin_addr);
+
+        if (connect(socket_, (sockaddr*)&clientService, sizeof(clientService)) < 0) {
+            perror("Connect failed");
+            close(socket_);
+            return false;
+        }
+
+        std::cout << "Connected to engine!" << std::endl;
         isConnected_ = true;
         return true;
     }
 
     bool sendMessageToEngine(const std::string& message) {
         if (!isConnected_) return false;
-
         std::lock_guard<std::mutex> lock(sendMutex_);
-        int bytesSent = send(socket_, message.c_str(), message.length(), 0);
-        if (bytesSent == SOCKET_ERROR) {
-            cout << "Send failed: " << WSAGetLastError() << endl;
+        ssize_t bytesSent = send(socket_, message.c_str(), message.length(), 0);
+        if (bytesSent < 0) {
+            perror("Send failed");
             return false;
         }
-
-        cout << "Sent to: " << socket_  << " Bytes Sent: " << bytesSent << " And Message: " << message << endl;
+        std::cout << "Sent: " << message << std::endl;
         return true;
     }
 
     std::string receiveMessageFromEngine() {
-        // if (!isConnected_) return "";
-        
-        // char buffer[1024];
-        // int result = recv(socket_, buffer, sizeof(buffer), 0);
-        
-        // if (result > 0) {
-        //     return std::string(buffer, result);
-        // }
-        // return "";
         std::lock_guard<std::mutex> lock(receiveMutex_);
         if (!messageQueue_.empty()) {
             std::string msg = messageQueue_.front();
             messageQueue_.pop();
-            cout << "Menerima Pesan Dari: " << socketCore_ << " Yang Berisi: " << msg << endl;
+            std::cout << "Received from queue: " << msg << std::endl;
             return msg;
         }
         return "";
@@ -145,54 +113,47 @@ public:
 private:
     void disconnectFromEngine() {
         if (isConnected_) {
-            closesocket(socket_);
+            if (socket_ >= 0) close(socket_);
             isConnected_ = false;
         }
     }
 
     void listenForConnectionsEngine() {
         while (isConnected_) {
-            SOCKET serverSocket = accept(socketCore_, NULL, NULL);
-            if (serverSocket != INVALID_SOCKET) {
+            int clientSocket = accept(socketCore_, nullptr, nullptr);
+            if (clientSocket >= 0) {
                 std::lock_guard<std::mutex> lock(receiveMutex_);
-                serverSockets_.push_back(serverSocket);
-                
-                // Start a new thread to handle this client
-                std::thread(&TCPConnection::handleClientCore, this, serverSocket).detach();
-                cout << "New client connected" << endl;
+                serverSockets_.push_back(clientSocket);
+                std::thread(&TCPConnection::handleClientCore, this, clientSocket).detach();
+                std::cout << "New client connected" << std::endl;
             }
         }
     }
 
-    void handleClientCore(SOCKET clientSocket) {
+    void handleClientCore(int clientSocket) {
         char buffer[1024];
         while (isConnected_) {
-            int bytesReceived = recv(clientSocket, buffer, 1024 - 1, 0);
+            ssize_t bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
             if (bytesReceived > 0) {
                 buffer[bytesReceived] = '\0';
                 std::lock_guard<std::mutex> lock(receiveMutex_);
-                messageQueue_.push(std::string(buffer, bytesReceived));
-                cout << "Received: " << buffer << endl;
-            }
-            else if (bytesReceived == 0) {
-                cout << "Client disconnected" << endl;
-                break;
-            }
-            else {
-                cout << "Receive failed" << endl;
+                messageQueue_.push(std::string(buffer));
+                std::cout << "Received: " << buffer << std::endl;
+            } else {
                 break;
             }
         }
-        closesocket(clientSocket);
+        close(clientSocket);
     }
 
-    SOCKET socket_;
-    SOCKET socketCore_;
+    int socket_;
+    int socketCore_;
     bool isConnected_;
-    mutex receiveMutex_;
-    mutex sendMutex_;
-    vector<SOCKET> serverSockets_;
-    queue<std::string> messageQueue_;
-    thread listenThread_;
+    std::mutex receiveMutex_;
+    std::mutex sendMutex_;
+    std::vector<int> serverSockets_;
+    std::queue<std::string> messageQueue_;
+    std::thread listenThread_;
 };
+
 } // namespace IlmeeeEditor

@@ -681,7 +681,7 @@ void MainWindow::RenderConsoleWindow() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
         
-        static char consoleBuffer[MAX_PATH];
+        static char consoleBuffer[4096];
         std::string combinedLog;
         int number = 1;
         

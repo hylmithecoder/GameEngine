@@ -1,7 +1,6 @@
 #pragma once
 #include <iostream>
 #include <string>
-#include <windows.h>
 
 namespace Debug {
     enum class LogLevel {
@@ -14,33 +13,31 @@ namespace Debug {
     class Logger {
     public:
         static void Log(const std::string& message, LogLevel level = LogLevel::INFO) {
-            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            // ANSI escape codes for colors
+            const char* blue = "\033[34m";
+            const char* yellow = "\033[33m";
+            const char* red = "\033[31m";
+            const char* green = "\033[32m";
+            const char* reset = "\033[0m";
             
             // Set color based on log level
             switch(level) {
                 default:
                 case LogLevel::INFO:
-                    SetConsoleTextAttribute(hConsole, 9); // Blue
-                    std::cout << "[INFO] ";
+                    std::cout << blue << "[INFO] ";
                     break;
                 case LogLevel::WARNING:
-                    SetConsoleTextAttribute(hConsole, 14); // Yellow
-                    std::cout << "[WARNING] ";
+                    std::cout << yellow << "[WARNING] ";
                     break;
                 case LogLevel::CRASH:
-                    SetConsoleTextAttribute(hConsole, 12); // Red
-                    std::cout << "[ERROR] ";
+                    std::cout << red << "[ERROR] ";
                     break;
                 case LogLevel::SUCCESS:
-                    SetConsoleTextAttribute(hConsole, 10); // Green
-                    std::cout << "[SUCCESS] ";
+                    std::cout << green << "[SUCCESS] ";
                     break;
             }
 
-            std::cout << message << std::endl;
-            
-            // Reset color
-            SetConsoleTextAttribute(hConsole, 15);
+            std::cout << message << reset << std::endl;
         }
     };
 }
