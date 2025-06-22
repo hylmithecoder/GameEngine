@@ -25,7 +25,7 @@ typedef bool (*StartServerFunc)();
 typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
 typedef string (*GetCommandFunc)();
-typedef string (*SetProjectPathFunc)();
+typedef void (*SetProjectPathFunc)(const string&);
 typedef void (*ExecuteCommandFunc)();
 
 // Loading window class
@@ -409,11 +409,11 @@ private:
                                         dllManager.GetEditorDLL(),
                                         "SetProjectPath"
                                     );
-                                    if (SetProjectPath)
-                                    {
+                                    // if (SetProjectPath)
+                                    // {
                                         Debug::Logger::Log("Set project path: " + message, Debug::LogLevel::SUCCESS);
-                                        SetProjectPath();
-                                    }
+                                        SetProjectPath(message);
+                                    // }
                                 }
                                 if (message == "LoadScene") {
                                     Debug::Logger::Log("Processing LoadScene command...");

@@ -69,13 +69,13 @@ bool MainWindow::init(const char* title) {
         return false;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return false;
-    }
+    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // if (!renderer) {
+    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+    //     SDL_DestroyWindow(window);
+    //     SDL_Quit();
+    //     return false;
+    // }
 
     // Aktifkan OpenGL
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
@@ -424,16 +424,16 @@ bool MainWindow::openVideo(const char* filePath) {
     }
     
     // Buat texture untuk render di SDL
-    cout << "[MainWindow] Creating SDL texture" << endl;
-    videoPlayer->texture = SDL_CreateTexture(
-        renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-        videoPlayer->width, videoPlayer->height);
+    // cout << "[MainWindow] Creating SDL texture" << endl;
+    // videoPlayer->texture = SDL_CreateTexture(
+    //     renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
+    //     videoPlayer->width, videoPlayer->height);
     
-    if (!videoPlayer->texture) {
-        cerr << "Could not create SDL texture: " << SDL_GetError() << endl;
-        videoPlayer->cleanup();
-        return false;
-    }
+    // if (!videoPlayer->texture) {
+    //     cerr << "Could not create SDL texture: " << SDL_GetError() << endl;
+    //     videoPlayer->cleanup();
+    //     return false;
+    // }
     
     glGenTextures(1, &videoPlayer->glTextureID);
     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
@@ -540,8 +540,8 @@ bool MainWindow::updateVideoFrameWithOpenGL() {
                   videoPlayer->frame->linesize, 0, videoPlayer->height,
                   videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-        SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
-                          videoPlayer->frameRGB->linesize[0]);
+        // SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
+        //                   videoPlayer->frameRGB->linesize[0]);
 
         glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -605,8 +605,8 @@ bool MainWindow::updateVideoFrame() {
                   videoPlayer->frame->linesize, 0, videoPlayer->height,
                   videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-        SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
-                          videoPlayer->frameRGB->linesize[0]);
+        // SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
+        //                   videoPlayer->frameRGB->linesize[0]);
 
         // Update current time using frame PTS
         if (videoPlayer->frame->pts != AV_NOPTS_VALUE) {
@@ -893,9 +893,9 @@ bool MainWindow::processVideoPacket(AVPacket* pkt) {
             videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
     // Update both SDL texture and OpenGL texture
-    SDL_UpdateTexture(videoPlayer->texture, NULL, 
-                    videoPlayer->frameRGB->data[0],
-                    videoPlayer->frameRGB->linesize[0]);
+    // SDL_UpdateTexture(videoPlayer->texture, NULL, 
+    //                 videoPlayer->frameRGB->data[0],
+    //                 videoPlayer->frameRGB->linesize[0]);
                     
     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -1072,9 +1072,9 @@ void MainWindow::updateMedia() {
                             videoPlayer->frame->linesize, 0, videoPlayer->height,
                             videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-                    SDL_UpdateTexture(videoPlayer->texture, NULL, 
-                                    videoPlayer->frameRGB->data[0],
-                                    videoPlayer->frameRGB->linesize[0]);
+                    // SDL_UpdateTexture(videoPlayer->texture, NULL, 
+                    //                 videoPlayer->frameRGB->data[0],
+                    //                 videoPlayer->frameRGB->linesize[0]);
                                     
                     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -1411,7 +1411,7 @@ void MainWindow::renderVideoPlayer() {
 }
 
 void MainWindow::renderVideoFrame() {
-    if (videoPlayer->texture) {
+    if (videoPlayer->glTextureID) {
         // cout << "Texture ID: " << videoPlayer->texture << endl;
         // Hitung rasio aspek
         float aspectRatio = static_cast<float>(videoPlayer->width) / static_cast<float>(videoPlayer->height);
@@ -1495,7 +1495,7 @@ void MainWindow::update() {
         {            
             projectHandler.OpenFolder();
             projectRoot = projectHandler.BuildAssetTree(projectHandler.projectPath);
-            string assetFile = projectHandler.projectPath+"\\assets\\scenes\\MyFirstScene.ilmeescene";
+            string assetFile = projectHandler.projectPath+"\\TempScene_Game1.json";
             networkManager->sendMessage(projectHandler.projectPath);
             cout << assetFile << endl;
             projectHandler.currentScene = projectHandler.serializer.LoadScene(assetFile);
