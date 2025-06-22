@@ -3,7 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <windows.h>
+// #include <windows.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
@@ -443,6 +443,6 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    return main(__argc, __argv);
-}
+// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+//     return main(__argc, __argv);
+// }

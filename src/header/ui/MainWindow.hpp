@@ -179,4 +179,6 @@ public:
         return messages;
     }
     void ClearMessages();
+    void checkGLError(const char* operation);
+    void updateTextureData(GLuint textureID, int width, int height, unsigned char* data);
 };

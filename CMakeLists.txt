@@ -145,9 +145,9 @@ set(IMGUI_SOURCES
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
 
 set(NFD_SOURCES
-    # ${NFD}/src/nfd_gtk.cpp
+    ${NFD}/src/nfd_gtk.cpp
     # ${NFD}/src/nfd_portal.cpp
-    ${NFD}/src/nfd_win.cpp
+    # ${NFD}/src/nfd_win.cpp
 )
 
 set(IMGUI_TEST
@@ -202,9 +202,9 @@ target_link_options(TestBackground PRIVATE -mconsole)
 add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestGLEW PRIVATE -mconsole)
 add_executable(TestGLM ${SOURCE_TEST_GLM})
-target_link_options(TestGLM PRIVATE -mconsole)
+# target_link_options(TestGLM PRIVATE -mconsole)
 add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_GLSL} ${ICON_SOURCE})
-target_link_options(TestGLSL PRIVATE -mconsole)
+# target_link_options(TestGLSL PRIVATE -mconsole)
 add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
 # target_link_options(TestVulkan PRIVATE -mconsole)
 
@@ -250,7 +250,8 @@ set_target_properties(IlmeeeEditor PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-
+cmake_policy(SET CMP0072 NEW) # Prefer GLVND
+set(OpenGL_GL_PREFERENCE "GLVND")
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -329,11 +330,14 @@ target_include_directories(TestGLM PRIVATE
     # ${VULKAN_DIR}
     Vulkan
     # GLES2
+    GLM
     # GLEW
 )
 
 target_include_directories(TestGLSL PRIVATE
     # ${SDL2_DIR}/include
+    /usr/include/SDL2
+    /usr/include/SDL2_ttf
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -346,8 +350,10 @@ target_include_directories(TestGLSL PRIVATE
     # ${GLM}
     # GL
     # ${GLEW}/include/GL
-    ${GLFW}/include
-    ${GLES2}
+    # ${GLFW}/include
+    glfw3
+    # ${GLES2}
+    gles2
     opengl32
     gdi32
     ${GLAD_4_DIR}/include
@@ -627,13 +633,15 @@ target_link_libraries(TestGLEW PRIVATE
 target_link_libraries(TestGLSL PRIVATE
     # ${SDL2_DIR}/lib/x64/SDL2.lib
     # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    SDL2
+    SDL2_ttf
     OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib    
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
+    avformat
+    avcodec
+    avutil
+    swresample
+    swscale
+    glfw
     # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
 )
@@ -690,7 +698,7 @@ target_link_libraries(IlmeeeEditor PRIVATE
     # ${SDL2_DIR}/lib/x64/SDL2.lib
     # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
     OpenGL::GL
-
+    ${GTK3_LIBRARIES}
     # wsock32
     # ws2_32
 )

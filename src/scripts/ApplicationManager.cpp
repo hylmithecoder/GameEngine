@@ -168,7 +168,7 @@ bool ApplicationManager::LaunchEngine() {
                 static auto lastHeartbeat = std::chrono::steady_clock::now();
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
-                    networkManager->sendMessage("heartbeat");
+                    // networkManager->sendMessage("heartbeat");
                     lastHeartbeat = now;
                 }
                 

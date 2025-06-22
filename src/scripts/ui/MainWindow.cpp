@@ -97,19 +97,20 @@ bool MainWindow::init(const char* title) {
         return false;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-        cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return false;
-    }
+    // renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // if (!renderer) {
+    //     cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << endl;
+    //     SDL_DestroyWindow(window);
+    //     SDL_Quit();
+    //     return false;
+    // }
 
     // Aktifkan OpenGL
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     glContext = SDL_GL_CreateContext(window);
+    SDL_GL_MakeCurrent(window, glContext);
     if (!glContext) {
         std::cerr << "OpenGL context could not be created! SDL Error: " << SDL_GetError() << std::endl;
         return false;
@@ -296,11 +297,7 @@ bool MainWindow::openVideo(const char* filePath) {
         videoPlayer->cleanup();
     }
     
-    videoPlayer->filePath = filePath;
-    // AVHWDeviceType type = av_hwdevice_find_type_by_name("cuda");
-    // av_hwdevice_ctx_create(&videoPlayer->hw_device_ctx, type, NULL, NULL, 0);
-    // videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
-    
+    videoPlayer->filePath = filePath;    
     // Buka file video
     if (avformat_open_input(&videoPlayer->formatContext, filePath, NULL, NULL) != 0) {
         cerr << "[MainWindow] Could not open video file: " << filePath << endl;
@@ -320,7 +317,7 @@ bool MainWindow::openVideo(const char* filePath) {
         cout << "[MainWindow] Video stream information found " << videoPlayer->formatContext << endl;
     }
     
-    // Cari video stream
+    // // Cari video stream
     cout << "[MainWindow] Searching for video stream" << endl;
     videoPlayer->videoStream = -1;
     for (unsigned int i = 0; i < videoPlayer->formatContext->nb_streams; i++) {
@@ -347,34 +344,6 @@ bool MainWindow::openVideo(const char* filePath) {
         return false;
     }
 
-    // Mendapatkan codec dengan prioritas mendapatkan codec CUDA untuk GTX 1070
-    // cout << "[MainWindow] Getting codec with GPU acceleration" << endl;
-    // const AVCodec *codec = nullptr;
-    // void *iter = nullptr;
-    // // Cari decoder hardware CUDA yang kompatibel dengan GTX 1070
-    // while (const AVCodec *c = av_codec_iterate(&iter)) {
-    //     if (av_codec_is_decoder(c) && c->id == videoPlayer->formatContext->streams[videoPlayer->videoStream]->codecpar->codec_id) {
-    //         if (strstr(c->name, "_cuvid")) { // cari decoder NVIDIA CUDA/NVDEC
-    //             codec = c;
-    //             cout << "[MainWindow] Found CUDA decoder: " << c->name << endl;
-    //             break;
-    //         }
-    //     }
-    // }
-    
-    // // Fallback ke decoder software jika tidak ditemukan decoder CUDA
-    // if (!codec) {
-    //     cout << "[MainWindow] CUDA decoder not found, falling back to software decoder" << endl;
-    //     codec = avcodec_find_decoder(
-    //         videoPlayer->formatContext->streams[videoPlayer->videoStream]->codecpar->codec_id);
-    //     if (!codec) {
-    //         cerr << "Unsupported codec" << endl;
-    //         videoPlayer->cleanup();
-    //         return false;
-    //     }
-    // }
-    // cout << "Using Devices: " << codec->name << endl;
-    
     // Alokasi context codec
     cout << "[MainWindow] Allocating codec context" << endl;
     videoPlayer->codecContext = avcodec_alloc_context3(codec);
@@ -401,12 +370,6 @@ bool MainWindow::openVideo(const char* filePath) {
         return false;
     }
 
-    // Atur context untuk hardware acceleration
-    // if (videoPlayer->hw_device_ctx) {
-    //     videoPlayer->codecContext->hw_device_ctx = av_buffer_ref(videoPlayer->hw_device_ctx);
-    //     cout << "[MainWindow] Hardware acceleration context set" << endl;
-    // }
-    
     // Alokasi frame
     cout << "[MainWindow] Allocating frames" << endl;
     videoPlayer->frame = av_frame_alloc();
@@ -452,16 +415,19 @@ bool MainWindow::openVideo(const char* filePath) {
     }
     
     // Buat texture untuk render di SDL
-    cout << "[MainWindow] Creating SDL texture" << endl;
-    videoPlayer->texture = SDL_CreateTexture(
-        renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-        videoPlayer->width, videoPlayer->height);
+    // cout << "[MainWindow] Creating SDL texture" << endl;
+    // videoPlayer->texture = SDL_CreateTexture(
+    //     renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
+    //     videoPlayer->width, videoPlayer->height);
     
-    if (!videoPlayer->texture) {
-        cerr << "Could not create SDL texture: " << SDL_GetError() << endl;
-        videoPlayer->cleanup();
-        return false;
-    }
+    // if (!videoPlayer->texture) {
+    //     cerr << "Could not create SDL texture: " << SDL_GetError() << endl;
+    //     videoPlayer->cleanup();
+    //     return false;
+    // }
+    // else {
+    //     Debug::Logger::Log("SDL texture created: "+to_string(reinterpret_cast<uintptr_t>(videoPlayer->texture)), Debug::LogLevel::SUCCESS);
+    // }
     
     glGenTextures(1, &videoPlayer->glTextureID);
     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
@@ -489,14 +455,6 @@ bool MainWindow::openVideo(const char* filePath) {
         videoPlayer->cleanup();
         return false;
     }
-
-    // glGenTextures(1, &videoPlayer->glTextureID);
-    // glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
-    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, videoPlayer->width, videoPlayer->height,
-    //             0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-
 
     // Note Kalau Asal Ubah bisa error tanpa Log
     cout << "[MainWindow] Opening audio" << endl;
@@ -568,8 +526,8 @@ bool MainWindow::updateVideoFrameWithOpenGL() {
                   videoPlayer->frame->linesize, 0, videoPlayer->height,
                   videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-        SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
-                          videoPlayer->frameRGB->linesize[0]);
+        // SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
+        //                   videoPlayer->frameRGB->linesize[0]);
 
         glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -633,8 +591,8 @@ bool MainWindow::updateVideoFrame() {
                   videoPlayer->frame->linesize, 0, videoPlayer->height,
                   videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-        SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
-                          videoPlayer->frameRGB->linesize[0]);
+        // SDL_UpdateTexture(videoPlayer->texture, NULL, videoPlayer->frameRGB->data[0],
+        //                   videoPlayer->frameRGB->linesize[0]);
 
         // Update current time using frame PTS
         if (videoPlayer->frame->pts != AV_NOPTS_VALUE) {
@@ -921,9 +879,9 @@ bool MainWindow::processVideoPacket(AVPacket* pkt) {
             videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
     // Update both SDL texture and OpenGL texture
-    SDL_UpdateTexture(videoPlayer->texture, NULL, 
-                    videoPlayer->frameRGB->data[0],
-                    videoPlayer->frameRGB->linesize[0]);
+    // SDL_UpdateTexture(videoPlayer->texture, NULL, 
+    //                 videoPlayer->frameRGB->data[0],
+    //                 videoPlayer->frameRGB->linesize[0]);
                     
     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -1100,9 +1058,9 @@ void MainWindow::updateMedia() {
                             videoPlayer->frame->linesize, 0, videoPlayer->height,
                             videoPlayer->frameRGB->data, videoPlayer->frameRGB->linesize);
 
-                    SDL_UpdateTexture(videoPlayer->texture, NULL, 
-                                    videoPlayer->frameRGB->data[0],
-                                    videoPlayer->frameRGB->linesize[0]);
+                    // SDL_UpdateTexture(videoPlayer->texture, NULL, 
+                    //                 videoPlayer->frameRGB->data[0],
+                    //                 videoPlayer->frameRGB->linesize[0]);
                                     
                     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoPlayer->width, videoPlayer->height,
@@ -1388,9 +1346,11 @@ void MainWindow::renderVideoPlayer() {
         if (!paused) {
             if (isOnlyRender == true && isOnlyAd == false) {
                 // updateVideoFrame();
+                Debug::Logger::Log("Only Render Image", Debug::LogLevel::WARNING);
                 updateVideoFrameWithOpenGL();
             }
             else if (isOnlyRender == false && isOnlyAd == true) {
+                Debug::Logger::Log("Only Render audio", Debug::LogLevel::WARNING);
                 updateAudio();
             }
             else {
@@ -1400,11 +1360,12 @@ void MainWindow::renderVideoPlayer() {
                 }
                 else {
                     // updateMedia();
+                    Debug::Logger::Log("Both Render up 60 fps", Debug::LogLevel::WARNING);
                     updateMediaFixedGlitch();
                 }
             }
         }
-
+        std::cout << "Frame data: " << (void*)videoPlayer->frameRGB->data[0] << std::endl;
         // Render video frame
         renderVideoFrame();
 
@@ -1438,33 +1399,120 @@ void MainWindow::renderVideoPlayer() {
     ui::End();
 }
 
+// Tambahkan ini di renderVideoFrame() untuk debug
 void MainWindow::renderVideoFrame() {
-    if (videoPlayer->texture) {
-        // cout << "Texture ID: " << videoPlayer->texture << endl;
+    // Debug: Print semua informasi texture
+    cout << "=== DEBUG TEXTURE INFO ===" << endl;
+    cout << "videoPlayer->texture: " << (videoPlayer->texture ? "NOT NULL" : "NULL") << endl;
+    cout << "videoPlayer->glTextureID: " << videoPlayer->glTextureID << endl;
+    cout << "Video dimensions: " << videoPlayer->width << "x" << videoPlayer->height << endl;
+    
+    if (videoPlayer->glTextureID != 0) {
+        // Cek apakah texture ID valid
+        GLboolean isValidTexture = glIsTexture(videoPlayer->glTextureID);
+        cout << "Is valid OpenGL texture: " << (isValidTexture ? "YES" : "NO") << endl;
+        
+        // Bind texture dan cek dimensi yang tersimpan
+        glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+        GLint texWidth, texHeight;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texWidth);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texHeight);
+        cout << "Texture stored dimensions: " << texWidth << "x" << texHeight << endl;
+        
+        // Cek OpenGL errors
+        GLenum error = glGetError();
+        if (error != GL_NO_ERROR) {
+            cout << "OpenGL Error: " << error << endl;
+        }
+        
+        glBindTexture(GL_TEXTURE_2D, 0); // Unbind
+    }
+    cout << "=========================" << endl;
+
+    if (videoPlayer->glTextureID != 0) {
         // Hitung rasio aspek
         float aspectRatio = static_cast<float>(videoPlayer->width) / static_cast<float>(videoPlayer->height);
-
+        
         // Hitung dimensi tampilan
         ImVec2 contentSize = ui::GetContentRegionAvail();
         float displayWidth = contentSize.x;
         float displayHeight = displayWidth / aspectRatio;
-
+        
         if (displayHeight > contentSize.y) {
             displayHeight = contentSize.y;
             displayWidth = displayHeight * aspectRatio;
         }
-
-        // Pusatkan video di ruang yang tersedia
+        
+        // Debug: Print display dimensions
+        cout << "Display dimensions: " << displayWidth << "x" << displayHeight << endl;
+        
+        // Pusatkan video di ruang yang tersedia  
         float posX = (contentSize.x - displayWidth) * 0.5f;
         float posY = (contentSize.y - displayHeight) * 0.5f;
-
+        
         ui::SetCursorPos(ImVec2(posX, posY));
+        
+        // Coba render dengan berbagai cara untuk test
+        
+        // Method 1: Current method
+        // ui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
+        //          ImVec2(displayWidth, displayHeight));
+        
+        float w = displayWidth, h = displayHeight;
+        ImGui::Image((ImTextureID)(uintptr_t)videoPlayer->glTextureID, ImVec2(w, h));
 
-        // Render frame video
-        ui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
-             ImVec2(displayWidth, displayHeight));
+        
+    } else {
+        ui::Text("No texture available");
+        ui::Text("Texture pointer: %p", videoPlayer->texture);
+        ui::Text("Texture ID: %u", videoPlayer->glTextureID);
     }
 }
+
+void MainWindow::checkGLError(const char* operation) {
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        cout << "OpenGL Error after " << operation << ": " << error;
+        switch(error) {
+            case GL_INVALID_ENUM: cout << " (GL_INVALID_ENUM)"; break;
+            case GL_INVALID_VALUE: cout << " (GL_INVALID_VALUE)"; break;
+            case GL_INVALID_OPERATION: cout << " (GL_INVALID_OPERATION)"; break;
+            case GL_OUT_OF_MEMORY: cout << " (GL_OUT_OF_MEMORY)"; break;
+            default: cout << " (UNKNOWN)"; break;
+        }
+        cout << endl;
+    }
+}
+
+void MainWindow::updateTextureData(GLuint textureID, int width, int height, unsigned char* data) {
+    // Clear errors
+    while (glGetError() != GL_NO_ERROR) {}
+    
+    cout << "Updating texture " << textureID << " with size " << width << "x" << height << endl;
+    
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    checkGLError("bind texture for update");
+    
+    // Pastikan parameter texture benar
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    checkGLError("set texture parameters");
+    
+    // Upload data - pastikan format benar
+    // Untuk RGB data:
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    // Atau untuk RGBA data:
+    // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    checkGLError("upload texture data");
+    
+    glBindTexture(GL_TEXTURE_2D, 0);
+    checkGLError("unbind texture after update");
+    
+    cout << "Texture update completed" << endl;
+}
+
 
 void MainWindow::handleEvents() {
     SDL_Event event;
@@ -1575,6 +1623,7 @@ void MainWindow::update() {
     // HandleBackground();
     
     // Menu bar
+    // updateTextureData(videoPlayer->frameRGB, videoPlayer->width, videoPlayer->height);
     RenderMenuBar();
     // RenderPlayMenu();
     
@@ -1589,6 +1638,7 @@ void MainWindow::update() {
     RenderSceneWindow();
     RenderMainViewWindow();
     renderVideoPlayer();
+    // updateTextureData(videoPlayer->frameRGB, videoPlayer->width, videoPlayer->height);
     // Bottom: Console & Output
     RenderConsoleWindow();
     projectHandler.CheckAndRefreshAssets();

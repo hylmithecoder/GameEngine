@@ -2,7 +2,7 @@
 #include <iostream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <windows.h>
+// #include <windows.h>
 using namespace glm;
 using namespace std;
 class TestGLM
@@ -71,7 +71,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
-{
-    return main(__argc, __argv);
-}
+// int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+// {
+//     return main(__argc, __argv);
+// }
