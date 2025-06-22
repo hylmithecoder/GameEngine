@@ -82,6 +82,7 @@ bool ApplicationManager::LaunchEngine() {
         else if (pid == 0) {
             // Child process
             execl("./HandlerIlmeeeEngine", "HandlerIlmeeeEngine", "-project", "MyGameProject", nullptr);
+            Debug::Logger::Log("Call HandlerIlmeeeEngine", Debug::LogLevel::WARNING);
             // If execl returns, it failed
             exit(1);
         }

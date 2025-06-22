@@ -11,6 +11,7 @@
 #include <fstream>
 #include <nfd.hpp>
 #include <json.hpp>
+// #include <gtk/gtk.h>
 #ifdef _WIN32
     #include <windows.h>
 #endif
@@ -633,31 +634,12 @@ namespace IlmeeeEditor {
         }
     }
 } // namespace IlmeeeEditor
-// BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-//     switch (ul_reason_for_call) {
-//         case DLL_PROCESS_ATTACH:
-//             IlmeeeEditor::LogInfo("IlmeeeEditor DLL loaded");
-//             break;
-//         case DLL_THREAD_ATTACH: {
-//             // IlmeeeEditor::LogSuccess("This is runtime DLL");
-//             // IlmeeeEditor::LogInfo("Received command from engine: " + IlmeeeEditor::GetCommandFromEngine());
-//             break;
-//         }
-//         case DLL_THREAD_DETACH:
-//             break;
-//         case DLL_PROCESS_DETACH:
-//             IlmeeeEditor::LogInfo("IlmeeeEditor DLL unloaded");
-//             break;
-//     }
-//     return TRUE;
-// }
-
 __attribute__((constructor))
 void OnLibraryLoad() {
-    IlmeeeEditor::LogInfo("IlmeeeEditor .so loaded");
+    IlmeeeEditor::LogSuccess("libIlmeeeEditor.so loaded");
 }
 
 __attribute__((destructor))
 void OnLibraryUnload() {
-    IlmeeeEditor::LogInfo("IlmeeeEditor .so unloaded");
+    IlmeeeEditor::LogSuccess("libIlmeeeEditor.so unloaded");
 }

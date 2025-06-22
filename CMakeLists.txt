@@ -195,7 +195,7 @@ pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+add_executable(${PROJECT_NAME} ${NFD_SOURCES} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 # target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestBackground PRIVATE -mconsole)
@@ -229,8 +229,8 @@ set_target_properties(IlmeeeEngine PROPERTIES
     SOVERSION 1
     OUTPUT_NAME "IlmeeeEngine"
 )
-
-add_library(IlmeeeEditor SHARED src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
+include_directories(${GTK3_INCLUDE_DIRS})
+add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
 # target_link_options(IlmeeeEditor PRIVATE -mconsole)
 # Define macro untuk export symbols
 add_definitions(-DILMEEEDITOR_EXPORTS)
@@ -399,21 +399,18 @@ target_include_directories(IlmeeeEngine PUBLIC
 )
 
 target_include_directories(IlmeeeEditor PUBLIC
-    # Build interface paths
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core_editor>
     $<BUILD_INTERFACE:/usr/include/SDL2>
     $<BUILD_INTERFACE:/usr/include/GLFW>
     $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}/gtk-3.0>
     $<BUILD_INTERFACE:${ICON_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/ui>
-    # $<BUILD_INTERFACE:${FFMPEG_DIR}>
     $<BUILD_INTERFACE:${NFD}/src/include>
     $<BUILD_INTERFACE:${JSON_DIR}>
-    # $<BUILD_INTERFACE:${STB}>
     $<BUILD_INTERFACE:${GLAD_4_DIR}/include>
-    
     # Install interface paths
     $<INSTALL_INTERFACE:include/core_engine/core_editor>
     $<INSTALL_INTERFACE:include>
@@ -422,7 +419,6 @@ target_include_directories(IlmeeeEditor PUBLIC
     $<INSTALL_INTERFACE:include/FFmpeg>
     $<INSTALL_INTERFACE:include/nfd>
     $<INSTALL_INTERFACE:include/json>
-    # $<INSTALL_INTERFACE:include/stb>
 )
 
 target_include_directories(IlmeeeHub PRIVATE

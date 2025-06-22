@@ -1402,32 +1402,32 @@ void MainWindow::renderVideoPlayer() {
 // Tambahkan ini di renderVideoFrame() untuk debug
 void MainWindow::renderVideoFrame() {
     // Debug: Print semua informasi texture
-    cout << "=== DEBUG TEXTURE INFO ===" << endl;
-    cout << "videoPlayer->texture: " << (videoPlayer->texture ? "NOT NULL" : "NULL") << endl;
-    cout << "videoPlayer->glTextureID: " << videoPlayer->glTextureID << endl;
-    cout << "Video dimensions: " << videoPlayer->width << "x" << videoPlayer->height << endl;
+    // cout << "=== DEBUG TEXTURE INFO ===" << endl;
+    // cout << "videoPlayer->texture: " << (videoPlayer->texture ? "NOT NULL" : "NULL") << endl;
+    // cout << "videoPlayer->glTextureID: " << videoPlayer->glTextureID << endl;
+    // cout << "Video dimensions: " << videoPlayer->width << "x" << videoPlayer->height << endl;
     
-    if (videoPlayer->glTextureID != 0) {
-        // Cek apakah texture ID valid
-        GLboolean isValidTexture = glIsTexture(videoPlayer->glTextureID);
-        cout << "Is valid OpenGL texture: " << (isValidTexture ? "YES" : "NO") << endl;
+    // if (videoPlayer->glTextureID != 0) {
+    //     // Cek apakah texture ID valid
+    //     GLboolean isValidTexture = glIsTexture(videoPlayer->glTextureID);
+    //     cout << "Is valid OpenGL texture: " << (isValidTexture ? "YES" : "NO") << endl;
         
-        // Bind texture dan cek dimensi yang tersimpan
-        glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
-        GLint texWidth, texHeight;
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texWidth);
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texHeight);
-        cout << "Texture stored dimensions: " << texWidth << "x" << texHeight << endl;
+    //     // Bind texture dan cek dimensi yang tersimpan
+    //     glBindTexture(GL_TEXTURE_2D, videoPlayer->glTextureID);
+    //     GLint texWidth, texHeight;
+    //     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texWidth);
+    //     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texHeight);
+    //     cout << "Texture stored dimensions: " << texWidth << "x" << texHeight << endl;
         
-        // Cek OpenGL errors
-        GLenum error = glGetError();
-        if (error != GL_NO_ERROR) {
-            cout << "OpenGL Error: " << error << endl;
-        }
+    //     // Cek OpenGL errors
+    //     GLenum error = glGetError();
+    //     if (error != GL_NO_ERROR) {
+    //         cout << "OpenGL Error: " << error << endl;
+    //     }
         
-        glBindTexture(GL_TEXTURE_2D, 0); // Unbind
-    }
-    cout << "=========================" << endl;
+    //     glBindTexture(GL_TEXTURE_2D, 0); // Unbind
+    // }
+    // cout << "=========================" << endl;
 
     if (videoPlayer->glTextureID != 0) {
         // Hitung rasio aspek

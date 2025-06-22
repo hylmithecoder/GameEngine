@@ -205,6 +205,7 @@ int main(int argc, char* argv[]) {
                 g_app.reset();
                 g_app = nullptr;
             } catch (...) {
+                Debug::Logger::Log("Exception during emergency shutdown", Debug::LogLevel::CRASH);
                 // Ignore exceptions during emergency shutdown
             }
         }

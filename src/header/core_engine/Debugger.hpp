@@ -14,10 +14,10 @@ namespace Debug {
     public:
         static void Log(const std::string& message, LogLevel level = LogLevel::INFO) {
             // ANSI escape codes for colors
-            const char* blue = "\033[34m";
-            const char* yellow = "\033[33m";
-            const char* red = "\033[31m";
-            const char* green = "\033[32m";
+            const char* blue = "\033[1;34m";
+            const char* yellow = "\033[1;33m";
+            const char* red = "\033[1;31m";
+            const char* green = "\033[1;32m";
             const char* reset = "\033[0m";
             
             // Set color based on log level
