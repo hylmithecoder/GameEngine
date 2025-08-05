@@ -7,11 +7,10 @@
 #include "FFmpegWrapper.hpp"
 #include <fstream>
 #include <libavformat/avformat.h>
-#include <stb/stb.h>
+#include <stb_image.h>
 #include <SDL_opengl.h>
-#include <gtk-3.0/gtk/gtk.h>
+#include <gtk/gtk.h>
 #include "assets.hpp"
-// #include <backends/imgui_impl_opengl3.h>
 #include <Debugger.hpp>
 #include <gtk-3.0/gtk/gtktypes.h>
 #include <glib-2.0/glib/gtypes.h>
@@ -44,7 +43,7 @@ bool MainWindow::showConfirmDialog(const char* message, const char* title) {
     gint response;
 
     // Initialize GTK if not already done
-    if (!gtk_init_check(nullptr, nullptr)) {
+    if (!gtk_init_check(0, nullptr)) {
         Debug::Logger::Log("Failed to initialize GTK", Debug::LogLevel::CRASH);
         return false;
     }
@@ -129,7 +128,6 @@ bool MainWindow::init(const char* title) {
     
     // Set window icon
     set_window_icon();
-
     // Inisialisasi ImGui
     IMGUI_CHECKVERSION();
     ui::CreateContext();

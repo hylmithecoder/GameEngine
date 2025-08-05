@@ -55,6 +55,35 @@ void HandlerProject::SaveNewScene() {
     NFD_Quit();
 }
 
+void HandlerProject::SaveAsScene() {
+    NFD_Init();
+
+    nfdchar_t* savePath;
+
+    // prepare filters for the dialog
+    nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
+
+    // show the dialog
+    nfdsavedialogu8args_t args = {0};
+    args.filterList = filterItem;
+    args.filterCount = 1;
+    args.defaultName = (currentSceneName + ".ilmeeescene").c_str();
+    nfdresult_t result = NFD_SaveDialogU8_With(&savePath, &args);
+    if (result == NFD_OKAY) {
+        puts("Success!");
+        puts(savePath);
+        // remember to free the memory (since NFD_OKAY is returned)
+        NFD_FreePath(savePath);
+    } else if (result == NFD_CANCEL) {
+        puts("User pressed cancel.");
+    } else {
+        printf("Error: %s\n", NFD_GetError());
+    }
+
+    // Quit NFD
+    NFD_Quit();
+}
+
 void HandlerProject::OpenScene() {
     NFD::Guard nfdGuard;
     NFD::UniquePath outPath;
@@ -1224,6 +1253,7 @@ void HandlerProject::SearchFileOrFolder(const AssetFile& node, const std::string
 
 void HandlerProject::NewScene(const std::string& name) {
     std::string sceneFolder = projectPath + "/assets/scenes";
+    currentSceneName = name;
     fs::create_directories(sceneFolder);
 
     std::string fullPath = sceneFolder + "/" + name + ".ilmeescene";

@@ -185,6 +185,6 @@ namespace IlmeeeEditor {
         ILMEEEDITOR_API bool ConnectToEngine();
         ILMEEEDITOR_API void LoadScene();
         ILMEEEDITOR_API string GetCommandFromEngine();
-        ILMEEEDITOR_API string SetProjectPath();
+        ILMEEEDITOR_API void SetProjectPath(string& path);
     }
 } // namespace GameEditor

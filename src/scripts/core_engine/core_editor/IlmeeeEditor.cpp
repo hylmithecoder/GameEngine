@@ -412,7 +412,7 @@ namespace IlmeeeEditor {
         nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
 
         try {
-            nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, SetProjectPath().c_str());
+            nfdresult_t result = NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
 
             if (result == NFD_OKAY && outPath.get() != nullptr) {
                 std::string scenePath = outPath.get();
@@ -431,7 +431,7 @@ namespace IlmeeeEditor {
                     }
 
                     // Simpan JSON sementara
-                    std::string tempScenePath = SetProjectPath() + "/TempScene_" + loaded.sceneName + ".json";
+                    std::string tempScenePath = projectPath + "/TempScene_" + loaded.sceneName + ".json";
                     std::ofstream tempOut(tempScenePath);
                     if (!tempOut) {
                         LogError("Failed to write temp scene file");
@@ -620,11 +620,10 @@ namespace IlmeeeEditor {
             // return "Still Empty";
         }
 
-        ILMEEEDITOR_API string SetProjectPath() {
+        ILMEEEDITOR_API void SetProjectPath(string& path) {
             // LogWarning("Hello from libIlmeeeEditor.dll");
-            std::string currentProjectPath = Editor::instance->receiveMessageFromEngine();
-            LogInfo("Received project path from engine: " + currentProjectPath);
-            return currentProjectPath;
+            Editor::instance->projectPath = path;
+            LogInfo("Project Path set to: " + path);
         }
 
         ILMEEEDITOR_API void LoadScene() {

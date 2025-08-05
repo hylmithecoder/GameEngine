@@ -30,17 +30,17 @@
 #include <shellapi.h>
 #endif
 using namespace std;
-namespace fs = std::filesystem;
+namespace fs = filesystem;
 
 class HandlerProject {
 private:
-    std::string getCurrentDateTime() {
+    string getCurrentDateTime() {
         time_t now = time(0);
         struct tm tstruct;
         char buf[80];
         localtime_r(&now, &tstruct);
         strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
-        return std::string(buf);
+        return string(buf);
     }
 
     void LoadProjectAssets() {
@@ -61,7 +61,8 @@ public:
     // Class
     Scene currentScene;    
     SceneSerializer serializer;
-    std::string currentScenePath;
+    string currentScenePath;
+    string currentSceneName;
     bool isSceneLoaded = false;
     // Color
     ImVec4 redColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -73,26 +74,26 @@ public:
     // Waktu double click
     float doubleClickTime = 0.3f; // dalam detik
     // Menyimpan state expand/collapse untuk setiap folder
-    std::unordered_map<std::string, bool> folderStates;
+    unordered_map<string, bool> folderStates;
     float itemSpacing = 8.0f;
-    std::string projectPath;
-    std::map<std::string, std::vector<std::string>> assetFiles;
+    string projectPath;
+    map<string, vector<string>> assetFiles;
     struct AssetFile {
-        std::string name;
+        string name;
         bool isDirectory;
         bool isSelected = false;
-        std::vector<AssetFile> children;
-        std::string fullPath;
+        vector<AssetFile> children;
+        string fullPath;
 
         // Timestamp untuk operasi drag & drop
         float time = ImGui::GetTime();
         float lastClickTime = time - 0.2f;
         
         // Konstruktor
-        AssetFile(const std::string& n, const std::string& p, bool isDir = false)
+        AssetFile(const string& n, const string& p, bool isDir = false)
             : name(n), fullPath(p), isDirectory(isDir) {}
     };
-    AssetFile BuildAssetTree(const std::string& path)
+    AssetFile BuildAssetTree(const string& path)
     {
         // Create AssetFile directly instead of using pointer
         AssetFile node(
@@ -111,17 +112,17 @@ public:
 
         return node;
     }
-    std::vector<AssetFile> GetFilesInDirectory(const std::string& path) {
-        std::vector<AssetFile> result;
+    vector<AssetFile> GetFilesInDirectory(const string& path) {
+        vector<AssetFile> result;
 
         if (!fs::is_directory(path)) {
-            std::cerr << "Bukan direktori: " << path << std::endl;
+            cerr << "Bukan direktori: " << path << endl;
             return result;
         }
 
         for (const auto& entry : fs::directory_iterator(path)) {
-            std::string name = entry.path().filename().string();
-            std::string full = entry.path().string();
+            string name = entry.path().filename().string();
+            string full = entry.path().string();
             bool isDir = entry.is_directory();
             AssetFile file(name, full, isDir);
             result.push_back(file);
@@ -131,13 +132,13 @@ public:
     }
     
     struct Notification {
-        std::string title;
-        std::string message;
+        string title;
+        string message;
         ImVec4 color;
         float startTime;
         float duration;
 
-        Notification(const std::string& t, const std::string& m, ImVec4 c, float st, float d) 
+        Notification(const string& t, const string& m, ImVec4 c, float st, float d) 
             : title(t), message(m), color(c), startTime(st), duration(d) {};
     };    
 
@@ -146,16 +147,16 @@ public:
         int width;
         int height;
     };
-    IconInfo GenerateVideoThumbnail(const std::string& videoPath);
-    std::unordered_map<std::string, IconInfo> iconCacheInfo;
+    IconInfo GenerateVideoThumbnail(const string& videoPath);
+    unordered_map<string, IconInfo> iconCacheInfo;
     IconInfo LoadCachedTexture(const string& pathIcon);
     
     IconInfo GetIconForFile(const AssetFile& node) {
-        std::string path = "assets/images/fileicons/";
+        string path = "assets/images/fileicons/";
         if (node.isDirectory) {
             path += "folder.png";
         } else {
-            std::string ext = fs::path(node.name).extension().string();
+            string ext = fs::path(node.name).extension().string();
             if (ext == ".cpp" || ext == ".hpp") path += "c-.png";
             else if (ext == ".png" || ext == ".jpg" || ext == ".webp" || ext == ".jpeg") path = node.fullPath;
             else if (ext == ".mp4" || ext == ".avi" || ext == ".mov" || ext == ".mkv") {
@@ -182,28 +183,28 @@ public:
     // Asset yang dipilih saat ini
     AssetFile* selectedAsset;
     // Callback untuk menangani klik file
-    std::function<void(const AssetFile&)> onFileClicked;
+    function<void(const AssetFile&)> onFileClicked;
     // Favorit folder
-    std::vector<std::string> favoriteFolders;
-    std::string currentFilter = "";
+    vector<string> favoriteFolders;
+    string currentFilter = "";
     string currentDirectory = "";
     void DrawFolderGridView();
-    void DrawBreadcrumbs(const std::string& path);
-    void DrawSearchBar(const std::string& path);
+    void DrawBreadcrumbs(const string& path);
+    void DrawSearchBar(const string& path);
     void DrawNavigationBar();
     void DrawQuickAccessPanel();
     void HandlerOpenFileWithExtensionName(AssetFile& currentNode);
     
     struct SceneObject {
-        std::string name;
+        string name;
         float x, y, width, height, rotation, scaleX, scaleY;
-        std::string spritePath;
+        string spritePath;
         int parentId = -1; // -1 kalau root
-        std::vector<int> children; // index ke child objects
+        vector<int> children; // index ke child objects
     };
 
-    void WriteBinaryScene(const std::string& fullPath, const std::string& sceneName, const std::vector<SceneObject>& objects) {
-        std::ofstream out(fullPath, std::ios::binary);
+    void WriteBinaryScene(const string& fullPath, const string& sceneName, const vector<SceneObject>& objects) {
+        ofstream out(fullPath, ios::binary);
         if (!out) return;
 
         // Write magic header
@@ -239,36 +240,36 @@ public:
         out.close();
     }
 
-    std::vector<Notification> notifications;
+    vector<Notification> notifications;
     Assets assets;
     TextureData icon_texture_data;
-    std::unordered_map<std::string, ImTextureID> iconCache;
-    ImTextureID GetCachedIcon(const std::string& path);
+    unordered_map<string, ImTextureID> iconCache;
+    ImTextureID GetCachedIcon(const string& path);
     // File monitoring system
-    std::thread fileWatcherThread;
-    std::atomic<bool> fileWatcherRunning;
-    std::chrono::milliseconds fileWatcherInterval;
-    std::mutex fileWatcherMutex;
-    std::condition_variable fileWatcherCV;
-    std::unordered_map<std::string, std::time_t> fileTimestamps;
+    thread fileWatcherThread;
+    atomic<bool> fileWatcherRunning;
+    chrono::milliseconds fileWatcherInterval;
+    mutex fileWatcherMutex;
+    condition_variable fileWatcherCV;
+    unordered_map<string, time_t> fileTimestamps;
     bool fileChangesDetected;
-    std::string renamingPath = "";
+    string renamingPath = "";
     char renameBuffer[256] = {};
-    std::string fileExplorerRenameTarget = ""; // Path folder yang sedang direname
+    string fileExplorerRenameTarget = ""; // Path folder yang sedang direname
     bool fileExplorerIsRenaming = false; 
     bool fileExplorerRenameBufferSet = false; // Add this variable to fix the issue
-    std::string fileExplorerCopyTarget = "";
-    std::string fileTargetImport = "";
+    string fileExplorerCopyTarget = "";
+    string fileTargetImport = "";
 
     void OpenFile();
     void OpenFolder();
     void OpenProject(const char* folderPath);
     void DrawAssetTree(const AssetFile& node);
-    void ScanAssetsFolder(const std::string& rootFolder);
-    void NewScripts(const std::string& name);
-    void DeleteFileOrFolder(const std::string& filePathOrFolderPath);
-    void OpenFile(const std::string& fileName);
-    void ShowNotification(const std::string& title, const std::string& message, ImVec4 color);
+    void ScanAssetsFolder(const string& rootFolder);
+    void NewScripts(const string& name);
+    void DeleteFileOrFolder(const string& filePathOrFolderPath);
+    void OpenFile(const string& fileName);
+    void ShowNotification(const string& title, const string& message, ImVec4 color);
     void RenderNotifications();
     void DrawIconFromImage(const char* iconPath, int width, int height);
     // File monitoring methods
@@ -282,20 +283,21 @@ public:
     bool IsFileWatcherRunning() const {
         return fileWatcherRunning;
     }
-    void SearchFileOrFolder(const AssetFile& node, const std::string& query, std::vector<AssetFile>& results);
-    void NewScene(const std::string& name);
-    void HandleCreateNewFile(const std::string &name);
+    void SearchFileOrFolder(const AssetFile& node, const string& query, vector<AssetFile>& results);
+    void NewScene(const string& name);
+    void HandleCreateNewFile(const string &name);
     void HandleRename(const AssetFile& node);
-    void DeleteFolder(const std::string& folderPath);
-    void HandleCreateNewFolder(const std::string &targetFolder);
+    void DeleteFolder(const string& folderPath);
+    void HandleCreateNewFolder(const string &targetFolder);
     void HandleRenameFolder(const AssetFile& node);
     void HandleCopy(const AssetFile& node);
-    void HandlePaste(const std::string& targetFolder);
-    void HandleImport(const std::string& targetFile);
+    void HandlePaste(const string& targetFolder);
+    void HandleImport(const string& targetFile);
     void SaveNewScene();
     void OpenScene();
     // Hint tanda "&" itu ngambil dari referensi 
     void DrawFileExplorer(AssetFile& assetFolder);
     void HandleRenameFileOrFolder(const AssetFile& node);
     void HandleRenameOperation(AssetFile& node, const ImVec2& cursorPos, float itemWidth, float itemHeight);
+    void SaveAsScene();
 };

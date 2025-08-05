@@ -1,4 +1,4 @@
-#define _WIN32_WINNT 0x0A00
+// #define _WIN32_WINNT 0x0A00
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <SDL_main.h>
@@ -9,11 +9,12 @@
 #include <string>
 #include <algorithm>
 #include <iostream>
-#include <windows.h>
+// #include <windows.h>
 #include <string>
 #include <nfd.hpp>
 #include <filesystem>
 #include <ctime>
+#include <unistd.h>
 #include <Debugger.hpp>
 using namespace std;
 
@@ -209,48 +210,46 @@ public:
         ImGui::PushStyleColor(ImGuiCol_Button, project.accentColor);
         if (ImGui::Button("Open", ImVec2(60, 25))) {
             selectedProject = index;
-            
-            // Get the current executable path
-            char exePath[MAX_PATH];
-            GetModuleFileNameA(NULL, exePath, MAX_PATH);
-            std::filesystem::path currentPath = std::filesystem::path(exePath).parent_path();
-            Debug::Logger::Log("Current executable path: " + currentPath.string() + " ExePath: " + exePath, Debug::LogLevel::INFO);
-            // Construct editor path
-            std::filesystem::path editorPath = currentPath / "GameEngineSDL.exe";
-            Debug::Logger::Log("Editor Path: "+editorPath.string());
-            // Prepare process information
-            STARTUPINFOA si;
-            PROCESS_INFORMATION pi;
-            ZeroMemory(&si, sizeof(si));
-            si.cb = sizeof(si);
-            ZeroMemory(&pi, sizeof(pi));
-            
-            // Command line arguments including project path
-            std::string cmdLine = "\"" + editorPath.string() + "\"";
-            Debug::Logger::Log("Command line: " + cmdLine);
-            // Launch editor
-            if (CreateProcessA(
-                editorPath.string().c_str(),
-                (LPSTR)cmdLine.c_str(),
-                NULL,
-                NULL,
-                FALSE,
-                0,
-                NULL,
-                project.path.c_str(),  // Set working directory to project path
-                &si,
-                &pi
-            )) {
-                Debug::Logger::Log("Launched editor with project: " + project.path);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
+
+            // Get current executable path
+            char exePath[PATH_MAX];
+            ssize_t count = readlink("/proc/self/exe", exePath, PATH_MAX);
+            std::filesystem::path currentPath;
+            if (count != -1) {
+                currentPath = std::filesystem::path(std::string(exePath, count)).parent_path();
+                Debug::Logger::Log("Current executable path: " + currentPath.string(), Debug::LogLevel::INFO);
             } else {
-                DWORD error = GetLastError();
-                std::string errorMsg = "Failed to launch editor. Error code: " + std::to_string(error);
+                Debug::Logger::Log("Failed to get executable path", Debug::LogLevel::CRASH);
+                return;
+            }
+
+            // Construct editor path
+            std::filesystem::path editorPath = currentPath / "GameEngineSDL";
+            Debug::Logger::Log("Editor Path: " + editorPath.string());
+
+            // Command line argument
+            std::string cmdLine = editorPath.string();
+            Debug::Logger::Log("Command line: " + cmdLine);
+
+            // Launch editor using fork + exec
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Child process
+                chdir(project.path.c_str()); // Set working directory
+                execl(cmdLine.c_str(), cmdLine.c_str(), nullptr);
+                // If execl fails
+                perror("execl failed");
+                exit(EXIT_FAILURE);
+            } else if (pid > 0) {
+                // Parent process
+                Debug::Logger::Log("Launched editor with project: " + project.path);
+            } else {
+                // Fork failed
+                std::string errorMsg = "Failed to launch editor. Fork error.";
                 Debug::Logger::Log(errorMsg, Debug::LogLevel::CRASH);
-                MessageBoxA(NULL, errorMsg.c_str(), "Error", MB_OK | MB_ICONERROR);
             }
         }
+
         ImGui::PopStyleColor();
         
         ImGui::SameLine();

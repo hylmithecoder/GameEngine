@@ -1,10 +1,4 @@
 #pragma once
-// #include <glad/glad.h>
-// #define WIN32_LEAN_AND_MEAN
-// #include <winsock2.h>
-// #include <windows.h>
-// #include <ws2tcpip.h>
-
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include "imgui.h"
@@ -17,19 +11,13 @@
 #include <NetworkManager.hpp>
 #include <gtk/gtk.h>
 #include <glib.h>
-// #include <Application.hpp>
 #include "VideoPlayer.hpp" // Include the header file for VideoPlayer
 #include <assets.hpp> // Include the header file for assets
-// #include <SDL_opengl.h>
-// #include <GLFW/glfw3.h>
-// #include <GLES2/gl2.h>
-// #include <FFmpegWrapper.hpp>
 #include <list>
 #include "IconsFontAwesome6.h"
 #include <HandlerProject.hpp> // Include the header file for HandlerProject
 #define IMGUI_HAS_DOCK
 #define IMGUI_HAS_VIEWPORT
-// #include "SimpleRenderer.hpp"
 
 class MainWindow {
 private:
@@ -96,7 +84,7 @@ private:
 public:
     MainWindow(const char* title, int width = 1280, int height = 720);
     ~MainWindow();
-        
+    
     SceneRenderer2D* sceneRenderer2D = nullptr;
     HandlerProject projectHandler;
     TextureData backgroundTexture;

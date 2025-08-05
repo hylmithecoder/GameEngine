@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(GameEngineSDL VERSION 1.0.0)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
@@ -24,7 +24,7 @@ set(GLFW "C:/glfw3.4")
 # set(FFMPEG_DIR "E:/FFmpeg")
 # set(LIBRARY "C:/msys64/mingw64/bin")
 # set(GLES2 ${GLFW}/)
-set(NFD "/home/user/Hylmi/Pemrograman Berorientasi Objek/C++/nativefiledialog-extended")
+set(NFD "/home/hylmi/Hylmi/Pemrograman_Berorientasi_Objek/C++/nativefiledialog-extended")
 # set(GLM "E:/glm")
 # set(VULKAN_SDK "C:/msys64/mingw64")
 # set(VULKAN_DIR "C:/vulkan")
@@ -187,6 +187,7 @@ set(GLAD_VULKAN
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
 find_package(SDL2 REQUIRED)
+find_package(glfw3 REQUIRED)
 find_package(SDL2_ttf REQUIRED)
 find_package(PkgConfig REQUIRED)
 # find_package(Vulkan REQUIRED)
@@ -218,8 +219,8 @@ target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 add_executable(HandlerIlmeeeEngine ${SOURCE_HANDLER})
 # target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
-add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
-target_link_options(IlmeeeHub PRIVATE -mconsole)
+add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${NFD_SOURCES} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+# target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
 set_target_properties(IlmeeeEngine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -356,6 +357,7 @@ target_include_directories(TestGLSL PRIVATE
     gles2
     opengl32
     gdi32
+    /usr/include/GLFW
     ${GLAD_4_DIR}/include
     # ${VULKAN_DIR}
     Vulkan
@@ -377,7 +379,7 @@ target_include_directories(TestVulkan PRIVATE
     # ${GLM}
     # GL
     # ${GLEW}/include/GL
-    ${GLFW}/include
+    /usr/include/GLFW
     # ${GLES2}
     opengl32
     gdi32
@@ -403,7 +405,6 @@ target_include_directories(IlmeeeEditor PUBLIC
     $<BUILD_INTERFACE:/usr/include/SDL2>
     $<BUILD_INTERFACE:/usr/include/GLFW>
     $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}>
-    $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}/gtk-3.0>
     $<BUILD_INTERFACE:${ICON_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
@@ -428,20 +429,16 @@ target_include_directories(IlmeeeHub PRIVATE
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/src/header/ui
     ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    # ${FFMPEG_DIR}
     ${NFD}/src/include
+    /usr/include/winpr3
     ${JSON_DIR}
-    # ${STB}
-    # ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    ${GLFW}/include
-    ${GLES2}
+    /usr/include/GLFW
+    /usr/include/SDL2
     opengl32
-    gdi32
     ${GLAD_4_DIR}/include
     # ${VULKAN_DIR}
     Vulkan
+    /usr/include/stb
 )
 
 # First, find this section and modify it:
@@ -563,6 +560,7 @@ endif()
 # Print build information
 message(STATUS "=== GameEngine Build Configuration ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATIS "OpenGL version: ${OPENGL_VERSION}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Build example: ${BUILD_EXAMPLE}")
 message(STATUS "Build tests: ${BUILD_TESTS}")
@@ -595,22 +593,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     swresample
     swscale
     # glfw
-    ${GTK3_LIBRARIES}
+    ${GTK3_LINK_LIBRARIES}
     dl
     pthread
 )
 
 target_link_libraries(TestBackground PRIVATE
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
     OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    #   GLEW::GLEW
 )
 
 target_link_libraries(TestGLEW PRIVATE
@@ -646,19 +635,7 @@ target_link_libraries(TestVulkan PRIVATE
     SDL2
     SDL2_ttf
     glfw
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    # ${LIBRARY}/avformat.lib
-    # ${LIBRARY}/avcodec.lib 
-    # ${LIBRARY}/avutil.lib 
-    # ${LIBRARY}/swresample.lib
-    # ${LIBRARY}/swscale.lib
-    # ${LIBRARY}/vulkan-1.dll
     Vulkan::Vulkan
-    # GLFW::GLFW
-    # glfw3::glfw3
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
@@ -668,65 +645,20 @@ target_link_libraries(HandlerIlmeeeEngine PRIVATE
     # comctl32 # For InitCommonControlsEx
 )
 
-target_link_libraries(IlmeeeHub PRIVATE
-    SDL2::SDL2
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    # ${CMAKE_SOURCE_DIR}/src/header/core_engine
+target_link_libraries(IlmeeeHub PRIVATE    
+    SDL2
+    SDL2_ttf
     OpenGL::GL
     avformat
     avcodec
     avutil
     swresample
     swscale
-    # ${LIBRARY}/avformat.lib
-    # ${LIBRARY}/avcodec.lib 
-    # ${LIBRARY}/avutil.lib 
-    # ${LIBRARY}/swresample.lib
-    # ${LIBRARY}/swscale.lib    
-    # GLFW
-    # ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
+    ${GTK3_LIBRARIES}
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    ${NFD}/build/src/libnfd.so.1.2.1
     OpenGL::GL
     ${GTK3_LIBRARIES}
-    # wsock32
-    # ws2_32
 )
-
-# Copy DLL files to output directory
-if(WIN32)
-    find_library(WSOCK32_LIBRARY wsock32)
-    find_library(WS2_32_LIBRARY ws2_32)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            # "${SDL2_DIR}/lib/x64/SDL2.dll"
-            # "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
-            # "${LIBRARY}/avformat-62.dll"
-            # "${LIBRARY}/avcodec-62.dll"
-            # "${LIBRARY}/avutil-60.dll"
-            # "${LIBRARY}/swresample-6.dll"
-            # "${LIBRARY}/swscale-9.dll"
-            # "${GLFW}/lib-static-ucrt/glfw3.dll"
-            # "${GLEW}/bin/Release/x64/glew32.dll"
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-    )
-    add_custom_command(TARGET TestVulkan POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${LIBRARY}/vulkan-1.dll"
-            "${VULKAN_LIB}"
-            $<TARGET_FILE_DIR:TestVulkan>
-    )
-    add_custom_command(TARGET IlmeeeEditor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            # "${SDL2_DIR}/lib/x64/SDL2.dll"
-            # "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
-            "${GLFW}/lib-static-ucrt/glfw3.dll"
-            $<TARGET_FILE_DIR:IlmeeeEditor>
-    )
-endif()

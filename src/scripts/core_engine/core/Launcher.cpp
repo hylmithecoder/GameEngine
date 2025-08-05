@@ -46,7 +46,7 @@ int main(int argc, char* argv[]) {
     // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
     SendCommandToEngineFunc SendCommand = libManager.GetFunction<SendCommandToEngineFunc>(libManager.GetEditorLib(), "SendCommandToEngine");
 
-    if (Run && Shutdown) {
+    if (Run) {
         cout << "Running engine..." << endl;
         Run();
     }

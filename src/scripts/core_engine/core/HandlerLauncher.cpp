@@ -31,7 +31,7 @@ typedef bool (*StartServerFunc)();
 typedef bool (*ConnectToEngineFunc)();
 typedef bool (*SendCommandToEngineFunc)(const char*);
 typedef string (*GetCommandFunc)();
-typedef string (*SetProjectPathFunc)();
+typedef void (*SetProjectPathFunc)(const string&);
 typedef void (*ExecuteCommandFunc)();
 
 // Loading window class
@@ -54,20 +54,20 @@ private:
         }
         
         .title-label {
-            font-family: 'Ubuntu', sans-serif;
+            font-family: 'MiSans', sans-serif;
             font-size: 28px;
             font-weight: bold;
             color: white;
         }
         
         .status-label {
-            font-family: 'Ubuntu', sans-serif;
+            font-family: 'MiSans', sans-serif;
             font-size: 16px;
             color: #cccccc;
         }
         
         .version-label {
-            font-family: 'Ubuntu', sans-serif;
+            font-family: 'MiSans', sans-serif;
             font-size: 16px;
             color: #888888;
         }
@@ -128,7 +128,7 @@ public:
         gtk_container_set_border_width(GTK_CONTAINER(vbox), 20);
         
         // Create title label
-        titleLabel = gtk_label_new("ILMEE ENGINE");
+        titleLabel = gtk_label_new("ILMEEE ENGINE");
         gtk_widget_set_halign(titleLabel, GTK_ALIGN_CENTER);
         gtk_style_context_add_class(gtk_widget_get_style_context(titleLabel), "title-label");
         gtk_box_pack_start(GTK_BOX(vbox), titleLabel, FALSE, FALSE, 0);
@@ -437,16 +437,16 @@ private:
                                 //         Debug::Logger::Log("Set project path: " + path, Debug::LogLevel::INFO);
                                 //     }
                                 // } else 
-                                if (message == "E:\\Game Engine Folder\\My First Project") {
+                                if (message == "/home/hylmi/GameEngineFolder/My First Project") {
                                     auto SetProjectPath = libManager.GetFunction<SetProjectPathFunc>(
                                         libManager.GetEditorLib(),
                                         "SetProjectPath"
                                     );
-                                    if (SetProjectPath)
-                                    {
+                                    // if (SetProjectPath)
+                                    // {
                                         Debug::Logger::Log("Set project path: " + message, Debug::LogLevel::SUCCESS);
-                                        SetProjectPath();
-                                    }
+                                        SetProjectPath(message);
+                                    // }
                                 }
                                 if (message == "LoadScene") {
                                     Debug::Logger::Log("Processing LoadScene command...");

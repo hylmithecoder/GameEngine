@@ -746,7 +746,9 @@ void MainWindow::RenderMenuBar() {
                 networkManager->sendMessage("LoadScene");
             }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {}
-            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {}
+            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+                projectHandler.SaveAsScene();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) isRunning = false;
             ImGui::EndMenu();
