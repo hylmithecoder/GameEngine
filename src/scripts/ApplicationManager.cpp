@@ -272,7 +272,7 @@ bool ApplicationManager::LaunchEngine() {
 
         // Execute cleanup tasks in specific order
         CleanupNetwork();
-        // CleanupEngine();
+        CleanupEngine();
         CleanupWindow();
         CleanupSDL();
         Debug::Logger::Log("Application shutdown complete");

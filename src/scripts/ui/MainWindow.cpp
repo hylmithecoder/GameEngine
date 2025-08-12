@@ -1578,7 +1578,7 @@ void MainWindow::update() {
             // sceneRenderer2D = new SceneRenderer2D(800, 600);
             firstOpenProject = true;
         }                   
-        }
+    }
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {

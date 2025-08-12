@@ -1,0 +1,110 @@
+#pragma once
+#include <vulkan/vulkan.h>
+#include <SDL_vulkan.h>
+#include <SDL.h>
+#include <string>
+#include <iostream>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+#include <stdlib.h>
+#include <imgui_impl_sdl3.h>
+#include <vector>
+#include <map>
+#include <stdexcept>
+#include <fstream>
+using namespace std;
+
+#ifdef IMGUI_IMPL_VULKAN_USE_VOLK
+#define VOLK_IMPLEMENTATION
+#include <volk.h>
+#endif
+
+class Viewport3D {
+    public:
+        SDL_Window* mainWindow = nullptr;
+
+        // Main Component vulkan
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        ImGuiIO currentIo;
+        VkAllocationCallbacks*   g_Allocator = nullptr;
+        VkInstance               g_Instance = VK_NULL_HANDLE;
+        VkPhysicalDevice         g_PhysicalDevice = VK_NULL_HANDLE;
+        VkDevice                 g_Device = VK_NULL_HANDLE;
+        uint32_t                 g_QueueFamily = (uint32_t)-1;
+        VkQueue                  g_Queue = VK_NULL_HANDLE;
+        VkPipelineCache          g_PipelineCache = VK_NULL_HANDLE;
+        VkDescriptorPool         g_DescriptorPool = VK_NULL_HANDLE;
+
+        ImGui_ImplVulkanH_Window g_MainWindowData;
+        uint32_t                 g_MinImageCount = 2;
+        bool                     g_SwapChainRebuild = false;
+        ImGui_ImplVulkanH_Window* wd = nullptr;
+        ImGui_ImplVulkan_InitInfo init_info = {};
+
+        VkPipelineLayout pipelineLayout;
+        VkPipeline graphicsPipeline;
+        VkRenderPass renderPass;
+
+        void createRenderPass();
+        void createGraphicsPipeline(const std::string& vertShaderPath, const std::string& fragShaderPath);
+        VkShaderModule createShaderModule(const std::vector<char>& code);
+        static std::vector<char> readFile(const std::string& filename);
+        void CreateOffscreenResources(int width, int height);
+        void CreateOffscreenPipeline();
+        void RenderOffscreen(uint32_t width, uint32_t height);
+        void DrawImguiViewport();
+
+        // Offscreen render target
+        VkImage offscreenImage;
+        VkDeviceMemory offscreenImageMemory;
+        VkImageView offscreenImageView;
+        VkSampler offscreenSampler;
+        VkFramebuffer offscreenFramebuffer;
+        VkRenderPass offscreenRenderPass;
+
+        // Descriptor untuk ImGui::Image()
+        VkDescriptorSet offscreenDescriptorSet;
+        VkDescriptorSetLayout descriptorSetLayout;
+        VkDescriptorPool imguiDescriptorPool;
+
+        // Command buffer khusus offscreen 
+        VkCommandBuffer offscreenCmdBuffer = VK_NULL_HANDLE;// Offscreen command pool + semaphore
+        VkCommandPool offscreenCommandPool = VK_NULL_HANDLE;
+        VkSemaphore offscreenSignalSemaphore = VK_NULL_HANDLE;
+
+        int graphicsQueueFamily = -1;
+        int presentQueueFamily = -1;
+
+        void SetupVulkan(ImVector<const char*> instance_extensions, SDL_Window* currentWindow);
+        void initVulkan(ImVector<const char*> instance_extensions, SDL_Window* window){
+            SetupVulkan(instance_extensions, window);
+            create_vk_surface();
+            SetupVulkanWindow(&g_MainWindowData, surface, 1280, 720);
+            SetupImgui();
+            pickPhysicalDevice();
+        };
+        
+        bool IsExtensionAvailable(const ImVector<VkExtensionProperties>& properties, const char* extension);
+        void create_vk_surface();
+        void SetupVulkanWindow(ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR surface, int width, int height);
+        void SetupImgui();
+        void CleanupVulkan();
+        void FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data);
+        void FramePresent(ImGui_ImplVulkanH_Window* wd);
+        void CreateOffscreenCommandResources();
+        void renderViewport();
+
+        static void check_vk_result(VkResult err)
+        {
+            if (err == VK_SUCCESS)
+                return;
+            fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
+            if (err < 0)
+                abort();
+        }
+        void Update();
+
+        // Info Vulkan
+        int ratePhysicalDevice(VkPhysicalDevice device);
+        void pickPhysicalDevice();
+};

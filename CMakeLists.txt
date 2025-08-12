@@ -135,11 +135,12 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
 )
 
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
@@ -239,7 +240,7 @@ set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
-
+add_executable(ViewPort3D src/scripts/test_viewport3d.cpp src/header/core_engine/test_viewport3d.hpp ${IMGUI_SOURCES})
 
 set_target_properties(IlmeeeEditor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -441,6 +442,14 @@ target_include_directories(IlmeeeHub PRIVATE
     /usr/include/stb
 )
 
+target_include_directories(ViewPort3D PRIVATE
+    Vulkan
+    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    /usr/include/SDL3
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+)
+
 # First, find this section and modify it:
 install(TARGETS IlmeeeEngine
     EXPORT IlmeeeEngineTargets    # Add this line
@@ -635,6 +644,11 @@ target_link_libraries(TestVulkan PRIVATE
     SDL2
     SDL2_ttf
     glfw
+    Vulkan::Vulkan
+)
+
+target_link_libraries(ViewPort3D PRIVATE
+    SDL3
     Vulkan::Vulkan
 )
 
