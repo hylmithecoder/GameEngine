@@ -1,4 +1,5 @@
 #define SDL_MAIN_HANDLED
+#include <Debugger.hpp>
 #include <test_viewport3d.hpp>
 
 bool Viewport3D::IsExtensionAvailable(const ImVector<VkExtensionProperties>& properties, const char* extension)
@@ -108,8 +109,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         create_info.pQueueCreateInfos = queue_info;
         create_info.enabledExtensionCount = (uint32_t)device_extensions.Size;
         create_info.ppEnabledExtensionNames = device_extensions.Data;
-        err = vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device);
-        check_vk_result(err);
+        check_vk_result(vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device));
         vkGetDeviceQueue(g_Device, g_QueueFamily, 0, &g_Queue);
     }
 
@@ -118,18 +118,27 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
     {
         VkDescriptorPoolSize pool_sizes[] =
         {
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+            { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+            { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
         };
         VkDescriptorPoolCreateInfo pool_info = {};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        pool_info.maxSets = 0;
+        pool_info.maxSets = 1000;
         for (VkDescriptorPoolSize& pool_size : pool_sizes)
             pool_info.maxSets += pool_size.descriptorCount;
         pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
         pool_info.pPoolSizes = pool_sizes;
-        err = vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool);
-        check_vk_result(err);
+        check_vk_result(vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool));
     }
 }
 
@@ -195,7 +204,7 @@ void Viewport3D::SetupImgui(){
     io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 24.0f);
     currentIo = io;
     ImGui_ImplSDL3_InitForVulkan(mainWindow);
-    init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
+    // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
     init_info.Instance = g_Instance;
     init_info.PhysicalDevice = g_PhysicalDevice;
     init_info.Device = g_Device;
@@ -211,6 +220,7 @@ void Viewport3D::SetupImgui(){
     init_info.Allocator = g_Allocator;
     init_info.CheckVkResultFn = check_vk_result;
     ImGui_ImplVulkan_Init(&init_info);
+    ImGui_ImplVulkan_CreateFontsTexture();
 }
 
 int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
@@ -220,10 +230,11 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
     // Print detailed device info for debugging
-    std::cout << "\nEvaluating device: " << deviceProps.deviceName << std::endl;
-    std::cout << "Device ID: " << deviceProps.deviceID << std::endl;
-    std::cout << "Vendor ID: " << deviceProps.vendorID << std::endl;
-    std::cout << "Driver Version: " << deviceProps.driverVersion << std::endl;
+    Debug::Logger::Log("\nEvaluating device: " + std::string(deviceProps.deviceName), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Device Type: " + std::to_string(deviceProps.deviceType), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Device ID: " + std::to_string(deviceProps.deviceID), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Vendor ID: " + std::to_string(deviceProps.vendorID), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Driver Version: " + std::to_string(deviceProps.driverVersion), Debug::LogLevel::INFO);
 
     int score = 0;
 
@@ -234,7 +245,7 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     // Check queue families for compute support
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
     bool hasComputeSupport = false;
@@ -242,7 +253,8 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
         if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
             hasComputeSupport = true;
             score += 500; // Bonus for compute support
-            std::cout << "Device has compute support" << std::endl;
+            Debug::Logger::Log("Device has compute support: +500 points", Debug::LogLevel::INFO);
+            // cout << "Device has compute support" << endl;
             break;
         }
     }
@@ -251,18 +263,21 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     switch(deviceProps.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
             score += 1000;
-            std::cout << "Discrete GPU: +1000 points" << std::endl;
+            Debug::Logger::Log("Discrete GPU: +1000 points", Debug::LogLevel::INFO);
+            // cout << "Discrete GPU: +1000 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
             score += 100;
-            std::cout << "Integrated GPU: +100 points" << std::endl;
+            Debug::Logger::Log("Integrated GPU: +100 points", Debug::LogLevel::INFO);
+            // cout << "Integrated GPU: +100 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
             score += 50;
-            std::cout << "Virtual GPU: +50 points" << std::endl;
+            Debug::Logger::Log("Virtual GPU: +50 points", Debug::LogLevel::INFO);
+            // cout << "Virtual GPU: +50 points" << endl;
             break;
         default:
-            std::cout << "Other GPU type: +0 points" << std::endl;
+            cout << "Other GPU type: +0 points" << endl;
             break;
     }
 
@@ -270,26 +285,30 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     VkDeviceSize maxHeapSize = 0;
     for(uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
         if(memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-            maxHeapSize = std::max(maxHeapSize, memProps.memoryHeaps[i].size);
+            maxHeapSize = max(maxHeapSize, memProps.memoryHeaps[i].size);
         }
     }
     
     // Convert to GB and add to score
     score += static_cast<int>(maxHeapSize / (1024 * 1024 * 1024));
-    std::cout << "Memory size score: +" << (maxHeapSize / (1024 * 1024 * 1024)) << " points" << std::endl;
+    Debug::Logger::Log("Memory size score: +" + to_string(maxHeapSize / (1024 * 1024 * 1024)) + " points", Debug::LogLevel::INFO);
+    // cout << "Memory size score: +" << (maxHeapSize / (1024 * 1024 * 1024)) << " points" << endl;
 
     // Check for specific features
     if (deviceFeatures.geometryShader) {
         score += 100;
-        std::cout << "Has geometry shader: +100 points" << std::endl;
+        Debug::Logger::Log("Has geometry shader: +100 points", Debug::LogLevel::INFO);
+        // cout << "Has geometry shader: +100 points" << endl;
     }
     if (deviceFeatures.tessellationShader) {
         score += 100;
-        std::cout << "Has tessellation: +100 points" << std::endl;
+        Debug::Logger::Log("Has tessellation: +100 points", Debug::LogLevel::INFO);
+        // cout << "Has tessellation: +100 points" << endl;
     }
 
-    std::cout << "Final score: " << score << std::endl;
-    std::cout << "------------------------" << std::endl;
+    Debug::Logger::Log("Final score: "+ to_string(score), Debug::LogLevel::INFO);
+    // cout << "Final score: " << score << endl;
+    cout << "------------------------" << endl;
 
     return score;
 }
@@ -299,18 +318,18 @@ void Viewport3D::pickPhysicalDevice() {
     vkEnumeratePhysicalDevices(g_Instance, &deviceCount, nullptr);
     
     if (deviceCount == 0) {
-        throw std::runtime_error("Failed to find GPUs with Vulkan support!");
+        throw runtime_error("Failed to find GPUs with Vulkan support!");
     }
 
-    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(g_Instance, &deviceCount, devices.data());
 
     // Rate devices and pick the best one
-    std::multimap<int, VkPhysicalDevice> candidates;
+    multimap<int, VkPhysicalDevice> candidates;
     
     for (const auto& device : devices) {
         int score = ratePhysicalDevice(device);
-        candidates.insert(std::make_pair(score, device));
+        candidates.insert(make_pair(score, device));
         // printDeviceProperties(device);
     }
 
@@ -319,110 +338,19 @@ void Viewport3D::pickPhysicalDevice() {
         // physicalDevice = candidates.rbegin()->second;
         VkPhysicalDeviceProperties deviceProps;
         vkGetPhysicalDeviceProperties(g_PhysicalDevice, &deviceProps);
-        std::cout << "Selected GPU: " << deviceProps.deviceName << std::endl;
+        Debug::Logger::Log("Selected GPU: " + string(deviceProps.deviceName), Debug::LogLevel::INFO);
+        // cout << "Selected GPU: " << deviceProps.deviceName << endl;
     } else {
-        throw std::runtime_error("Failed to find a suitable GPU!");
+        throw runtime_error("Failed to find a suitable GPU!");
     }
-    std::cout << "Using GPU: " << g_PhysicalDevice << std::endl;
-}
-
-void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
-{
-    VkSemaphore image_acquired_semaphore  = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-    VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
-    VkResult err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
-        g_SwapChainRebuild = true;
-    if (err == VK_ERROR_OUT_OF_DATE_KHR)
-        return;
-    if (err != VK_SUBOPTIMAL_KHR)
-        check_vk_result(err);
-
-    ImGui_ImplVulkanH_Frame* fd = &wd->Frames[wd->FrameIndex];
-    {
-        err = vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);    // wait indefinitely instead of periodically checking
-        check_vk_result(err);
-
-        err = vkResetFences(g_Device, 1, &fd->Fence);
-        check_vk_result(err);
-    }
-    {
-        err = vkResetCommandPool(g_Device, fd->CommandPool, 0);
-        check_vk_result(err);
-        VkCommandBufferBeginInfo info = {};
-        info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        info.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
-        check_vk_result(err);
-    }
-    {
-        VkRenderPassBeginInfo info = {};
-        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        info.renderPass = wd->RenderPass;
-        info.framebuffer = fd->Framebuffer;
-        info.renderArea.extent.width = wd->Width;
-        info.renderArea.extent.height = wd->Height;
-        info.clearValueCount = 1;
-        info.pClearValues = &wd->ClearValue;
-        vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
-    }
-
-    // Record dear imgui primitives into command buffer
-    ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
-
-    // Submit command buffer
-    vkCmdEndRenderPass(fd->CommandBuffer);
-    {
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        VkSubmitInfo info = {};
-        info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        info.waitSemaphoreCount = 1;
-        info.pWaitSemaphores = &image_acquired_semaphore;
-        info.pWaitDstStageMask = &wait_stage;
-        info.commandBufferCount = 1;
-        info.pCommandBuffers = &fd->CommandBuffer;
-        info.signalSemaphoreCount = 1;
-        info.pSignalSemaphores = &render_complete_semaphore;
-
-        err = vkEndCommandBuffer(fd->CommandBuffer);
-        check_vk_result(err);
-        err = vkQueueSubmit(g_Queue, 1, &info, fd->Fence);
-        check_vk_result(err);
-    }
-
-    // Prepare wait semaphores array
-    // VkSemaphore waitSems[2];
-    // waitSems[0] = image_acquired_semaphore;
-
-    // uint32_t waitCount = 1;
-    // VkPipelineStageFlags waitStages[2];
-    // waitStages[0] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-    // if (offscreenSignalSemaphore != VK_NULL_HANDLE) {
-    //     waitSems[waitCount] = offscreenSignalSemaphore;
-    //     waitStages[waitCount] = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; // or COLOR_ATTACHMENT_OUTPUT depending on what you need
-    //     waitCount++;
-    // }
-
-    // // fill submit info
-    // VkSubmitInfo info = {};
-    // info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    // info.waitSemaphoreCount = waitCount;
-    // info.pWaitSemaphores = waitSems;
-    // info.pWaitDstStageMask = waitStages;
-    // info.commandBufferCount = 1;
-    // info.pCommandBuffers = &fd->CommandBuffer;
-    // info.signalSemaphoreCount = 1;
-    // info.pSignalSemaphores = &render_complete_semaphore;
-
-    // err = vkEndCommandBuffer(fd->CommandBuffer);
-    // check_vk_result(err);
-    // err = vkQueueSubmit(g_Queue, 1, &info, fd->Fence);
-    // check_vk_result(err);
-
+    VkPhysicalDeviceProperties deviceProps;
+    vkGetPhysicalDeviceProperties(g_PhysicalDevice, &deviceProps);
+    // cout << "Using GPU: " << deviceProps.deviceName << endl;
 }
 
 void Viewport3D::CreateOffscreenResources(int width, int height) {
+    viewportWidth = width;
+    viewportHeight = height;
     // Buat VkImage untuk warna
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -481,13 +409,13 @@ void Viewport3D::CreateOffscreenCommandResources() {
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = g_QueueFamily; // atau graphicsQueueFamily
     if (vkCreateCommandPool(g_Device, &poolInfo, nullptr, &offscreenCommandPool) != VK_SUCCESS)
-        throw std::runtime_error("failed to create offscreen command pool");
+        throw runtime_error("failed to create offscreen command pool");
 
     // Semaphore to signal offscreen completion
     VkSemaphoreCreateInfo semInfo{};
     semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     if (vkCreateSemaphore(g_Device, &semInfo, nullptr, &offscreenSignalSemaphore) != VK_SUCCESS)
-        throw std::runtime_error("failed to create offscreen semaphore");
+        throw runtime_error("failed to create offscreen semaphore");
 }
 
 
@@ -520,20 +448,43 @@ void Viewport3D::Update(){
         // Resize swap chain?
         int fb_width, fb_height;
         SDL_GetWindowSize(mainWindow, &fb_width, &fb_height);
-        if (fb_width > 0 && fb_height > 0 && (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
+
+        if (fb_width > 0 && fb_height > 0 &&
+            (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
         {
             ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
-            ImGui_ImplVulkanH_CreateOrResizeWindow(g_Instance, g_PhysicalDevice, g_Device, &g_MainWindowData, g_QueueFamily, g_Allocator, fb_width, fb_height, g_MinImageCount);
+
+            ImGui_ImplVulkanH_CreateOrResizeWindow(
+                g_Instance, g_PhysicalDevice, g_Device,
+                &g_MainWindowData, g_QueueFamily, g_Allocator,
+                fb_width, fb_height, g_MinImageCount
+            );
             g_MainWindowData.FrameIndex = 0;
             g_SwapChainRebuild = false;
+
+            // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
+            check_vk_result(vkDeviceWaitIdle(g_Device));
         }
 
         // Start the Dear ImGui frame
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        
 
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    
+        ImGui::Begin("DockSpace", nullptr, window_flags);
+        ImGui::PopStyleVar(2);
+        ImGuiID dockspace_id = ImGui::GetID("DockSpace");
+
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
         if (show_demo_window)
             ImGui::ShowDemoWindow(&show_demo_window);
         {
@@ -562,16 +513,18 @@ void Viewport3D::Update(){
 
         if (show_another_window)
         {
-            ImGui::Begin("Another Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
-            ImGui::Text("Hello from another window!");
+            ImGui::Begin("Another Window", &show_another_window);
             if (ImGui::Button("Close Me"))
                 show_another_window = false;
             ImGui::End();
         }
 
-        // RenderOffscreen(640, 480);
-        DrawImguiViewport();
+        RenderOffscreen(viewportWidth, viewportHeight);
+        // DrawImguiViewport();
+        DrawImage();
 
+        ImGui::End();
+        ImGui::EndFrame();
         // Rendering
         ImGui::Render();
         ImDrawData* main_draw_data = ImGui::GetDrawData();
@@ -581,19 +534,20 @@ void Viewport3D::Update(){
         wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
         wd->ClearValue.color.float32[3] = clear_color.w;
         if (!main_is_minimized)
-            FrameRender(wd, ImGui::GetDrawData());
+            FrameRender(wd, main_draw_data);
             // RenderOffscreen();
 
         // Update and Render additional Platform Windows
-        if (currentIo.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        {
+        // if (currentIo.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        // {
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
-        }
+        // }
 
         // Present Main Platform Window
         if (!main_is_minimized)
             FramePresent(wd);
+
     }
 }
 
@@ -635,18 +589,18 @@ void Viewport3D::CleanupVulkan()
 
 }
 
-std::vector<char> Viewport3D::readFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
+vector<char> Viewport3D::readFile(const string& filename) {
+    ifstream file(filename, ios::ate | ios::binary);
+    if (!file.is_open()) throw runtime_error("Failed to open file: " + filename);
     size_t fileSize = (size_t)file.tellg();
-    std::vector<char> buffer(fileSize);
+    vector<char> buffer(fileSize);
     file.seekg(0);
     file.read(buffer.data(), fileSize);
     file.close();
     return buffer;
 }
 
-VkShaderModule Viewport3D::createShaderModule(const std::vector<char>& code) {
+VkShaderModule Viewport3D::createShaderModule(const vector<char>& code) {
     VkShaderModuleCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     createInfo.codeSize = code.size();
@@ -654,7 +608,7 @@ VkShaderModule Viewport3D::createShaderModule(const std::vector<char>& code) {
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(g_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create shader module!");
+        throw runtime_error("Failed to create shader module!");
     }
     return shaderModule;
 }
@@ -688,19 +642,24 @@ void Viewport3D::createRenderPass() {
     renderPassInfo.pSubpasses = &subpass;
 
     if (vkCreateRenderPass(g_Device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create render pass!");
+        throw runtime_error("Failed to create render pass!");
     }
 }
 
 // Parent Step2 for pipeline
-void Viewport3D::createGraphicsPipeline(const std::string& vertShaderPath, const std::string& fragShaderPath) {
+void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
     auto vertShaderCode = readFile(vertShaderPath);
     auto fragShaderCode = readFile(fragShaderPath);
-    cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
-    cout << "fragshader code: " << fragShaderCode .capacity() << endl;
+    Debug::Logger::Log("Vertshader size: " + to_string(reinterpret_cast<uintptr_t>(vertShaderCode.capacity())));
+    Debug::Logger::Log("fragshader size: " + to_string(reinterpret_cast<uintptr_t>(fragShaderCode.capacity())));
+    // cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
+    // cout << "fragshader code: " << fragShaderCode.capacity() << endl;
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-
+    Debug::Logger::Log("Vertshader module: " + to_string(reinterpret_cast<uintptr_t>(vertShaderModule)));
+    Debug::Logger::Log("fragshader module: " + to_string(reinterpret_cast<uintptr_t>(fragShaderModule)));
+    // cout << "Vertshader module: " << vertShaderModule << endl;
+    // cout << "fragshader module: " << fragShaderModule << endl;
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -772,7 +731,7 @@ void Viewport3D::createGraphicsPipeline(const std::string& vertShaderPath, const
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 
     if (vkCreatePipelineLayout(g_Device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create pipeline layout!");
+        throw runtime_error("Failed to create pipeline layout!");
     }
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -788,15 +747,18 @@ void Viewport3D::createGraphicsPipeline(const std::string& vertShaderPath, const
     pipelineInfo.layout = pipelineLayout;
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
-    cout << "Renderpass: " << renderPass << endl;
-    cout << "Pipeline info: " << pipelineInfo.pStages << endl;
+    Debug::Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
+    Debug::Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
+    // cout << "Renderpass: " << renderPass << endl;
+    // cout << "Pipeline info: " << pipelineInfo.pStages << endl;
 
-    cout << "Frag Shader module: " << fragShaderModule << endl;
-    cout << "Vert Shader module: " << vertShaderModule << endl;
     if (vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create graphics pipeline!");
+        throw runtime_error("Failed to create graphics pipeline!");
     }
-
+    else {
+        Debug::Logger::Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
+        // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
+    }
     vkDestroyShaderModule(g_Device, fragShaderModule, nullptr);
     vkDestroyShaderModule(g_Device, vertShaderModule, nullptr);
 }
@@ -811,7 +773,8 @@ void Viewport3D::CreateOffscreenPipeline() {
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     
-    cout << "Color attachment format: " << colorAttachment.format << endl;
+    Debug::Logger::Log("Color attachment format: " + to_string(colorAttachment.format));
+    // cout << "Color attachment format: " << colorAttachment.format << endl;
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -837,12 +800,14 @@ void Viewport3D::CreateOffscreenPipeline() {
     fbInfo.renderPass = offscreenRenderPass;
     fbInfo.attachmentCount = 1;
     fbInfo.pAttachments = attachments;
-    fbInfo.width = 640;
-    fbInfo.height = 480;
+    fbInfo.width = viewportWidth;
+    fbInfo.height = viewportHeight;
     fbInfo.layers = 1;
 
-    cout << "Framebuffer width: " << fbInfo.width << ", height: " << fbInfo.height << endl;
-    cout << "Framebuffer render pass: " << offscreenRenderPass << endl;
+    Debug::Logger::Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
+    // Debug::Logger::Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
+    // cout << "Framebuffer width: " << fbInfo.width << ", height: " << fbInfo.height << endl;
+    // cout << "Framebuffer render pass: " << offscreenRenderPass << endl;
     vkCreateFramebuffer(g_Device, &fbInfo, nullptr, &offscreenFramebuffer);
 
     // TODO: load SPIR-V shaders & buat graphicsPipeline (binding vertex, input layout, dsb)
@@ -877,7 +842,7 @@ void Viewport3D::CreateOffscreenPipeline() {
 //     vkEndCommandBuffer(offscreenCmdBuffer);
 // }
 
-void Viewport3D::RenderOffscreen(uint32_t width = 640, uint32_t height = 480) {
+void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     // allocate command buffer (single-use)
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -929,24 +894,235 @@ void Viewport3D::RenderOffscreen(uint32_t width = 640, uint32_t height = 480) {
     VkResult res = vkQueueSubmit(g_Queue, 1, &submit, VK_NULL_HANDLE);
     check_vk_result(res);
 
-    // We do NOT wait here: FrameRender will wait on the semaphore.
-    // Free the temporary command buffer after submission (optional)
-    // Note: you can either free immediately or reuse pool and reset later.
     vkFreeCommandBuffers(g_Device, offscreenCommandPool, 1, &cmd);
 }
 
-
+// Draw viewport
 void Viewport3D::DrawImguiViewport() {
     ImGui::Begin("3D Viewport");
     ImGui::Text("This is a 3D viewport using Vulkan and ImGui.");
-    // ImGui::Image((ImTextureID)offscreenDescriptorSet, ImVec2(640, 480));
+    ImGui::Image((ImTextureID)offscreenDescriptorSet, ImVec2(640, 480));
     ImGui::End();
 }
 
+// Draw Image
+void Viewport3D::DrawImage()
+{
+    static VkDescriptorSet imguiTexture = VK_NULL_HANDLE;
+    if (imguiTexture == VK_NULL_HANDLE){
+        imguiTexture = LoadTextureSimple("assets/images/backgrounds/shiroko_bluearchive.jpg");
+    }
+    ImGui::Begin("Image Test");
+    ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 340));
+    ImGui::End();
+}
 
+VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
+{
+    // Load PNG pakai stb_image
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(filename, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels)
+        throw std::runtime_error("Failed to load texture image!");
+
+    VkDeviceSize imageSize = texWidth * texHeight * 4;
+    
+    Debug::Logger::Log("Texture size: "+to_string(imageSize));
+    // Buat image yang langsung bisa diakses CPU (HOST_VISIBLE)
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = texWidth;
+    imageInfo.extent.height = texHeight;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.tiling = VK_IMAGE_TILING_LINEAR; // langsung bisa diakses CPU
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkImage textureImage;
+    if (vkCreateImage(g_Device, &imageInfo, nullptr, &textureImage) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create image!");
+        
+    Debug::Logger::Log("Texture image: "+to_string(reinterpret_cast<uintptr_t>(textureImage)));
+
+    // Alokasi memory
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(g_Device, textureImage, &memRequirements);
+    cout << "Mem requirements size: " << memRequirements.size << endl;
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    uint32_t memTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags &
+             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+        {
+            memTypeIndex = i;
+            break;
+        }
+    }
+    cout << "Mem properties: " << memProperties.memoryTypeCount << endl;
+    if (memTypeIndex == UINT32_MAX)
+        throw std::runtime_error("Failed to find suitable memory type!");
+
+    allocInfo.memoryTypeIndex = memTypeIndex;
+
+    VkDeviceMemory textureMemory;
+    if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &textureMemory) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate image memory!");
+    cout << "Allocinfo: " << allocInfo.allocationSize << endl;
+
+    vkBindImageMemory(g_Device, textureImage, textureMemory, 0);
+
+    // Copy pixel data langsung ke image
+    VkImageSubresource subresource{};
+    subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    VkSubresourceLayout layout;
+    vkGetImageSubresourceLayout(g_Device, textureImage, &subresource, &layout);
+
+    void* data;
+    vkMapMemory(g_Device, textureMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, static_cast<size_t>(imageSize));
+    vkUnmapMemory(g_Device, textureMemory);
+
+    stbi_image_free(pixels);
+    cout << "Texture memory: " << textureMemory << endl;
+    cout << "subresource: " << subresource.aspectMask << endl;
+    cout << "Sucresource layout: " << layout.offset << endl;
+    // Buat ImageView
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = textureImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VkImageView textureImageView;
+    if (vkCreateImageView(g_Device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create texture image view!");
+
+    cout << "View Info: "<< textureImageView << endl;
+    // Buat Sampler
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    VkSampler textureSampler;
+    if (vkCreateSampler(g_Device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create texture sampler!");
+    // cout << "TextureSampler loaded: " << textureSampler << endl;
+    // cout << "TextureImageView loaded: " << textureImageView << endl;
+    Debug::Logger::Log("TextureSampler loaded: " + to_string(reinterpret_cast<uintptr_t>(textureSampler)));
+    Debug::Logger::Log("TextureImageView loaded: " + to_string(reinterpret_cast<uintptr_t>(textureImageView)));
+    // Tambahin ke ImGui
+    VkDescriptorSet imguiDescSet = ImGui_ImplVulkan_AddTexture(
+        textureSampler,
+        textureImageView,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    );
+
+    return imguiDescSet;
+}
+
+void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
+{
+    if (!draw_data || draw_data->CmdListsCount == 0)
+        return; // Tidak ada yang dirender
+
+    VkSemaphore image_acquired_semaphore  = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+    VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
+
+    uint32_t frame_idx = 0;
+    VkResult err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &frame_idx);
+    if (err == VK_ERROR_OUT_OF_DATE_KHR) { g_SwapChainRebuild = true; return; }
+    if (err == VK_SUBOPTIMAL_KHR) { g_SwapChainRebuild = true; }
+    check_vk_result(err);
+
+    wd->FrameIndex = frame_idx;
+    ImGui_ImplVulkanH_Frame* fd = &wd->Frames[frame_idx];
+
+    // Sinkronisasi
+    check_vk_result(vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX));
+    check_vk_result(vkResetFences(g_Device, 1, &fd->Fence));
+
+    // Reset command buffer
+    check_vk_result(vkResetCommandPool(g_Device, fd->CommandPool, 0));
+
+    VkCommandBufferBeginInfo begin_info = {};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check_vk_result(vkBeginCommandBuffer(fd->CommandBuffer, &begin_info));
+
+    // Mulai render pass
+    VkRenderPassBeginInfo rp_info = {};
+    rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp_info.renderPass = wd->RenderPass;
+    rp_info.framebuffer = fd->Framebuffer;
+    rp_info.renderArea.extent.width = wd->Width;
+    rp_info.renderArea.extent.height = wd->Height;
+    rp_info.clearValueCount = 1;
+    rp_info.pClearValues = &wd->ClearValue;
+
+    vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+    // cout << "Draw Data: " << draw_data->CmdListsCount << endl;
+    // cout << "FD Command Buffer: " << fd->CommandBuffer << endl;
+
+    for (int n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* cmd_list = draw_data->CmdLists[n];
+        for (int cmd_i = 0; cmd_i < cmd_list->CmdBuffer.Size; cmd_i++) {
+            const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
+            if (pcmd->TextureId) {
+                VkDescriptorSet ds = (VkDescriptorSet)pcmd->TextureId;
+                offscreenDescriptorSet = ds;
+                // printf("TextureId=%p\n", (void*)ds);
+            }
+        }
+    }
+
+    // Render ImGui
+    ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
+
+    vkCmdEndRenderPass(fd->CommandBuffer);
+    check_vk_result(vkEndCommandBuffer(fd->CommandBuffer));
+
+    // Submit
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo submit_info = {};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &image_acquired_semaphore;
+    submit_info.pWaitDstStageMask = &wait_stage;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &fd->CommandBuffer;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &render_complete_semaphore;
+
+    check_vk_result(vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence));
+}
 
 int main(int argc, char* argv[]){
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))
     {
         cout << "Error: SDL_Init(): " << SDL_GetError() << endl;
         return -1;
@@ -972,10 +1148,10 @@ int main(int argc, char* argv[]){
     Viewport3D viewport;
     viewport.initVulkan(extensions, mainWindow);
     viewport.CreateOffscreenCommandResources();
-    viewport.CreateOffscreenResources(640, 480);
+    viewport.CreateOffscreenResources(1280, 720);
     viewport.CreateOffscreenPipeline();
-    // viewport.createRenderPass();
-    // viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
+    viewport.createRenderPass();
+    viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
     viewport.Update();
     viewport.CleanupVulkan();
     // viewport.initVulkan(mainWindow);

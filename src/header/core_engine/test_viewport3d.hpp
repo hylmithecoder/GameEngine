@@ -1,4 +1,5 @@
 #pragma once
+#include <Debugger.hpp>
 #include <vulkan/vulkan.h>
 #include <SDL_vulkan.h>
 #include <SDL.h>
@@ -10,10 +11,12 @@
 #include <imgui_impl_sdl3.h>
 #include <vector>
 #include <map>
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
 #include <stdexcept>
 #include <fstream>
 using namespace std;
-
+using namespace Debug;
 #ifdef IMGUI_IMPL_VULKAN_USE_VOLK
 #define VOLK_IMPLEMENTATION
 #include <volk.h>
@@ -93,12 +96,21 @@ class Viewport3D {
         void FramePresent(ImGui_ImplVulkanH_Window* wd);
         void CreateOffscreenCommandResources();
         void renderViewport();
-
+        VkDescriptorSet LoadTextureForImGui(const char* filename);
+        VkDescriptorSet LoadTextureSimple(const char* filename);
+        void DrawImage();
+        uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+        void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+        void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
+        void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+        void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
+        VkCommandBuffer BeginSingleTimeCommands();
         static void check_vk_result(VkResult err)
         {
             if (err == VK_SUCCESS)
+                // cout << "[vulkan] Success: VkResult = " << err << endl;
                 return;
-            fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
+            Logger::Log("VkResult = " + to_string(err), Debug::LogLevel::CRASH);
             if (err < 0)
                 abort();
         }
@@ -107,4 +119,7 @@ class Viewport3D {
         // Info Vulkan
         int ratePhysicalDevice(VkPhysicalDevice device);
         void pickPhysicalDevice();
+
+    private:
+        int viewportWidth, viewportHeight;
 };

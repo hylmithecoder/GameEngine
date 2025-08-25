@@ -443,6 +443,7 @@ target_include_directories(IlmeeeHub PRIVATE
 )
 
 target_include_directories(ViewPort3D PRIVATE
+    /usr/include/stb
     Vulkan
     ${CMAKE_SOURCE_DIR}/src/header/core_engine
     /usr/include/SDL3

@@ -240,7 +240,7 @@ bool ApplicationManager::LaunchEngine() {
                         shouldExit = true;
                     } else if (result == -1) {
                         // Error occurred
-                        Debug::Logger::Log("Error checking engine process status: " + std::string(strerror(errno)), Debug::LogLevel::WARNING);
+                        Debug::Logger::Log("Error checking engine process status: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
                     }
                 }
                 

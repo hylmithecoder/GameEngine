@@ -1592,7 +1592,7 @@ void MainWindow::update() {
 
     // Dockspace
     // #ifdef ImGuiConfigFlags_DockingEnable
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
     // #else
     //     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
     // #endif
@@ -1602,8 +1602,6 @@ void MainWindow::update() {
     // ImGui::SetNextWindowViewport(viewport->ID);
     ui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
     
     ui::Begin("DockSpace", nullptr, window_flags);
     ui::PopStyleVar(2);
