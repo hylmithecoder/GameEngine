@@ -520,7 +520,7 @@ void Viewport3D::Update(){
         }
 
         RenderOffscreen(viewportWidth, viewportHeight);
-        // DrawImguiViewport();
+        DrawImguiViewport();
         DrawImage();
 
         ImGui::End();
@@ -650,14 +650,14 @@ void Viewport3D::createRenderPass() {
 void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
     auto vertShaderCode = readFile(vertShaderPath);
     auto fragShaderCode = readFile(fragShaderPath);
-    Debug::Logger::Log("Vertshader size: " + to_string(reinterpret_cast<uintptr_t>(vertShaderCode.capacity())));
-    Debug::Logger::Log("fragshader size: " + to_string(reinterpret_cast<uintptr_t>(fragShaderCode.capacity())));
+    Debug::Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
+    Debug::Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
     // cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
     // cout << "fragshader code: " << fragShaderCode.capacity() << endl;
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-    Debug::Logger::Log("Vertshader module: " + to_string(reinterpret_cast<uintptr_t>(vertShaderModule)));
-    Debug::Logger::Log("fragshader module: " + to_string(reinterpret_cast<uintptr_t>(fragShaderModule)));
+    Debug::Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
+    Debug::Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
     // cout << "Vertshader module: " << vertShaderModule << endl;
     // cout << "fragshader module: " << fragShaderModule << endl;
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -902,6 +902,7 @@ void Viewport3D::DrawImguiViewport() {
     ImGui::Begin("3D Viewport");
     ImGui::Text("This is a 3D viewport using Vulkan and ImGui.");
     ImGui::Image((ImTextureID)offscreenDescriptorSet, ImVec2(640, 480));
+    showCurrentCameraPosition();
     ImGui::End();
 }
 
@@ -1152,6 +1153,7 @@ int main(int argc, char* argv[]){
     viewport.CreateOffscreenPipeline();
     viewport.createRenderPass();
     viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
+    // viewport.camera->GetViewMatrix();
     viewport.Update();
     viewport.CleanupVulkan();
     // viewport.initVulkan(mainWindow);

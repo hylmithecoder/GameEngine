@@ -1,6 +1,7 @@
 #pragma once
 #include <iostream>
 #include <string>
+using namespace std;
 
 namespace Debug {
     enum class LogLevel {
@@ -12,32 +13,32 @@ namespace Debug {
 
     class Logger {
     public:
-        static void Log(const std::string& message, LogLevel level = LogLevel::INFO) {
+        static void Log(const string& message, LogLevel level = LogLevel::INFO) {
             // ANSI escape codes for colors
             const char* blue = "\033[1;34m";
             const char* yellow = "\033[1;33m";
             const char* red = "\033[1;31m";
             const char* green = "\033[1;32m";
             const char* reset = "\033[0m";
-            
+                        
             // Set color based on log level
             switch(level) {
                 default:
                 case LogLevel::INFO:
-                    std::cout << blue << "[INFO] ";
+                    cout << blue << "[INFO] ";
                     break;
                 case LogLevel::WARNING:
-                    std::cout << yellow << "[WARNING] ";
+                    cout << yellow << "[WARNING] ";
                     break;
                 case LogLevel::CRASH:
-                    std::cout << red << "[ERROR] ";
+                    cout << red << "[ERROR] ";
                     break;
                 case LogLevel::SUCCESS:
-                    std::cout << green << "[SUCCESS] ";
+                    cout << green << "[SUCCESS] ";
                     break;
             }
 
-            std::cout << message << reset << std::endl;
+            cout << message << reset << endl;
         }
     };
 }

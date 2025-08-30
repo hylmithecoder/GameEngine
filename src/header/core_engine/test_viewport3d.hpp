@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <imgui_impl_sdl3.h>
 #include <vector>
+#include <camera.hpp>
 #include <map>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -17,15 +18,13 @@
 #include <fstream>
 using namespace std;
 using namespace Debug;
-#ifdef IMGUI_IMPL_VULKAN_USE_VOLK
-#define VOLK_IMPLEMENTATION
-#include <volk.h>
-#endif
+// using namespace glm;
 
 class Viewport3D {
     public:
         SDL_Window* mainWindow = nullptr;
-
+        // Camera
+        Camera* camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
         // Main Component vulkan
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         ImGuiIO currentIo;
@@ -86,6 +85,14 @@ class Viewport3D {
             SetupImgui();
             pickPhysicalDevice();
         };
+
+        void showCurrentCameraPosition(){
+            ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", camera->Position.x, camera->Position.y, camera->Position.z);
+        }
+
+        string convertUintVariabletoString(auto var){
+            return to_string(reinterpret_cast<uintptr_t>(var));
+        }
         
         bool IsExtensionAvailable(const ImVector<VkExtensionProperties>& properties, const char* extension);
         void create_vk_surface();
