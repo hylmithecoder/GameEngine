@@ -9,6 +9,7 @@
 #include <imgui_impl_vulkan.h>
 #include <stdlib.h>
 #include <imgui_impl_sdl3.h>
+#include <chrono>
 #include <vector>
 #include <camera.hpp>
 #include <map>
@@ -22,6 +23,51 @@ using namespace Debug;
 
 class Viewport3D {
     public:
+        // Di class Viewport3D
+        struct UniformBufferObject {
+            glm::mat4 model;
+            glm::mat4 view;
+            glm::mat4 proj;
+        };
+
+        struct Vertex {
+            glm::vec3 pos;     // posisi 3D
+            glm::vec3 color;   // warna
+            glm::vec3 normal;  // normal vector
+
+            static VkVertexInputBindingDescription getBindingDescription() {
+                VkVertexInputBindingDescription bindingDescription{};
+                bindingDescription.binding = 0;
+                bindingDescription.stride = sizeof(Vertex);
+                bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+                return bindingDescription;
+            }
+
+            static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+                std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+                
+                // Position
+                attributeDescriptions[0].binding = 0;
+                attributeDescriptions[0].location = 0;
+                attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+                attributeDescriptions[0].offset = offsetof(Vertex, pos);
+                
+                // Color
+                attributeDescriptions[1].binding = 0;
+                attributeDescriptions[1].location = 1;
+                attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+                attributeDescriptions[1].offset = offsetof(Vertex, color);
+                
+                // Normal
+                attributeDescriptions[2].binding = 0;
+                attributeDescriptions[2].location = 2;
+                attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+                attributeDescriptions[2].offset = offsetof(Vertex, normal);
+
+                return attributeDescriptions;
+            }
+        };
+
         SDL_Window* mainWindow = nullptr;
         // Camera
         Camera* camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
@@ -42,7 +88,7 @@ class Viewport3D {
         bool                     g_SwapChainRebuild = false;
         ImGui_ImplVulkanH_Window* wd = nullptr;
         ImGui_ImplVulkan_InitInfo init_info = {};
-
+        bool isRunning = false;
         VkPipelineLayout pipelineLayout;
         VkPipeline graphicsPipeline;
         VkRenderPass renderPass;
@@ -54,7 +100,7 @@ class Viewport3D {
         void CreateOffscreenResources(int width, int height);
         void CreateOffscreenPipeline();
         void RenderOffscreen(uint32_t width, uint32_t height);
-        void DrawImguiViewport();
+        void DrawViewport3D();
 
         // Offscreen render target
         VkImage offscreenImage;
@@ -93,6 +139,8 @@ class Viewport3D {
         string convertUintVariabletoString(auto var){
             return to_string(reinterpret_cast<uintptr_t>(var));
         }
+
+        void Events();
         
         bool IsExtensionAvailable(const ImVector<VkExtensionProperties>& properties, const char* extension);
         void create_vk_surface();
@@ -103,13 +151,12 @@ class Viewport3D {
         void FramePresent(ImGui_ImplVulkanH_Window* wd);
         void CreateOffscreenCommandResources();
         void renderViewport();
-        VkDescriptorSet LoadTextureForImGui(const char* filename);
-        VkDescriptorSet LoadTextureSimple(const char* filename);
+        VkDescriptorSet LoadImage(const char* filename);
         void DrawImage();
         uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-        void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-        void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
-        void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+        VkBuffer CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+        // void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
+        // void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
         void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
         VkCommandBuffer BeginSingleTimeCommands();
         static void check_vk_result(VkResult err)
@@ -126,6 +173,19 @@ class Viewport3D {
         // Info Vulkan
         int ratePhysicalDevice(VkPhysicalDevice device);
         void pickPhysicalDevice();
+
+        // Add these to the class public members:
+        // Uniform buffer objects
+        VkBuffer uniformBuffer;
+        VkDeviceMemory uniformBufferMemory;
+        VkDescriptorSetLayout uniformDescriptorSetLayout;
+        VkDescriptorSet uniformDescriptorSet;
+
+        // Add these method declarations
+        void createUniformBuffers();
+        void createUniformDescriptorSetLayout();
+        void createUniformDescriptorSets();
+        void updateUniformBuffer();
 
     private:
         int viewportWidth, viewportHeight;

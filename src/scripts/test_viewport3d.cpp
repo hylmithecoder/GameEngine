@@ -230,11 +230,11 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
     // Print detailed device info for debugging
-    Debug::Logger::Log("\nEvaluating device: " + std::string(deviceProps.deviceName), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Device Type: " + std::to_string(deviceProps.deviceType), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Device ID: " + std::to_string(deviceProps.deviceID), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Vendor ID: " + std::to_string(deviceProps.vendorID), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Driver Version: " + std::to_string(deviceProps.driverVersion), Debug::LogLevel::INFO);
+    Debug::Logger::Log("\nEvaluating device: " + string(deviceProps.deviceName), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Device Type: " + to_string(deviceProps.deviceType), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Device ID: " + to_string(deviceProps.deviceID), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Vendor ID: " + to_string(deviceProps.vendorID), Debug::LogLevel::INFO);
+    Debug::Logger::Log("Driver Version: " + to_string(deviceProps.driverVersion), Debug::LogLevel::INFO);
 
     int score = 0;
 
@@ -365,7 +365,9 @@ void Viewport3D::CreateOffscreenResources(int width, int height) {
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
-    vkCreateImage(g_Device, &imageInfo, nullptr, &offscreenImage);
+    if (vkCreateImage(g_Device, &imageInfo, nullptr, &offscreenImage) != VK_SUCCESS) {
+        throw runtime_error("Failed to create offscreen image!");
+    }
 
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(g_Device, offscreenImage, &memReq);
@@ -391,7 +393,7 @@ void Viewport3D::CreateOffscreenResources(int width, int height) {
     viewInfo.subresourceRange.layerCount = 1;
     vkCreateImageView(g_Device, &viewInfo, nullptr, &offscreenImageView);
 
-    // Buat sampler untuk ImGui::Image
+    // Create sampler
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -399,7 +401,12 @@ void Viewport3D::CreateOffscreenResources(int width, int height) {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(g_Device, &samplerInfo, nullptr, &offscreenSampler);
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(g_Device, &samplerInfo, nullptr, &offscreenSampler) != VK_SUCCESS) {
+        throw runtime_error("failed to create texture sampler!");
+    }
 }
 
 void Viewport3D::CreateOffscreenCommandResources() {
@@ -410,14 +417,33 @@ void Viewport3D::CreateOffscreenCommandResources() {
     poolInfo.queueFamilyIndex = g_QueueFamily; // atau graphicsQueueFamily
     if (vkCreateCommandPool(g_Device, &poolInfo, nullptr, &offscreenCommandPool) != VK_SUCCESS)
         throw runtime_error("failed to create offscreen command pool");
-
+    else
+        Logger::Log("Offscreen command pool created", LogLevel::SUCCESS);
     // Semaphore to signal offscreen completion
     VkSemaphoreCreateInfo semInfo{};
     semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     if (vkCreateSemaphore(g_Device, &semInfo, nullptr, &offscreenSignalSemaphore) != VK_SUCCESS)
         throw runtime_error("failed to create offscreen semaphore");
+    else 
+        Logger::Log("Offscreen semaphore created", LogLevel::SUCCESS);
 }
 
+void Viewport3D::Events(){
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_QUIT)
+                isRunning = true;
+            else if (event.type == SDL_EVENT_KEY_DOWN){
+                if (event.key.key == SDLK_ESCAPE){
+                    isRunning = true;
+                }
+             }
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
+                isRunning = true;
+        }
+}
 
 void Viewport3D::Update(){
     bool show_demo_window = false;
@@ -425,19 +451,10 @@ void Viewport3D::Update(){
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     // Main loop
-    bool done = false;
-    while (!done)
+    // bool done = false;
+    while (!isRunning)
     {
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
-                done = true;
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
-                done = true;
-        }
-
+        Events();
         // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
         if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
         {
@@ -520,8 +537,9 @@ void Viewport3D::Update(){
         }
 
         RenderOffscreen(viewportWidth, viewportHeight);
-        DrawImguiViewport();
+        DrawViewport3D();
         DrawImage();
+        updateUniformBuffer();
 
         ImGui::End();
         ImGui::EndFrame();
@@ -586,6 +604,9 @@ void Viewport3D::CleanupVulkan()
 
     vkDestroyDevice(g_Device, g_Allocator);
     vkDestroyInstance(g_Instance, g_Allocator);
+    // vkDestroyBuffer(g_Device, uniformBuffer, nullptr);
+    // vkFreeMemory(g_Device, uniformBufferMemory, nullptr);
+    // vkDestroyDescriptorSetLayout(g_Device, uniformDescriptorSetLayout, nullptr);
 
 }
 
@@ -674,9 +695,43 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+    // Update vertex input state
+    VkVertexInputBindingDescription bindingDescription{};
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(float) * 9; // 3 for pos + 3 for color + 3 for normal
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+    
+    // Position
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[0].offset = 0;
+
+    // Color
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[1].offset = sizeof(float) * 3;
+
+    // Normal
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[2].offset = sizeof(float) * 6;
+
     // Vertex input state (sementara kosong, nanti diisi dari model .obj)
+    // VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    // vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -727,12 +782,19 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    // VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    // pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    // Update pipeline layout to include uniform buffer
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
+    cout << pipelineLayoutInfo.pSetLayouts << "\n" << pipelineLayout << endl;
     if (vkCreatePipelineLayout(g_Device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         throw runtime_error("Failed to create pipeline layout!");
     }
+
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -898,10 +960,22 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
 }
 
 // Draw viewport
-void Viewport3D::DrawImguiViewport() {
+void Viewport3D::DrawViewport3D() {
+    static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
+    
+    // Initialize viewport texture descriptor set
+    if (viewportTexture == VK_NULL_HANDLE) {
+        // Create descriptor set for viewport texture
+        viewportTexture = ImGui_ImplVulkan_AddTexture(
+            offscreenSampler,
+            offscreenImageView,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
     ImGui::Begin("3D Viewport");
     ImGui::Text("This is a 3D viewport using Vulkan and ImGui.");
-    ImGui::Image((ImTextureID)offscreenDescriptorSet, ImVec2(640, 480));
+    ImGui::Image((ImTextureID)viewportTexture, ImVec2(640, 480));
     showCurrentCameraPosition();
     ImGui::End();
 }
@@ -911,20 +985,20 @@ void Viewport3D::DrawImage()
 {
     static VkDescriptorSet imguiTexture = VK_NULL_HANDLE;
     if (imguiTexture == VK_NULL_HANDLE){
-        imguiTexture = LoadTextureSimple("assets/images/backgrounds/shiroko_bluearchive.jpg");
+        imguiTexture = LoadImage("assets/images/backgrounds/Hanako_Swimsuit.png");
     }
     ImGui::Begin("Image Test");
     ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 340));
     ImGui::End();
 }
 
-VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
+VkDescriptorSet Viewport3D::LoadImage(const char* filename)
 {
     // Load PNG pakai stb_image
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(filename, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     if (!pixels)
-        throw std::runtime_error("Failed to load texture image!");
+        throw runtime_error("Failed to load texture image!");
 
     VkDeviceSize imageSize = texWidth * texHeight * 4;
     
@@ -947,7 +1021,7 @@ VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
 
     VkImage textureImage;
     if (vkCreateImage(g_Device, &imageInfo, nullptr, &textureImage) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create image!");
+        throw runtime_error("Failed to create image!");
         
     Debug::Logger::Log("Texture image: "+to_string(reinterpret_cast<uintptr_t>(textureImage)));
 
@@ -974,13 +1048,13 @@ VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
     }
     cout << "Mem properties: " << memProperties.memoryTypeCount << endl;
     if (memTypeIndex == UINT32_MAX)
-        throw std::runtime_error("Failed to find suitable memory type!");
+        throw runtime_error("Failed to find suitable memory type!");
 
     allocInfo.memoryTypeIndex = memTypeIndex;
 
     VkDeviceMemory textureMemory;
     if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &textureMemory) != VK_SUCCESS)
-        throw std::runtime_error("Failed to allocate image memory!");
+        throw runtime_error("Failed to allocate image memory!");
     cout << "Allocinfo: " << allocInfo.allocationSize << endl;
 
     vkBindImageMemory(g_Device, textureImage, textureMemory, 0);
@@ -1014,7 +1088,7 @@ VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
 
     VkImageView textureImageView;
     if (vkCreateImageView(g_Device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create texture image view!");
+        throw runtime_error("Failed to create texture image view!");
 
     cout << "View Info: "<< textureImageView << endl;
     // Buat Sampler
@@ -1030,7 +1104,7 @@ VkDescriptorSet Viewport3D::LoadTextureSimple(const char* filename)
 
     VkSampler textureSampler;
     if (vkCreateSampler(g_Device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create texture sampler!");
+        throw runtime_error("Failed to create texture sampler!");
     // cout << "TextureSampler loaded: " << textureSampler << endl;
     // cout << "TextureImageView loaded: " << textureImageView << endl;
     Debug::Logger::Log("TextureSampler loaded: " + to_string(reinterpret_cast<uintptr_t>(textureSampler)));
@@ -1122,6 +1196,146 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
     check_vk_result(vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence));
 }
 
+VkBuffer Viewport3D::CreateBuffer(
+    VkDeviceSize size,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags properties,
+    VkBuffer& buffer,
+    VkDeviceMemory& bufferMemory
+) {
+    // Create buffer
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(g_Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create buffer!");
+    }
+
+    // Get memory requirements
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(g_Device, buffer, &memRequirements);
+
+    // Allocate memory
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    uint32_t memTypeIndex = UINT32_MAX;
+    VkPhysicalDeviceMemoryProperties memProperties;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags &
+             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+        {
+            memTypeIndex = i;
+            break;
+        }
+    }
+    cout << "Mem properties: " << memProperties.memoryTypeCount << endl;
+    if (memTypeIndex == UINT32_MAX)
+        throw runtime_error("Failed to find suitable memory type!");
+
+    allocInfo.memoryTypeIndex = memTypeIndex;
+
+    if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate buffer memory!");
+    }
+
+    // Bind buffer with allocated memory
+    vkBindBufferMemory(g_Device, buffer, bufferMemory, 0);
+    return buffer;
+}
+
+void Viewport3D::createUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+    CreateBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        uniformBuffer,
+        uniformBufferMemory
+    );
+}
+
+void Viewport3D::createUniformDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(g_Device, &layoutInfo, nullptr, &uniformDescriptorSetLayout) != VK_SUCCESS) {
+        throw runtime_error("failed to create descriptor set layout!");
+    }
+}
+
+void Viewport3D::createUniformDescriptorSets() {
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = g_DescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformDescriptorSet) != VK_SUCCESS) {
+        throw runtime_error("failed to allocate descriptor sets!");
+    }
+
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = uniformBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = sizeof(UniformBufferObject);
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = uniformDescriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo;
+
+    vkUpdateDescriptorSets(g_Device, 1, &descriptorWrite, 0, nullptr);
+}
+
+void Viewport3D::updateUniformBuffer() {
+    static auto startTime = chrono::high_resolution_clock::now();
+    // Logger::Log("Start time: "+ to_string(startTime.time_since_epoch().count()), LogLevel::WARNING);
+    auto currentTime = chrono::high_resolution_clock::now();
+    float time = chrono::duration<float, chrono::seconds::period>
+        (currentTime - startTime).count();
+
+    UniformBufferObject ubo{};
+    // Rotate model
+    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
+        glm::vec3(0.0f, 0.0f, 1.0f));
+    
+    // View matrix from camera
+    ubo.view = camera->GetViewMatrix();
+    
+    // Projection matrix
+    ubo.proj = glm::perspective(glm::radians(45.0f), 
+        viewportWidth / (float) viewportHeight, 0.1f, 100.0f);
+    
+    // Vulkan NDC uses different coordinate system
+    ubo.proj[1][1] *= -1;
+
+    // Copy to uniform buffer
+    void* data;
+    vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
+    memcpy(data, &ubo, sizeof(ubo));
+    vkUnmapMemory(g_Device, uniformBufferMemory);
+}
+
 int main(int argc, char* argv[]){
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))
     {
@@ -1148,11 +1362,17 @@ int main(int argc, char* argv[]){
 
     Viewport3D viewport;
     viewport.initVulkan(extensions, mainWindow);
+    Logger::Log("Create Shaders & Pipeline");
     viewport.CreateOffscreenCommandResources();
     viewport.CreateOffscreenResources(1280, 720);
     viewport.CreateOffscreenPipeline();
     viewport.createRenderPass();
-    viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
+
+    viewport.createUniformDescriptorSetLayout();
+    viewport.createGraphicsPipeline("assets/shaders/vulkan/shader.vert.spv", "assets/shaders/vulkan/shader.frag.spv");
+    
+    viewport.createUniformBuffers();
+    viewport.createUniformDescriptorSets();
     // viewport.camera->GetViewMatrix();
     viewport.Update();
     viewport.CleanupVulkan();
