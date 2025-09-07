@@ -1,29 +1,31 @@
-#pragma once
-#include <Debugger.hpp>
-#include <vulkan/vulkan.h>
-#include <SDL_vulkan.h>
-#include <SDL.h>
-#include <string>
-#include <iostream>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
-#include <stdlib.h>
-#include <imgui_impl_sdl3.h>
+// #pragma once
+// #include <Debugger.hpp>
+// #include <vulkan/vulkan.h>
+// #include <SDL_vulkan.h>
+// #include <SDL.h>
+// #include <string>
+// #include <iostream>
+// #include <imgui.h>
+// #include <imgui_impl_vulkan.h>
+// #include <stdlib.h>
+// #include <imgui_impl_sdl3.h>
 #include <chrono>
 #include <vector>
 #include <camera.hpp>
 #include <map>
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
-#include <stdexcept>
+#include <vulkanhandler.hpp>
+// #define STB_IMAGE_IMPLEMENTATION
+// #include <stb/stb_image.h>
+// #include <stdexcept>
 #include <fstream>
-using namespace std;
-using namespace Debug;
+// using namespace std;
+// using namespace Debug;
 // using namespace glm;
 
 class Viewport3D {
     public:
         // Di class Viewport3D
+        VulkanHandler imageHandler;
         struct UniformBufferObject {
             glm::mat4 model;
             glm::mat4 view;
@@ -127,6 +129,7 @@ class Viewport3D {
         void initVulkan(ImVector<const char*> instance_extensions, SDL_Window* window){
             SetupVulkan(instance_extensions, window);
             create_vk_surface();
+            helperInitImage();
             SetupVulkanWindow(&g_MainWindowData, surface, 1280, 720);
             SetupImgui();
             pickPhysicalDevice();
@@ -157,17 +160,63 @@ class Viewport3D {
         VkBuffer CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
         // void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
         // void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
-        void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
-        VkCommandBuffer BeginSingleTimeCommands();
-        static void check_vk_result(VkResult err)
-        {
-            if (err == VK_SUCCESS)
-                // cout << "[vulkan] Success: VkResult = " << err << endl;
-                return;
-            Logger::Log("VkResult = " + to_string(err), Debug::LogLevel::CRASH);
-            if (err < 0)
-                abort();
+        VkCommandBuffer BeginSingleTimeCommands() {
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandPool = offscreenCommandPool;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer commandBuffer;
+            vkAllocateCommandBuffers(g_Device, &allocInfo, &commandBuffer);
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+            return commandBuffer;
         }
+
+        void EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
+            vkEndCommandBuffer(commandBuffer);
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+
+            vkQueueSubmit(g_Queue, 1, &submitInfo, VK_NULL_HANDLE);
+            vkQueueWaitIdle(g_Queue);
+
+            vkFreeCommandBuffers(g_Device, offscreenCommandPool, 1, &commandBuffer);
+        }
+
+        static void check_vk_result(VkResult err) {
+            if (err == VK_SUCCESS) return;
+
+            Logger::Log("[vulkan] Error: VkResult = " + std::to_string(err), LogLevel::CRASH);
+            
+            switch (err) {
+                case VK_ERROR_DEVICE_LOST:
+                    Logger::Log("Device lost - attempting recovery...", LogLevel::WARNING);
+                    // Don't throw here, let the caller handle recovery
+                    break;
+                case VK_ERROR_OUT_OF_DATE_KHR:
+                case VK_SUBOPTIMAL_KHR:
+                    // These are recoverable - just signal for rebuild
+                    Logger::Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
+                    // g_SwapChainRebuild = true;
+                    break;
+                default:
+                    if (err < 0) {
+                        throw std::runtime_error("Unhandled Vulkan error");
+                    }
+                    break;
+            }
+        }
+
         void Update();
 
         // Info Vulkan
@@ -186,7 +235,14 @@ class Viewport3D {
         void createUniformDescriptorSetLayout();
         void createUniformDescriptorSets();
         void updateUniformBuffer();
+        void createVertexBuffer();
 
     private:
         int viewportWidth, viewportHeight;
+        void helperInitImage(){
+            imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice);
+        }
+
+        VkBuffer vertexBuffer;
+        VkDeviceMemory vertexBufferMemory;
 };

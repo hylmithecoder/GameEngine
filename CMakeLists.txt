@@ -184,6 +184,12 @@ set(GLAD_VULKAN
     ${GLAD_VULKAN_DIR}/src/vulkan.c
 )
 
+set(TESTVIEWPORT_3D
+    src/scripts/test_viewport3d.cpp 
+    src/header/core_engine/test_viewport3d.hpp 
+    src/header/ui/vulkanhandler.hpp
+    src/scripts/ui/vulkanhandler.cpp
+)
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
@@ -240,7 +246,7 @@ set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
-add_executable(ViewPort3D src/scripts/test_viewport3d.cpp src/header/core_engine/test_viewport3d.hpp ${IMGUI_SOURCES})
+add_executable(ViewPort3D ${TESTVIEWPORT_3D} ${IMGUI_SOURCES})
 
 set_target_properties(IlmeeeEditor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -446,6 +452,7 @@ target_include_directories(ViewPort3D PRIVATE
     /usr/include/stb
     Vulkan
     ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/header/ui
     /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends

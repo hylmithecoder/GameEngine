@@ -31,6 +31,25 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         err = vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, properties.Data);
         check_vk_result(err);
 
+        const char* validation_layer = "VK_LAYER_KHRONOS_validation";
+        uint32_t layer_count;
+        vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+        std::vector<VkLayerProperties> available_layers(layer_count);
+        vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
+        
+        bool validation_found = false;
+        for (const auto& layer : available_layers) {
+            if (strcmp(validation_layer, layer.layerName) == 0) {
+                validation_found = true;
+                break;
+            }
+        }
+
+        if (validation_found) {
+            instance_extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+            // Add validation layer
+        }
+
         // Enable required extensions
         if (IsExtensionAvailable(properties, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
             instance_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
@@ -454,118 +473,128 @@ void Viewport3D::Update(){
     // bool done = false;
     while (!isRunning)
     {
-        Events();
-        // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
-        if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
-        {
-            SDL_Delay(10);
+        try {
+                Events();
+            // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
+            if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
+            {
+                SDL_Delay(10);
+                continue;
+            }
+
+            // Resize swap chain?
+            int fb_width, fb_height;
+            SDL_GetWindowSize(mainWindow, &fb_width, &fb_height);
+
+            if (fb_width > 0 && fb_height > 0 &&
+                (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
+            {
+                ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
+
+                ImGui_ImplVulkanH_CreateOrResizeWindow(
+                    g_Instance, g_PhysicalDevice, g_Device,
+                    &g_MainWindowData, g_QueueFamily, g_Allocator,
+                    fb_width, fb_height, g_MinImageCount
+                );
+                g_MainWindowData.FrameIndex = 0;
+                g_SwapChainRebuild = false;
+
+                // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
+                check_vk_result(vkDeviceWaitIdle(g_Device));
+            }
+
+            // Start the Dear ImGui frame
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+
+            ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+        
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(viewport->Pos);
+            ImGui::SetNextWindowSize(viewport->Size);
+            ImGui::SetNextWindowViewport(viewport->ID);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        
+            ImGui::Begin("DockSpace", nullptr, window_flags);
+            ImGui::PopStyleVar(2);
+            ImGuiID dockspace_id = ImGui::GetID("DockSpace");
+
+            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+            if (show_demo_window)
+                ImGui::ShowDemoWindow(&show_demo_window);
+            {
+                static float f = 0.0f;
+                static int counter = 0;
+
+                ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+
+                ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
+                ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
+                ImGui::Checkbox("Another Window", &show_another_window);
+
+                ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
+                ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
+
+                if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
+                    counter++;
+                ImGui::SameLine();
+                ImGui::Text("counter = %d", counter);
+
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / currentIo.Framerate, currentIo.Framerate);
+                ImGui::End();
+
+                // DrawImguiViewport();
+            }
+
+            if (show_another_window)
+            {
+                ImGui::Begin("Another Window", &show_another_window);
+                if (ImGui::Button("Close Me"))
+                    show_another_window = false;
+                ImGui::End();
+            }
+
+            RenderOffscreen(viewportWidth, viewportHeight);
+            DrawViewport3D();
+            DrawImage();
+            updateUniformBuffer();
+
+            ImGui::End();
+            ImGui::EndFrame();
+            // Rendering
+            ImGui::Render();
+            ImDrawData* main_draw_data = ImGui::GetDrawData();
+            const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
+            wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
+            wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
+            wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
+            wd->ClearValue.color.float32[3] = clear_color.w;
+            if (!main_is_minimized)
+                FrameRender(wd, main_draw_data);
+                FramePresent(wd);
+                // RenderOffscreen();
+
+            // Update and Render additional Platform Windows
+            // if (currentIo.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+            // {
+                ImGui::UpdatePlatformWindows();
+                ImGui::RenderPlatformWindowsDefault();
+            // }
+        }
+        catch (const std::exception& e) {
+            Logger::Log("Critical error in Update loop: " + std::string(e.what()), LogLevel::CRASH);
+            
+            // Try to recover
+            vkDeviceWaitIdle(g_Device);
+            g_SwapChainRebuild = true;
+            
+            // Give the GPU a moment to recover
+            SDL_Delay(100);
             continue;
         }
-
-        // Resize swap chain?
-        int fb_width, fb_height;
-        SDL_GetWindowSize(mainWindow, &fb_width, &fb_height);
-
-        if (fb_width > 0 && fb_height > 0 &&
-            (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
-        {
-            ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
-
-            ImGui_ImplVulkanH_CreateOrResizeWindow(
-                g_Instance, g_PhysicalDevice, g_Device,
-                &g_MainWindowData, g_QueueFamily, g_Allocator,
-                fb_width, fb_height, g_MinImageCount
-            );
-            g_MainWindowData.FrameIndex = 0;
-            g_SwapChainRebuild = false;
-
-            // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
-            check_vk_result(vkDeviceWaitIdle(g_Device));
-        }
-
-        // Start the Dear ImGui frame
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-    
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->Pos);
-        ImGui::SetNextWindowSize(viewport->Size);
-        ImGui::SetNextWindowViewport(viewport->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    
-        ImGui::Begin("DockSpace", nullptr, window_flags);
-        ImGui::PopStyleVar(2);
-        ImGuiID dockspace_id = ImGui::GetID("DockSpace");
-
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
-        {
-            static float f = 0.0f;
-            static int counter = 0;
-
-            ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
-
-            ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-            ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-            ImGui::Checkbox("Another Window", &show_another_window);
-
-            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-            ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
-
-            if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                counter++;
-            ImGui::SameLine();
-            ImGui::Text("counter = %d", counter);
-
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / currentIo.Framerate, currentIo.Framerate);
-            ImGui::End();
-
-            // DrawImguiViewport();
-        }
-
-        if (show_another_window)
-        {
-            ImGui::Begin("Another Window", &show_another_window);
-            if (ImGui::Button("Close Me"))
-                show_another_window = false;
-            ImGui::End();
-        }
-
-        RenderOffscreen(viewportWidth, viewportHeight);
-        DrawViewport3D();
-        DrawImage();
-        updateUniformBuffer();
-
-        ImGui::End();
-        ImGui::EndFrame();
-        // Rendering
-        ImGui::Render();
-        ImDrawData* main_draw_data = ImGui::GetDrawData();
-        const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
-        wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
-        wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
-        wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
-        wd->ClearValue.color.float32[3] = clear_color.w;
-        if (!main_is_minimized)
-            FrameRender(wd, main_draw_data);
-            // RenderOffscreen();
-
-        // Update and Render additional Platform Windows
-        // if (currentIo.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        // {
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-        // }
-
-        // Present Main Platform Window
-        if (!main_is_minimized)
-            FramePresent(wd);
-
+       
     }
 }
 
@@ -604,6 +633,8 @@ void Viewport3D::CleanupVulkan()
 
     vkDestroyDevice(g_Device, g_Allocator);
     vkDestroyInstance(g_Instance, g_Allocator);
+    // vkDestroyBuffer(g_Device, vertexBuffer, nullptr);
+    // vkFreeMemory(g_Device, vertexBufferMemory, nullptr);
     // vkDestroyBuffer(g_Device, uniformBuffer, nullptr);
     // vkFreeMemory(g_Device, uniformBufferMemory, nullptr);
     // vkDestroyDescriptorSetLayout(g_Device, uniformDescriptorSetLayout, nullptr);
@@ -875,35 +906,6 @@ void Viewport3D::CreateOffscreenPipeline() {
     // TODO: load SPIR-V shaders & buat graphicsPipeline (binding vertex, input layout, dsb)
 }
 
-// void Viewport3D::RenderOffscreen() {
-//     VkCommandBufferBeginInfo beginInfo{};
-//     VkSemaphore image_acquired_semaphore  = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-//     VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
-//     VkResult err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-//     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-//     err = vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo);
-//     check_vk_result(err);
-
-//     VkClearValue clearValue = { {0.2f, 0.2f, 0.2f, 1.0f} };
-
-//     VkRenderPassBeginInfo rpInfo{};
-//     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-//     rpInfo.renderPass = offscreenRenderPass;
-//     rpInfo.framebuffer = offscreenFramebuffer;
-//     rpInfo.renderArea.extent.width = 640;
-//     rpInfo.renderArea.extent.height = 480;
-//     rpInfo.clearValueCount = 1;
-//     rpInfo.pClearValues = &clearValue;
-
-//     vkCmdBeginRenderPass(offscreenCmdBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-//     vkCmdBindPipeline(offscreenCmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-
-//     vkCmdDraw(offscreenCmdBuffer, 3, 1, 0, 0); // segitiga test
-
-//     vkCmdEndRenderPass(offscreenCmdBuffer);
-//     vkEndCommandBuffer(offscreenCmdBuffer);
-// }
-
 void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     // allocate command buffer (single-use)
     VkCommandBufferAllocateInfo allocInfo{};
@@ -936,14 +938,19 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Bind pipeline & draw (segitiga)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     vkCmdEndRenderPass(cmd);
-
-    // End
+    // Bind vertex buffer
+    VkBuffer vertexBuffers[] = {vertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
     vkEndCommandBuffer(cmd);
+
+    // // Bind descriptor sets for uniforms
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+        pipelineLayout, 0, 1, &uniformDescriptorSet, 0, nullptr);
 
     // Submit offscreen command buffer, signal offscreenSignalSemaphore when done
     VkSubmitInfo submit{};
@@ -985,215 +992,102 @@ void Viewport3D::DrawImage()
 {
     static VkDescriptorSet imguiTexture = VK_NULL_HANDLE;
     if (imguiTexture == VK_NULL_HANDLE){
-        imguiTexture = LoadImage("assets/images/backgrounds/Hanako_Swimsuit.png");
+        imguiTexture = imageHandler.LoadImage("assets/images/backgrounds/Hanako_Swimsuit.png");
     }
     ImGui::Begin("Image Test");
     ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 340));
     ImGui::End();
 }
 
-VkDescriptorSet Viewport3D::LoadImage(const char* filename)
-{
-    // Load PNG pakai stb_image
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(filename, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    if (!pixels)
-        throw runtime_error("Failed to load texture image!");
-
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
-    
-    Debug::Logger::Log("Texture size: "+to_string(imageSize));
-    // Buat image yang langsung bisa diakses CPU (HOST_VISIBLE)
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.extent.width = texWidth;
-    imageInfo.extent.height = texHeight;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    imageInfo.tiling = VK_IMAGE_TILING_LINEAR; // langsung bisa diakses CPU
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkImage textureImage;
-    if (vkCreateImage(g_Device, &imageInfo, nullptr, &textureImage) != VK_SUCCESS)
-        throw runtime_error("Failed to create image!");
-        
-    Debug::Logger::Log("Texture image: "+to_string(reinterpret_cast<uintptr_t>(textureImage)));
-
-    // Alokasi memory
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(g_Device, textureImage, &memRequirements);
-    cout << "Mem requirements size: " << memRequirements.size << endl;
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
-    uint32_t memTypeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((memRequirements.memoryTypeBits & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags &
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
-        {
-            memTypeIndex = i;
-            break;
-        }
-    }
-    cout << "Mem properties: " << memProperties.memoryTypeCount << endl;
-    if (memTypeIndex == UINT32_MAX)
-        throw runtime_error("Failed to find suitable memory type!");
-
-    allocInfo.memoryTypeIndex = memTypeIndex;
-
-    VkDeviceMemory textureMemory;
-    if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &textureMemory) != VK_SUCCESS)
-        throw runtime_error("Failed to allocate image memory!");
-    cout << "Allocinfo: " << allocInfo.allocationSize << endl;
-
-    vkBindImageMemory(g_Device, textureImage, textureMemory, 0);
-
-    // Copy pixel data langsung ke image
-    VkImageSubresource subresource{};
-    subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    VkSubresourceLayout layout;
-    vkGetImageSubresourceLayout(g_Device, textureImage, &subresource, &layout);
-
-    void* data;
-    vkMapMemory(g_Device, textureMemory, 0, imageSize, 0, &data);
-    memcpy(data, pixels, static_cast<size_t>(imageSize));
-    vkUnmapMemory(g_Device, textureMemory);
-
-    stbi_image_free(pixels);
-    cout << "Texture memory: " << textureMemory << endl;
-    cout << "subresource: " << subresource.aspectMask << endl;
-    cout << "Sucresource layout: " << layout.offset << endl;
-    // Buat ImageView
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = textureImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    VkImageView textureImageView;
-    if (vkCreateImageView(g_Device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS)
-        throw runtime_error("Failed to create texture image view!");
-
-    cout << "View Info: "<< textureImageView << endl;
-    // Buat Sampler
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-
-    VkSampler textureSampler;
-    if (vkCreateSampler(g_Device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
-        throw runtime_error("Failed to create texture sampler!");
-    // cout << "TextureSampler loaded: " << textureSampler << endl;
-    // cout << "TextureImageView loaded: " << textureImageView << endl;
-    Debug::Logger::Log("TextureSampler loaded: " + to_string(reinterpret_cast<uintptr_t>(textureSampler)));
-    Debug::Logger::Log("TextureImageView loaded: " + to_string(reinterpret_cast<uintptr_t>(textureImageView)));
-    // Tambahin ke ImGui
-    VkDescriptorSet imguiDescSet = ImGui_ImplVulkan_AddTexture(
-        textureSampler,
-        textureImageView,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    );
-
-    return imguiDescSet;
-}
-
 void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
 {
+    // Early exit if no draw data
     if (!draw_data || draw_data->CmdListsCount == 0)
-        return; // Tidak ada yang dirender
+        return;
 
-    VkSemaphore image_acquired_semaphore  = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-    VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
+    try {
+        VkResult err;
+        
+        // Get semaphores for current frame
+        VkSemaphore image_acquired_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+        VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
-    uint32_t frame_idx = 0;
-    VkResult err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &frame_idx);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR) { g_SwapChainRebuild = true; return; }
-    if (err == VK_SUBOPTIMAL_KHR) { g_SwapChainRebuild = true; }
-    check_vk_result(err);
+        // Acquire next swapchain image
+        uint32_t frame_idx = 0;
+        err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, 
+            image_acquired_semaphore, VK_NULL_HANDLE, &frame_idx);
+        
+        if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+            g_SwapChainRebuild = true;
+            return;
+        }
+        check_vk_result(err);
 
-    wd->FrameIndex = frame_idx;
-    ImGui_ImplVulkanH_Frame* fd = &wd->Frames[frame_idx];
+        // Get frame data
+        wd->FrameIndex = frame_idx;
+        ImGui_ImplVulkanH_Frame* fd = &wd->Frames[frame_idx];
 
-    // Sinkronisasi
-    check_vk_result(vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX));
-    check_vk_result(vkResetFences(g_Device, 1, &fd->Fence));
+        // Wait for previous frame to complete
+        err = vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
+        check_vk_result(err);
+        
+        err = vkResetFences(g_Device, 1, &fd->Fence);
+        check_vk_result(err);
 
-    // Reset command buffer
-    check_vk_result(vkResetCommandPool(g_Device, fd->CommandPool, 0));
+        // Reset and begin command buffer
+        err = vkResetCommandPool(g_Device, fd->CommandPool, 0);
+        check_vk_result(err);
 
-    VkCommandBufferBeginInfo begin_info = {};
-    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    check_vk_result(vkBeginCommandBuffer(fd->CommandBuffer, &begin_info));
+        VkCommandBufferBeginInfo begin_info = {};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        
+        err = vkBeginCommandBuffer(fd->CommandBuffer, &begin_info);
+        check_vk_result(err);
 
-    // Mulai render pass
-    VkRenderPassBeginInfo rp_info = {};
-    rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp_info.renderPass = wd->RenderPass;
-    rp_info.framebuffer = fd->Framebuffer;
-    rp_info.renderArea.extent.width = wd->Width;
-    rp_info.renderArea.extent.height = wd->Height;
-    rp_info.clearValueCount = 1;
-    rp_info.pClearValues = &wd->ClearValue;
+        // Begin render pass
+        VkRenderPassBeginInfo rp_info = {};
+        rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp_info.renderPass = wd->RenderPass;
+        rp_info.framebuffer = fd->Framebuffer;
+        rp_info.renderArea.extent.width = wd->Width;
+        rp_info.renderArea.extent.height = wd->Height;
+        rp_info.clearValueCount = 1;
+        rp_info.pClearValues = &wd->ClearValue;
 
-    vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-    // cout << "Draw Data: " << draw_data->CmdListsCount << endl;
-    // cout << "FD Command Buffer: " << fd->CommandBuffer << endl;
+        // Record ImGui Draw Data and Commands
+        ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
 
-    for (int n = 0; n < draw_data->CmdListsCount; n++) {
-        const ImDrawList* cmd_list = draw_data->CmdLists[n];
-        for (int cmd_i = 0; cmd_i < cmd_list->CmdBuffer.Size; cmd_i++) {
-            const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
-            if (pcmd->TextureId) {
-                VkDescriptorSet ds = (VkDescriptorSet)pcmd->TextureId;
-                offscreenDescriptorSet = ds;
-                // printf("TextureId=%p\n", (void*)ds);
-            }
+        // End render pass
+        vkCmdEndRenderPass(fd->CommandBuffer);
+        err = vkEndCommandBuffer(fd->CommandBuffer);
+        check_vk_result(err);
+
+        // Submit command buffer
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo submit_info = {};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores = &image_acquired_semaphore;
+        submit_info.pWaitDstStageMask = &wait_stage;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &fd->CommandBuffer;
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores = &render_complete_semaphore;
+
+        err = vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence);
+        check_vk_result(err);
+
+    } catch (const std::exception& e) {
+        // Handle device lost error
+        if (g_Device != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(g_Device);
+            g_SwapChainRebuild = true;
+            Logger::Log("Device lost error: " + std::string(e.what()), LogLevel::CRASH);
         }
     }
-
-    // Render ImGui
-    ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
-
-    vkCmdEndRenderPass(fd->CommandBuffer);
-    check_vk_result(vkEndCommandBuffer(fd->CommandBuffer));
-
-    // Submit
-    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkSubmitInfo submit_info = {};
-    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_info.waitSemaphoreCount = 1;
-    submit_info.pWaitSemaphores = &image_acquired_semaphore;
-    submit_info.pWaitDstStageMask = &wait_stage;
-    submit_info.commandBufferCount = 1;
-    submit_info.pCommandBuffers = &fd->CommandBuffer;
-    submit_info.signalSemaphoreCount = 1;
-    submit_info.pSignalSemaphores = &render_complete_semaphore;
-
-    check_vk_result(vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence));
 }
 
 VkBuffer Viewport3D::CreateBuffer(
@@ -1218,26 +1112,30 @@ VkBuffer Viewport3D::CreateBuffer(
     VkMemoryRequirements memRequirements;
     vkGetBufferMemoryRequirements(g_Device, buffer, &memRequirements);
 
-    // Allocate memory
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    uint32_t memTypeIndex = UINT32_MAX;
+    // Get memory properties BEFORE the loop
     VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+
+    // Find suitable memory type
+    uint32_t memTypeIndex = UINT32_MAX;
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((memRequirements.memoryTypeBits & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags &
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
-        {
+        bool typeSupported = (memRequirements.memoryTypeBits & (1 << i));
+        bool propertiesSupported = (memProperties.memoryTypes[i].propertyFlags & properties) == properties;
+        
+        if (typeSupported && propertiesSupported) {
             memTypeIndex = i;
             break;
         }
     }
-    cout << "Mem properties: " << memProperties.memoryTypeCount << endl;
-    if (memTypeIndex == UINT32_MAX)
-        throw runtime_error("Failed to find suitable memory type!");
 
+    if (memTypeIndex == UINT32_MAX) {
+        throw std::runtime_error("failed to find suitable memory type!");
+    }
+
+    // Allocate memory
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = memTypeIndex;
 
     if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
@@ -1245,7 +1143,10 @@ VkBuffer Viewport3D::CreateBuffer(
     }
 
     // Bind buffer with allocated memory
-    vkBindBufferMemory(g_Device, buffer, bufferMemory, 0);
+    if (vkBindBufferMemory(g_Device, buffer, bufferMemory, 0) != VK_SUCCESS) {
+        throw std::runtime_error("failed to bind buffer memory!");
+    }
+
     return buffer;
 }
 
@@ -1336,6 +1237,57 @@ void Viewport3D::updateUniformBuffer() {
     vkUnmapMemory(g_Device, uniformBufferMemory);
 }
 
+// Add this method to create and fill vertex buffer
+void Viewport3D::createVertexBuffer() {
+    std::vector<Vertex> vertices = {
+        {{0.0f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{0.5f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}}
+    };
+
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    
+    CreateBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer,
+        stagingBufferMemory
+    );
+
+    // Copy vertex data to staging buffer
+    void* data;
+    vkMapMemory(g_Device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, vertices.data(), (size_t) bufferSize);
+    vkUnmapMemory(g_Device, stagingBufferMemory);
+
+    // Create vertex buffer
+    CreateBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        vertexBuffer,
+        vertexBufferMemory
+    );
+
+    // Copy from staging buffer to vertex buffer
+    VkCommandBuffer commandBuffer = BeginSingleTimeCommands();
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = bufferSize;
+    vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertexBuffer, 1, &copyRegion);
+
+    EndSingleTimeCommands(commandBuffer);
+
+    // Cleanup staging buffer
+    vkDestroyBuffer(g_Device, stagingBuffer, nullptr);
+    vkFreeMemory(g_Device, stagingBufferMemory, nullptr);
+}
+
 int main(int argc, char* argv[]){
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))
     {
@@ -1369,8 +1321,9 @@ int main(int argc, char* argv[]){
     viewport.createRenderPass();
 
     viewport.createUniformDescriptorSetLayout();
-    viewport.createGraphicsPipeline("assets/shaders/vulkan/shader.vert.spv", "assets/shaders/vulkan/shader.frag.spv");
+    viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
     
+    viewport.createVertexBuffer();
     viewport.createUniformBuffers();
     viewport.createUniformDescriptorSets();
     // viewport.camera->GetViewMatrix();
