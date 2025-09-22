@@ -71,7 +71,6 @@ private:
     int audioStream = -1;
     int videoStream = -1;
     AVCodecContext* audioCodecContext = nullptr;
-    AVCodecContext* videoCodecContext = nullptr;
     AVChannelLayout audioChannelLayout;
     SDL_AudioDeviceID audioDeviceID = 0;
     SDL_AudioSpec audioSpec;

@@ -5,6 +5,8 @@
 #include <iostream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
+#include <Debugger.hpp>
+using namespace Debug;
 using namespace std;
 
 // Defines several possible options for camera movement.
@@ -67,7 +69,9 @@ public:
     // returns the view matrix calculated using Euler Angles and the LookAt Matrix
     glm::mat4 GetViewMatrix()
     {
-        return glm::lookAt(Position, Position + Front, Up);
+        auto lookAt = glm::lookAt(Position, Position + Front, Up);
+        // Logger::Log("Camera LookAt Matrix calculated. Position: (" + to_string(Position.x) + ", " + to_string(Position.y) + ", " + to_string(Position.z) + "), Front: (" + to_string(Front.x) + ", " + to_string(Front.y) + ", " + to_string(Front.z) + ")", LogLevel::SUCCESS);
+        return lookAt;
     }
 
     // returns a perspective projection matrix

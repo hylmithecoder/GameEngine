@@ -220,8 +220,10 @@ void Viewport3D::SetupImgui(){
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
     
     string fontPath = "assets/fonts/MiSans-Medium.ttf";
-    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 24.0f);
-    currentIo = io;
+    fontSize = 24.0f;
+    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), fontSize);
+    currentIo = getImGuiIO(io);
+    // currentIo = io;
     ImGui_ImplSDL3_InitForVulkan(mainWindow);
     // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
     init_info.Instance = g_Instance;
@@ -367,6 +369,228 @@ void Viewport3D::pickPhysicalDevice() {
     // cout << "Using GPU: " << deviceProps.deviceName << endl;
 }
 
+void Viewport3D::Events(){
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_QUIT)
+                isRunning = true;
+            else if (event.type == SDL_EVENT_KEY_DOWN){
+                if (event.key.key == SDLK_ESCAPE){
+                    isRunning = true;
+                }
+             }
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
+                isRunning = true;
+        }
+}
+
+void Viewport3D::Update(ImGuiIO& io){
+    bool show_demo_window = false;
+    bool show_another_window = false;
+    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+    // Main loop
+    // bool done = false;
+    while (!isRunning)
+    {
+        try {
+                Events();
+            // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
+            if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
+            {
+                SDL_Delay(10);
+                continue;
+            }
+
+            // Resize swap chain?
+            int fb_width, fb_height;
+            SDL_GetWindowSize(mainWindow, &fb_width, &fb_height);
+
+            if (fb_width > 0 && fb_height > 0 && (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
+            {
+                ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
+
+                ImGui_ImplVulkanH_CreateOrResizeWindow(
+                    g_Instance, g_PhysicalDevice, g_Device,
+                    &g_MainWindowData, g_QueueFamily, g_Allocator,
+                    fb_width, fb_height, g_MinImageCount
+                );
+                g_MainWindowData.FrameIndex = 0;
+                g_SwapChainRebuild = false;
+
+                // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
+                check_vk_result(vkDeviceWaitIdle(g_Device));
+            }
+
+            // Start the Dear ImGui frame
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+
+            ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+        
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(viewport->Pos);
+            ImGui::SetNextWindowSize(viewport->Size);
+            ImGui::SetNextWindowViewport(viewport->ID);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        
+            ImGui::Begin("DockSpace", nullptr, window_flags);
+            ImGui::PopStyleVar(2);
+            ImGuiID dockspace_id = ImGui::GetID("DockSpace");
+
+            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+            if (show_demo_window)
+                ImGui::ShowDemoWindow(&show_demo_window);
+            {
+                static float f = 0.0f;
+                static int counter = 0;
+
+                ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+
+                ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
+                ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
+                ImGui::Checkbox("Another Window", &show_another_window);
+
+                ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
+                ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
+
+                if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
+                    counter++;
+                ImGui::SameLine();
+                ImGui::Text("counter = %d", counter);
+
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                ImGui::End();
+
+                // DrawImguiViewport();
+            }
+
+            if (show_another_window)
+            {
+                ImGui::Begin("Another Window", &show_another_window);
+                if (ImGui::Button("Close Me"))
+                    show_another_window = false;
+                ImGui::End();
+            }
+
+            RenderOffscreen(viewportWidth, viewportHeight);
+            DrawViewport3D();
+            DrawImage();
+            videoPlayerUI();
+            updateUniformBuffer();
+
+            ImGui::End();
+            ImGui::EndFrame();
+            // Rendering
+            ImGui::Render();
+
+            ImDrawData* main_draw_data = ImGui::GetDrawData();
+            const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
+            // wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
+            // wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
+            // wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
+            // wd->ClearValue.color.float32[3] = clear_color.w;
+            if (!main_is_minimized)
+                FrameRender(wd, main_draw_data);
+                FramePresent(wd);
+                // RenderOffscreen();
+
+            // Update and Render additional Platform Windows
+            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+            {
+                ImGui::UpdatePlatformWindows();
+                ImGui::RenderPlatformWindowsDefault();
+            }
+            vkDeviceWaitIdle(g_Device);
+
+        }
+        catch (const std::exception& e) {
+            Logger::Log("Critical error in Update loop: " + std::string(e.what()), LogLevel::CRASH);
+            
+            // Try to recover
+            // vkDeviceWaitIdle(g_Device);
+            g_SwapChainRebuild = true;
+            
+            // Give the GPU a moment to recover
+            SDL_Delay(100);
+            continue;
+        }
+       
+    }
+}
+
+void Viewport3D::FramePresent(ImGui_ImplVulkanH_Window* wd)
+{
+    if (g_SwapChainRebuild)
+        return;
+    VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
+    VkPresentInfoKHR info = {};
+    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    info.waitSemaphoreCount = 1;
+    info.pWaitSemaphores = &render_complete_semaphore;
+    info.swapchainCount = 1;
+    info.pSwapchains = &wd->Swapchain;
+    info.pImageIndices = &wd->FrameIndex;
+    VkResult err = vkQueuePresentKHR(g_Queue, &info);
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
+        g_SwapChainRebuild = true;
+    if (err == VK_ERROR_OUT_OF_DATE_KHR)
+        return;
+    if (err != VK_SUBOPTIMAL_KHR)
+        check_vk_result(err);
+    wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
+}
+
+void Viewport3D::CleanupVulkan()
+{
+    ImGui_ImplVulkanH_DestroyWindow(g_Instance, g_Device, &g_MainWindowData, g_Allocator);
+    vkDestroyDescriptorPool(g_Device, g_DescriptorPool, g_Allocator);
+
+#ifdef APP_USE_VULKAN_DEBUG_REPORT
+    // Remove the debug report callback
+    auto f_vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(g_Instance, "vkDestroyDebugReportCallbackEXT");
+    f_vkDestroyDebugReportCallbackEXT(g_Instance, g_DebugReport, g_Allocator);
+#endif // APP_USE_VULKAN_DEBUG_REPORT
+
+    vkDestroyDevice(g_Device, g_Allocator);
+    vkDestroyInstance(g_Instance, g_Allocator);
+    // vkDestroyBuffer(g_Device, vertexBuffer, nullptr);
+    // vkFreeMemory(g_Device, vertexBufferMemory, nullptr);
+    // vkDestroyBuffer(g_Device, uniformBuffer, nullptr);
+    // vkFreeMemory(g_Device, uniformBufferMemory, nullptr);
+    // vkDestroyDescriptorSetLayout(g_Device, uniformDescriptorSetLayout, nullptr);
+
+}
+
+vector<char> Viewport3D::readFile(const string& filename) {
+    ifstream file(filename, ios::ate | ios::binary);
+    if (!file.is_open()) throw runtime_error("Failed to open file: " + filename);
+    size_t fileSize = (size_t)file.tellg();
+    vector<char> buffer(fileSize);
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+    return buffer;
+}
+
+VkShaderModule Viewport3D::createShaderModule(const vector<char>& code) {
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = code.size();
+    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(g_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        throw runtime_error("Failed to create shader module!");
+    }
+    return shaderModule;
+}
+
+
 void Viewport3D::CreateOffscreenResources(int width, int height) {
     viewportWidth = width;
     viewportHeight = height;
@@ -445,224 +669,6 @@ void Viewport3D::CreateOffscreenCommandResources() {
         throw runtime_error("failed to create offscreen semaphore");
     else 
         Logger::Log("Offscreen semaphore created", LogLevel::SUCCESS);
-}
-
-void Viewport3D::Events(){
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
-                isRunning = true;
-            else if (event.type == SDL_EVENT_KEY_DOWN){
-                if (event.key.key == SDLK_ESCAPE){
-                    isRunning = true;
-                }
-             }
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
-                isRunning = true;
-        }
-}
-
-void Viewport3D::Update(){
-    bool show_demo_window = false;
-    bool show_another_window = false;
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
-    // Main loop
-    // bool done = false;
-    while (!isRunning)
-    {
-        try {
-                Events();
-            // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
-            if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
-            {
-                SDL_Delay(10);
-                continue;
-            }
-
-            // Resize swap chain?
-            int fb_width, fb_height;
-            SDL_GetWindowSize(mainWindow, &fb_width, &fb_height);
-
-            if (fb_width > 0 && fb_height > 0 &&
-                (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
-            {
-                ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
-
-                ImGui_ImplVulkanH_CreateOrResizeWindow(
-                    g_Instance, g_PhysicalDevice, g_Device,
-                    &g_MainWindowData, g_QueueFamily, g_Allocator,
-                    fb_width, fb_height, g_MinImageCount
-                );
-                g_MainWindowData.FrameIndex = 0;
-                g_SwapChainRebuild = false;
-
-                // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
-                check_vk_result(vkDeviceWaitIdle(g_Device));
-            }
-
-            // Start the Dear ImGui frame
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplSDL3_NewFrame();
-            ImGui::NewFrame();
-
-            ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-        
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(viewport->Pos);
-            ImGui::SetNextWindowSize(viewport->Size);
-            ImGui::SetNextWindowViewport(viewport->ID);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        
-            ImGui::Begin("DockSpace", nullptr, window_flags);
-            ImGui::PopStyleVar(2);
-            ImGuiID dockspace_id = ImGui::GetID("DockSpace");
-
-            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
-            if (show_demo_window)
-                ImGui::ShowDemoWindow(&show_demo_window);
-            {
-                static float f = 0.0f;
-                static int counter = 0;
-
-                ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
-
-                ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-                ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-                ImGui::Checkbox("Another Window", &show_another_window);
-
-                ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-                ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
-
-                if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                    counter++;
-                ImGui::SameLine();
-                ImGui::Text("counter = %d", counter);
-
-                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / currentIo.Framerate, currentIo.Framerate);
-                ImGui::End();
-
-                // DrawImguiViewport();
-            }
-
-            if (show_another_window)
-            {
-                ImGui::Begin("Another Window", &show_another_window);
-                if (ImGui::Button("Close Me"))
-                    show_another_window = false;
-                ImGui::End();
-            }
-
-            RenderOffscreen(viewportWidth, viewportHeight);
-            DrawViewport3D();
-            DrawImage();
-            updateUniformBuffer();
-
-            ImGui::End();
-            ImGui::EndFrame();
-            // Rendering
-            ImGui::Render();
-            ImDrawData* main_draw_data = ImGui::GetDrawData();
-            const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
-            wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
-            wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
-            wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
-            wd->ClearValue.color.float32[3] = clear_color.w;
-            if (!main_is_minimized)
-                FrameRender(wd, main_draw_data);
-                FramePresent(wd);
-                // RenderOffscreen();
-
-            // Update and Render additional Platform Windows
-            // if (currentIo.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-            // {
-                ImGui::UpdatePlatformWindows();
-                ImGui::RenderPlatformWindowsDefault();
-            // }
-        }
-        catch (const std::exception& e) {
-            Logger::Log("Critical error in Update loop: " + std::string(e.what()), LogLevel::CRASH);
-            
-            // Try to recover
-            vkDeviceWaitIdle(g_Device);
-            g_SwapChainRebuild = true;
-            
-            // Give the GPU a moment to recover
-            SDL_Delay(100);
-            continue;
-        }
-       
-    }
-}
-
-void Viewport3D::FramePresent(ImGui_ImplVulkanH_Window* wd)
-{
-    if (g_SwapChainRebuild)
-        return;
-    VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
-    VkPresentInfoKHR info = {};
-    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    info.waitSemaphoreCount = 1;
-    info.pWaitSemaphores = &render_complete_semaphore;
-    info.swapchainCount = 1;
-    info.pSwapchains = &wd->Swapchain;
-    info.pImageIndices = &wd->FrameIndex;
-    VkResult err = vkQueuePresentKHR(g_Queue, &info);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
-        g_SwapChainRebuild = true;
-    if (err == VK_ERROR_OUT_OF_DATE_KHR)
-        return;
-    if (err != VK_SUBOPTIMAL_KHR)
-        check_vk_result(err);
-    wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
-}
-
-void Viewport3D::CleanupVulkan()
-{
-    ImGui_ImplVulkanH_DestroyWindow(g_Instance, g_Device, &g_MainWindowData, g_Allocator);
-    vkDestroyDescriptorPool(g_Device, g_DescriptorPool, g_Allocator);
-
-#ifdef APP_USE_VULKAN_DEBUG_REPORT
-    // Remove the debug report callback
-    auto f_vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(g_Instance, "vkDestroyDebugReportCallbackEXT");
-    f_vkDestroyDebugReportCallbackEXT(g_Instance, g_DebugReport, g_Allocator);
-#endif // APP_USE_VULKAN_DEBUG_REPORT
-
-    vkDestroyDevice(g_Device, g_Allocator);
-    vkDestroyInstance(g_Instance, g_Allocator);
-    // vkDestroyBuffer(g_Device, vertexBuffer, nullptr);
-    // vkFreeMemory(g_Device, vertexBufferMemory, nullptr);
-    // vkDestroyBuffer(g_Device, uniformBuffer, nullptr);
-    // vkFreeMemory(g_Device, uniformBufferMemory, nullptr);
-    // vkDestroyDescriptorSetLayout(g_Device, uniformDescriptorSetLayout, nullptr);
-
-}
-
-vector<char> Viewport3D::readFile(const string& filename) {
-    ifstream file(filename, ios::ate | ios::binary);
-    if (!file.is_open()) throw runtime_error("Failed to open file: " + filename);
-    size_t fileSize = (size_t)file.tellg();
-    vector<char> buffer(fileSize);
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-    file.close();
-    return buffer;
-}
-
-VkShaderModule Viewport3D::createShaderModule(const vector<char>& code) {
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-    VkShaderModule shaderModule;
-    if (vkCreateShaderModule(g_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        throw runtime_error("Failed to create shader module!");
-    }
-    return shaderModule;
 }
 
 // Step 1 for pipeline
@@ -827,19 +833,8 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     }
 
 
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass;
-    pipelineInfo.subpass = 0;
+    VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending);
+
     Debug::Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
     Debug::Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
     // cout << "Renderpass: " << renderPass << endl;
@@ -858,13 +853,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
 void Viewport3D::CreateOffscreenPipeline() {
     // RenderPass minimal
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkAttachmentDescription colorAttachment = createColorAttachment();
     
     Debug::Logger::Log("Color attachment format: " + to_string(colorAttachment.format));
     // cout << "Color attachment format: " << colorAttachment.format << endl;
@@ -888,14 +877,7 @@ void Viewport3D::CreateOffscreenPipeline() {
 
     // Framebuffer
     VkImageView attachments[] = { offscreenImageView };
-    VkFramebufferCreateInfo fbInfo{};
-    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbInfo.renderPass = offscreenRenderPass;
-    fbInfo.attachmentCount = 1;
-    fbInfo.pAttachments = attachments;
-    fbInfo.width = viewportWidth;
-    fbInfo.height = viewportHeight;
-    fbInfo.layers = 1;
+    VkFramebufferCreateInfo fbInfo = createFrameBuffer(offscreenRenderPass, attachments, viewportWidth, viewportHeight);
 
     Debug::Logger::Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
     // Debug::Logger::Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
@@ -905,6 +887,94 @@ void Viewport3D::CreateOffscreenPipeline() {
 
     // TODO: load SPIR-V shaders & buat graphicsPipeline (binding vertex, input layout, dsb)
 }
+
+// void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
+//     // Validasi resources sebelum render
+//     if (graphicsPipeline == VK_NULL_HANDLE) {
+//         Logger::Log("Error: Graphics pipeline not created!", LogLevel::CRASH);
+//         return;
+//     }
+    
+//     if (renderPass == VK_NULL_HANDLE) {
+//         Logger::Log("Error: Render pass not created!", LogLevel::CRASH);
+//         return;
+//     }
+    
+//     if (vertexBuffer == VK_NULL_HANDLE) {
+//         Logger::Log("Error: Vertex buffer not created!", LogLevel::CRASH);
+//         return;
+//     }
+    
+//     // if (uniformDescriptorSet.empty()) {
+//     //     Logger::Log("Error: Descriptor sets not created!", LogLevel::CRASH);
+//     //     return;
+//     // }
+    
+//     if (camera == nullptr) {
+//         Logger::Log("Error: Camera not initialized!", LogLevel::CRASH);
+//         return;
+//     }
+    
+//     // Update uniform buffer dengan camera matrices
+//     UniformBufferObject ubo{};
+//     ubo.model = glm::mat4(1.0f); // Identity matrix
+//     ubo.view = camera->GetViewMatrix();
+//     ubo.proj = camera->GetProjectionMatrix((float)width / (float)height, 0.1f, 100.0f);
+    
+//     // Flip Y axis untuk Vulkan
+//     ubo.proj[1][1] *= -1;
+    
+//     // Copy UBO ke uniform buffer
+//     void* data;
+//     vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
+//     memcpy(data, &ubo, sizeof(ubo));
+//     vkUnmapMemory(g_Device, uniformBufferMemory);
+    
+//     // Begin command buffer
+//     VkCommandBufferBeginInfo beginInfo{};
+//     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+//     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+//     if (vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo) != VK_SUCCESS) {
+//         Logger::Log("Failed to begin recording command buffer!", LogLevel::CRASH);
+//         return;
+//     }
+    
+//     // Begin render pass
+//     VkRenderPassBeginInfo renderPassInfo{};
+//     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+//     renderPassInfo.renderPass = renderPass;
+//     renderPassInfo.framebuffer = offscreenFramebuffer;
+//     renderPassInfo.renderArea.offset = {0, 0};
+//     renderPassInfo.renderArea.extent = {width, height};
+    
+//     VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+//     renderPassInfo.clearValueCount = 1;
+//     renderPassInfo.pClearValues = &clearColor;
+    
+//     vkCmdBeginRenderPass(offscreenCmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    
+//     // Bind pipeline
+//     vkCmdBindPipeline(offscreenCmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    
+//     // Bind vertex buffer
+//     VkBuffer vertexBuffers[] = {vertexBuffer};
+//     VkDeviceSize offsets[] = {0};
+//     vkCmdBindVertexBuffers(offscreenCmdBuffer, 0, 1, vertexBuffers, offsets);
+    
+//     // Bind descriptor set
+//     vkCmdBindDescriptorSets(offscreenCmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+//                            pipelineLayout, 0, 1, &uniformDescriptorSet, 0, nullptr);
+    
+//     // Draw (assuming you have vertex count)
+//     vkCmdDraw(offscreenCmdBuffer, vertexCount, 1, 0, 0);
+    
+//     vkCmdEndRenderPass(offscreenCmdBuffer);
+    
+//     if (vkEndCommandBuffer(offscreenCmdBuffer) != VK_SUCCESS) {
+//         Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
+//     }
+// }
 
 void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     // allocate command buffer (single-use)
@@ -927,30 +997,18 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     VkClearValue clearValue{};
     clearValue.color = {{0.2f, 0.2f, 0.2f, 1.0f}};
 
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass = offscreenRenderPass;
-    rpInfo.framebuffer = offscreenFramebuffer;
-    rpInfo.renderArea.offset = {0, 0};
-    rpInfo.renderArea.extent = { width, height };
-    rpInfo.clearValueCount = 1;
-    rpInfo.pClearValues = &clearValue;
+    VkRenderPassBeginInfo rpInfo = createRenderPassInfo(offscreenRenderPass, offscreenFramebuffer, width, height, clearValue);
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
+    // Bind pipeline & draw (segitiga)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     vkCmdEndRenderPass(cmd);
-    // Bind vertex buffer
-    VkBuffer vertexBuffers[] = {vertexBuffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-    vkEndCommandBuffer(cmd);
 
-    // // Bind descriptor sets for uniforms
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-        pipelineLayout, 0, 1, &uniformDescriptorSet, 0, nullptr);
+    // End
+    vkEndCommandBuffer(cmd);
 
     // Submit offscreen command buffer, signal offscreenSignalSemaphore when done
     VkSubmitInfo submit{};
@@ -987,15 +1045,122 @@ void Viewport3D::DrawViewport3D() {
     ImGui::End();
 }
 
+void Viewport3D::videoPlayerUI(){
+    static char videoPath[256] = "";
+    static bool loopVideo = true;
+    static bool paused = false;
+    // enum RenderMode currentMode;
+    static bool isOnlyRender = imageHandler.isOnlyRenderImage;
+    static bool isOnlyAd = imageHandler.isOnlyAudio;
+
+    ImGui::Begin("Video Player");
+    ImGui::InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
+    ImGui::SameLine();
+    if (ImGui::Button("Open")) {
+        if (strlen(videoPath) > 0) {
+            imageHandler.OpenFileVideo(videoPath);
+            paused = false;
+        }
+    }
+
+    ImGui::Checkbox("Loop Video", &loopVideo);
+    ImGui::SameLine();
+    ImGui::Checkbox("Only Render Image", &isOnlyRender);
+    ImGui::SameLine();
+    ImGui::Checkbox("Only Audio", &isOnlyAd);
+
+    if (imageHandler.isPlaying) {  
+        if (!paused){
+            if (isOnlyRender == true && isOnlyAd == false) {
+                // updateVideoFrame();
+                Debug::Logger::Log("Only Render Image", Debug::LogLevel::WARNING);
+                imageHandler.updateVideoFrame();
+            }
+            else if (isOnlyRender == false && isOnlyAd == true) {
+                // Debug::Logger::Log("Only Render audio", Debug::LogLevel::WARNING);
+                imageHandler.updateAudio();
+            }
+            else {
+                imageHandler.updateBothVideoAndAudio();
+            }
+        }
+            renderVideoFrame();
+
+        ImGui::Separator();
+        if (ImGui::Button(paused ? "Play" : "Pause")) {
+                paused = !paused;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop")) {
+                av_seek_frame(imageHandler.formatContext, imageHandler.videoStream, 0, AVSEEK_FLAG_BACKWARD);
+                imageHandler.currentTime = 0;
+                paused = true;
+            }
+
+            ImGui::Text("Time: %.2f / %.2f", imageHandler.currentTime, imageHandler.duration);
+
+            // Informasi video
+            ImGui::Text("Resolution: %dx%d | FPS: %.2f", 
+                        imageHandler.width, imageHandler.height, imageHandler.fps);
+            if (!isOnlyRender | isOnlyAd) {
+                ImGui::Separator();
+                ImGui::Text("Frequency: %d | Channels: %d", 
+                        imageHandler.audioCodecContext->sample_rate, imageHandler.audioCodecContext->ch_layout.nb_channels);
+            }
+    } else {
+        ImGui::Text("No video loaded or playing.");
+    }
+
+    ImGui::End();
+}
+
+void Viewport3D::renderVideoFrame(){
+    // Dalam render loop ImGui
+    if (imageHandler.getVideoDescriptorSet() != VK_NULL_HANDLE) {
+        float aspectRatio = static_cast<float>(imageHandler.width) / static_cast<float>(imageHandler.height);
+        
+        // Hitung dimensi tampilan
+        ImVec2 contentSize = ImGui::GetContentRegionAvail();
+        float displayWidth = contentSize.x;
+        float displayHeight = displayWidth / aspectRatio;
+        
+        if (displayHeight > contentSize.y) {
+            displayHeight = contentSize.y;
+            displayWidth = displayHeight * aspectRatio;
+        }
+        
+        // Debug: Print display dimensions
+        // cout << "Display dimensions: " << displayWidth << "x" << displayHeight << endl;
+        
+        // Pusatkan video di ruang yang tersedia  
+        float posX = (contentSize.x - displayWidth) * 0.5f;
+        float posY = (contentSize.y - displayHeight) * 0.5f;
+        
+        ImGui::SetCursorPos(ImVec2(posX, posY));
+        
+        // Coba render dengan berbagai cara untuk test
+        
+        // Method 1: Current method
+        // ui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
+        //          ImVec2(displayWidth, displayHeight));
+        
+        float w = displayWidth, h = displayHeight;
+        ImGui::Image((ImTextureID)imageHandler.getVideoDescriptorSet(), 
+                    ImVec2(w, h));
+    } else {
+        ImGui::Text("No texture available");
+    }
+}
+
 // Draw Image
 void Viewport3D::DrawImage()
 {
     static VkDescriptorSet imguiTexture = VK_NULL_HANDLE;
     if (imguiTexture == VK_NULL_HANDLE){
-        imguiTexture = imageHandler.LoadImage("assets/images/backgrounds/Hanako_Swimsuit.png");
+        imguiTexture = imageHandler.LoadImage("assets/images/backgrounds/shiroko_bluearchive.jpg");
     }
     ImGui::Begin("Image Test");
-    ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 340));
+    ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 360));
     ImGui::End();
 }
 
@@ -1107,6 +1272,9 @@ VkBuffer Viewport3D::CreateBuffer(
     if (vkCreateBuffer(g_Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create buffer!");
     }
+    else {
+        Logger::Log("Buffer created successfully. Size: " + to_string(size) + " bytes", LogLevel::SUCCESS);
+    }
 
     // Get memory requirements
     VkMemoryRequirements memRequirements;
@@ -1131,6 +1299,9 @@ VkBuffer Viewport3D::CreateBuffer(
     if (memTypeIndex == UINT32_MAX) {
         throw std::runtime_error("failed to find suitable memory type!");
     }
+    else {
+        Logger::Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
+    }
 
     // Allocate memory
     VkMemoryAllocateInfo allocInfo{};
@@ -1140,6 +1311,9 @@ VkBuffer Viewport3D::CreateBuffer(
 
     if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate buffer memory!");
+    }
+    else {
+        Logger::Log("Allocate memory successfully. Size: " + to_string(allocInfo.allocationSize) + " bytes", LogLevel::SUCCESS);
     }
 
     // Bind buffer with allocated memory
@@ -1244,6 +1418,7 @@ void Viewport3D::createVertexBuffer() {
         {{0.5f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
         {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}}
     };
+    Logger::Log("Vertex count: " + to_string(vertices.size()));
 
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -1297,10 +1472,10 @@ int main(int argc, char* argv[]){
 
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     SDL_WindowFlags windowFlags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    SDL_Window* mainWindow =  SDL_CreateWindow("Viewport 3D", 1280, 720, windowFlags);
+    SDL_Window* mainWindow = SDL_CreateWindow("Viewport 3D", 1280, 720, windowFlags);
     if (mainWindow == nullptr)
     {
-        cout << "Error: SDL_CreateWindow(): "<<  SDL_GetError() << endl;
+        cout << "Error: SDL_CreateWindow(): " << SDL_GetError() << endl;
         return -1;
     }
 
@@ -1312,26 +1487,63 @@ int main(int argc, char* argv[]){
             extensions.push_back(sdl_extensions[n]);
     }
 
-    Viewport3D viewport;
-    viewport.initVulkan(extensions, mainWindow);
-    Logger::Log("Create Shaders & Pipeline");
-    viewport.CreateOffscreenCommandResources();
-    viewport.CreateOffscreenResources(1280, 720);
-    viewport.CreateOffscreenPipeline();
-    viewport.createRenderPass();
+    try {
+        Viewport3D viewport;
+        
+        // Langkah 1: Initialize Vulkan
+        Logger::Log("Initializing Vulkan...");
+        viewport.initVulkan(extensions, mainWindow);
+        
+        // Langkah 2: Create render pass PERTAMA
+        Logger::Log("Creating render pass...");
+        viewport.createRenderPass();
+        
+        // Langkah 3: Create offscreen resources
+        Logger::Log("Creating offscreen resources...");
+        viewport.CreateOffscreenCommandResources();
 
-    viewport.createUniformDescriptorSetLayout();
-    viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
-    
-    viewport.createVertexBuffer();
-    viewport.createUniformBuffers();
-    viewport.createUniformDescriptorSets();
-    // viewport.camera->GetViewMatrix();
-    viewport.Update();
-    viewport.CleanupVulkan();
-    // viewport.initVulkan(mainWindow);
+        // init vulkan handler needed variabel
+        viewport.helperInitImage();
+        viewport.CreateOffscreenResources(1280, 720);
+        viewport.CreateOffscreenPipeline();
+        
+        // Langkah 4: Create descriptor set layout
+        Logger::Log("Creating uniform descriptor set layout...");
+        viewport.createUniformDescriptorSetLayout();
+        
+        // Langkah 5: Create graphics pipeline
+        Logger::Log("Creating graphics pipeline...");
+        viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
+        
+        // Langkah 6: Create buffers
+        Logger::Log("Creating vertex buffer...");
+        viewport.createVertexBuffer();
+        
+        Logger::Log("Creating uniform buffers...");
+        viewport.createUniformBuffers();
+        
+        Logger::Log("Creating uniform descriptor sets...");
+        viewport.createUniformDescriptorSets();
+        
+        // Langkah 7: Initialize camera (PENTING!)
+        Logger::Log("Initializing camera...");
+        if (viewport.camera == nullptr) {
+            viewport.camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
+        }
+        
+        // Langkah 8: Update dan render
+        Logger::Log("Starting update loop...");
+        viewport.Update(viewport.currentIo);
+        
+        // Cleanup
+        viewport.CleanupVulkan();
+    }
+    catch (const std::exception& e) {
+        Logger::Log("Exception caught: " + string(e.what()), LogLevel::CRASH);
+        return -1;
+    }
 
-    SDL_DestroyWindow(viewport.mainWindow);
+    SDL_DestroyWindow(mainWindow);
     SDL_Quit();
     return 0;
 }

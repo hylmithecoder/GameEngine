@@ -6,7 +6,7 @@
 #include <memory>
 #include "FFmpegWrapper.hpp"
 #include <fstream>
-#include <libavformat/avformat.h>
+// #include <libavformat/avformat.h>
 #include <stb_image.h>
 #include <SDL_opengl.h>
 #include <gtk/gtk.h>

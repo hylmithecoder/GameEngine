@@ -24,7 +24,6 @@
 
 class Viewport3D {
     public:
-        // Di class Viewport3D
         VulkanHandler imageHandler;
         struct UniformBufferObject {
             glm::mat4 model;
@@ -33,9 +32,9 @@ class Viewport3D {
         };
 
         struct Vertex {
-            glm::vec3 pos;     // posisi 3D
+            glm::vec3 pos;     // Position
             glm::vec3 color;   // warna
-            glm::vec3 normal;  // normal vector
+            glm::vec3 normal;  // vector
 
             static VkVertexInputBindingDescription getBindingDescription() {
                 VkVertexInputBindingDescription bindingDescription{};
@@ -112,7 +111,6 @@ class Viewport3D {
         VkFramebuffer offscreenFramebuffer;
         VkRenderPass offscreenRenderPass;
 
-        // Descriptor untuk ImGui::Image()
         VkDescriptorSet offscreenDescriptorSet;
         VkDescriptorSetLayout descriptorSetLayout;
         VkDescriptorPool imguiDescriptorPool;
@@ -129,7 +127,7 @@ class Viewport3D {
         void initVulkan(ImVector<const char*> instance_extensions, SDL_Window* window){
             SetupVulkan(instance_extensions, window);
             create_vk_surface();
-            helperInitImage();
+            // helperInitImage();
             SetupVulkanWindow(&g_MainWindowData, surface, 1280, 720);
             SetupImgui();
             pickPhysicalDevice();
@@ -201,11 +199,9 @@ class Viewport3D {
             switch (err) {
                 case VK_ERROR_DEVICE_LOST:
                     Logger::Log("Device lost - attempting recovery...", LogLevel::WARNING);
-                    // Don't throw here, let the caller handle recovery
                     break;
                 case VK_ERROR_OUT_OF_DATE_KHR:
                 case VK_SUBOPTIMAL_KHR:
-                    // These are recoverable - just signal for rebuild
                     Logger::Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
                     // g_SwapChainRebuild = true;
                     break;
@@ -217,18 +213,19 @@ class Viewport3D {
             }
         }
 
-        void Update();
+        void Update(ImGuiIO& io);
 
         // Info Vulkan
         int ratePhysicalDevice(VkPhysicalDevice device);
         void pickPhysicalDevice();
 
-        // Add these to the class public members:
         // Uniform buffer objects
         VkBuffer uniformBuffer;
         VkDeviceMemory uniformBufferMemory;
+        vector<VkDeviceMemory> uniformBuffersMemory;
         VkDescriptorSetLayout uniformDescriptorSetLayout;
         VkDescriptorSet uniformDescriptorSet;
+        vector<VkDescriptorSet> uniformDescriptorSets;
 
         // Add these method declarations
         void createUniformBuffers();
@@ -236,13 +233,97 @@ class Viewport3D {
         void createUniformDescriptorSets();
         void updateUniformBuffer();
         void createVertexBuffer();
+        void renderVideoFrame();
+        void helperInitImage(){
+            imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool);
+        }
 
     private:
         int viewportWidth, viewportHeight;
-        void helperInitImage(){
-            imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice);
-        }
 
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
+        uint32_t currentFrame = 0;
+        uint32_t vertexCount = 0;
+
+        ImGuiIO getImGuiIO(ImGuiIO& io){
+            // cout << io << endl;
+            return io;
+        }
+
+        float fontSize;
+
+        void videoPlayerUI();
+        VkRenderPassBeginInfo createRenderPassInfo(VkRenderPass& currentRenderPass, 
+            VkFramebuffer& currentFrameBuffer, 
+            uint32_t& width, 
+            uint32_t& height, 
+            VkClearValue& clearValue)
+        {
+            VkRenderPassBeginInfo rpInfo{};
+            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rpInfo.renderPass = currentRenderPass;
+            rpInfo.framebuffer = currentFrameBuffer;
+            rpInfo.renderArea.offset = {0, 0};
+            rpInfo.renderArea.extent = { width, height };
+            rpInfo.clearValueCount = 1;
+            rpInfo.pClearValues = &clearValue;
+
+            return rpInfo;
+        };
+
+        VkFramebufferCreateInfo createFrameBuffer(VkRenderPass& currentRenderPass, 
+            VkImageView* currentImageView,
+            int& width, 
+            int& height
+        )
+        {
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass = offscreenRenderPass;
+            fbInfo.attachmentCount = 1;
+            fbInfo.pAttachments = currentImageView;
+            fbInfo.width = viewportWidth;
+            fbInfo.height = viewportHeight;
+            fbInfo.layers = 1;
+
+            return fbInfo;
+        }
+
+        VkAttachmentDescription createColorAttachment(){
+            VkAttachmentDescription colorAttachment{};
+            colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+            colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            return colorAttachment;
+        }
+
+        VkGraphicsPipelineCreateInfo createPipeLineInfo(VkPipelineShaderStageCreateInfo* currentShaderStage,
+            VkPipelineVertexInputStateCreateInfo& currentVertexInput,
+            VkPipelineInputAssemblyStateCreateInfo& currentInputAssembly,
+            VkPipelineViewportStateCreateInfo& currentViewportState,
+            VkPipelineRasterizationStateCreateInfo& currentRasterizerInfo,
+            VkPipelineMultisampleStateCreateInfo& multisampling,
+            VkPipelineColorBlendStateCreateInfo& colorBlending
+        ){
+            VkGraphicsPipelineCreateInfo pipelineInfo{};
+            pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            pipelineInfo.stageCount = 2;
+            pipelineInfo.pStages = currentShaderStage;
+            pipelineInfo.pVertexInputState = &currentVertexInput;
+            pipelineInfo.pInputAssemblyState = &currentInputAssembly;
+            pipelineInfo.pViewportState = &currentViewportState;
+            pipelineInfo.pRasterizationState = &currentRasterizerInfo;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pColorBlendState = &colorBlending;
+            pipelineInfo.layout = pipelineLayout;
+            pipelineInfo.renderPass = renderPass;
+            pipelineInfo.subpass = 0;
+
+            return pipelineInfo;
+        }
 };

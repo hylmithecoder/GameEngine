@@ -17,10 +17,10 @@ option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # endif()
 
 # Add SDL2 and SDL2_ttf paths
-set(SDL2_DIR "C:/SDL2")
-set(SDL2_TTF_DIR "C:/SDL2_ttf") 
+# set(SDL2_DIR "C:/SDL2")
+# set(SDL2_TTF_DIR "C:/SDL2_ttf") 
 # set(STB "E:/stb")
-set(GLFW "C:/glfw3.4")
+# set(GLFW "C:/glfw3.4")
 # set(FFMPEG_DIR "E:/FFmpeg")
 # set(LIBRARY "C:/msys64/mingw64/bin")
 # set(GLES2 ${GLFW}/)
@@ -658,6 +658,11 @@ target_link_libraries(TestVulkan PRIVATE
 target_link_libraries(ViewPort3D PRIVATE
     SDL3
     Vulkan::Vulkan
+    avformat
+    avcodec
+    avutil
+    swresample
+    swscale
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
