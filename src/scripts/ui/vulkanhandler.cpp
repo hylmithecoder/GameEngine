@@ -1061,3 +1061,227 @@ void VulkanHandler::processAudioPacket(AVPacket* pkt) {
     
     av_frame_free(&audioFrame);
 }
+
+void VulkanHandler::updateBothVideoAndAudio24fps(){
+    if (!isPlaying || !formatContext) {
+        return; // Video not playing or not initialized
+    }
+
+    // Ensure audio device and context are ready if we have audio
+    bool hasAudio = (audioCodecContext && swrContext && audioDeviceID != 0);
+    
+    // Check audio buffer status
+    bool needMoreAudio = false;
+    // Increase buffer sizes
+    // const int MAX_AUDIO_QUEUE_SIZE = 8192 * 32;  // Increase from 8 to 32
+    // const int IDEAL_AUDIO_QUEUE_SIZE = 8192 * 24; // Add ideal size
+    // const int MIN_AUDIO_QUEUE_SIZE = 8192 * 16;   // Add minimum threshold
+    const int IDEAL_AUDIO_QUEUE_SIZE = 8192 * 16; // Increase buffer size for smoother playback
+    const int MIN_AUDIO_QUEUE_SIZE = 8192 * 4;   // Minimum threshold to start refilling
+    
+    if (hasAudio) {
+        const int AUDIO_QUEUE_SIZE = SDL_GetAudioStreamQueued(audioStream);
+        needMoreAudio = (AUDIO_QUEUE_SIZE < MIN_AUDIO_QUEUE_SIZE);
+    }
+    // const int MAX_AUDIO_QUEUE_SIZE = 8192 * 64;
+    // const int IDEAL_AUDIO_QUEUE_SIZE = 8192 * 32;
+    // const int MIN_AUDIO_QUEUE_SIZE = 8192 * 16;
+
+    // // Process more audio packets when buffer is low
+    // if (hasAudio && SDL_GetQueuedAudioSize(audioDeviceID) < MIN_AUDIO_QUEUE_SIZE) {
+    //     for (int i = 0; i < 5; i++) {  // Process multiple packets
+    //         updateAudio();
+    //     }
+    // }
+
+    // Read multiple packets for audio to ensure buffer stays filled
+    int packetsProcessed = 0;
+    const int MAX_PACKETS_PER_CALL = hasAudio && needMoreAudio ? 5 : 1;
+    bool videoFrameProcessed = false;
+
+    while (packetsProcessed < MAX_PACKETS_PER_CALL && !videoFrameProcessed) {
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) {
+            cerr << "Could not allocate packet" << endl;
+            break;
+        }
+
+        // Try to read a packet
+        int readResult = av_read_frame(formatContext, pkt);
+
+        // Handle read errors or EOF
+        if (readResult < 0) {
+            av_packet_free(&pkt);
+            
+            if (readResult == AVERROR_EOF) {
+                // End of file - seek back to beginning (for looping)
+                int seekResult = av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
+                if (seekResult < 0) {
+                    char errbuf[256];
+                    av_strerror(seekResult, errbuf, sizeof(errbuf));
+                    cerr << "Error seeking to beginning: " << errbuf << endl;
+                } else {
+                    // Flush the codec buffers
+                    if (codecContext) {
+                        avcodec_flush_buffers(codecContext);
+                    }
+                    if (audioCodecContext) {
+                        avcodec_flush_buffers(audioCodecContext);
+                    }
+                }
+            } else {
+                char errbuf[256];
+                av_strerror(readResult, errbuf, sizeof(errbuf));
+                cerr << "Error reading frame: " << errbuf << endl;
+            }
+            break;
+        }
+
+        packetsProcessed++;
+
+        // Process video packet
+        if (pkt->stream_index == videoStream && !videoFrameProcessed) {
+            int sendResult = avcodec_send_packet(codecContext, pkt);
+            
+            if (sendResult >= 0) {
+                int receiveResult = avcodec_receive_frame(codecContext, frame);
+                
+                if (receiveResult >= 0) {
+                    // Successfully got a video frame
+                    sws_scale(swsContext, 
+                            (uint8_t const* const*)frame->data,
+                            frame->linesize, 0, height,
+                            frameRGB->data, frameRGB->linesize);
+
+                    // SDL_UpdateTexture(texture, NULL, 
+                    //                 frameRGB->data[0],
+                    //                 frameRGB->linesize[0]);
+                                    
+                    updateVideoTexture();
+
+                    // Update current time using frame PTS
+                    if (frame->pts != AV_NOPTS_VALUE) {
+                        AVRational timeBase = formatContext->streams[videoStream]->time_base;
+                        currentTime = frame->pts * av_q2d(timeBase);
+                    }
+                    
+                    videoFrameProcessed = true;
+                }
+            }
+        }
+        // Process audio packet
+        else if (hasAudio && pkt->stream_index == audioStreamIndex) {
+            // Always process audio packets when we encounter them, 
+            // but check if we need to keep processing more packets afterward
+            AVFrame* audioFrame = av_frame_alloc();
+            if (!audioFrame) {
+                av_packet_unref(pkt);
+                av_packet_free(&pkt);
+                cerr << "Could not allocate audio frame" << endl;
+                continue;
+                // return;
+            }
+            
+            int sendResult = avcodec_send_packet(audioCodecContext, pkt);
+            // cout << "Send Result: " << sendResult << endl;
+            if (sendResult >= 0) {
+                // Try to receive multiple frames from this packet if available
+                bool frameReceived = false;
+                
+                while (true) {
+                    int receiveResult = avcodec_receive_frame(audioCodecContext, audioFrame);
+                    // cout << "Terima Hasil: " << receiveResult << endl;
+                    if (receiveResult == AVERROR_EOF || receiveResult == AVERROR(EAGAIN)) {
+                        // No more frames or error
+                        break;
+                    } else if (receiveResult < 0){
+                        char errbuf[256];
+                        av_strerror(receiveResult, errbuf, sizeof(errbuf));
+                        cerr << "Error receiving audio frame: " << errbuf << endl;
+                        break;
+                    }
+                    
+                    frameReceived = true;
+                    
+                    // Process audio frame
+                    int outChannels = 2; // Stereo output
+                    
+                    // Calculate buffer size needed
+                    int outSamples = av_rescale_rnd(
+                        swr_get_delay(swrContext, audioCodecContext->sample_rate) + audioFrame->nb_samples,
+                        44100, // output rate
+                        audioCodecContext->sample_rate,
+                        AV_ROUND_UP
+                    );
+
+                    uint8_t* outBuf = nullptr;
+                    int outLinesize = 0;
+                    int allocResult = av_samples_alloc(
+                        &outBuf, &outLinesize,
+                        outChannels,
+                        outSamples,
+                        AV_SAMPLE_FMT_S16, 0
+                    );
+                    // cout << "allocresult: " << allocResult << endl;
+                    
+                    if (allocResult >= 0) {
+                        int convertedSamples = swr_convert(
+                            swrContext,
+                            &outBuf, outSamples,
+                            (const uint8_t**)audioFrame->data, audioFrame->nb_samples
+                        );
+                        
+                        if (convertedSamples >= 0) {
+                            int outBufSize = av_samples_get_buffer_size(
+                                nullptr, outChannels,
+                                convertedSamples,
+                                AV_SAMPLE_FMT_S16, 1
+                            );
+                            
+                            if (outBufSize > 0) {
+                                SDL_PutAudioStreamData(audioStream, outBuf, outBufSize);
+                                
+                                // Check if we've filled the audio buffer enough
+                                if (SDL_GetAudioStreamQueued(audioStream) >= IDEAL_AUDIO_QUEUE_SIZE) {
+                                    needMoreAudio = false;
+                                }
+                            }
+                        }
+
+                        av_freep(&outBuf);
+                    }
+                    
+                    // Reset frame for potential reuse
+                    av_frame_unref(audioFrame);
+                }
+                
+                // If no frames were received, this is normal but uncommon
+                if (!frameReceived) {
+                    // Sometimes packets don't yield frames immediately
+                }
+            }
+            
+            av_frame_free(&audioFrame);
+        }
+        
+        av_packet_unref(pkt);
+        av_packet_free(&pkt);
+        
+        // Check if we have enough audio data now
+        if (hasAudio && !needMoreAudio && videoFrameProcessed) {
+            cout << "Break Audio !!!" << endl;
+            // We've both filled audio and processed a video frame
+            break;
+        }
+    }
+    
+    // If audio is still needed, prioritize it on next call
+    if (hasAudio) {
+        const int AUDIO_QUEUE_SIZE = SDL_GetAudioStreamQueued(audioStream);
+        if (AUDIO_QUEUE_SIZE < MIN_AUDIO_QUEUE_SIZE) {
+            cout << "AUDIO_QUEUE_SIZE: " << AUDIO_QUEUE_SIZE << endl;
+            // Consider calling updateMedia again immediately or soon
+            // via a callback/timer if your architecture supports it
+        }
+    }
+}

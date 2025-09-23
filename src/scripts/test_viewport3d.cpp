@@ -1046,7 +1046,7 @@ void Viewport3D::DrawViewport3D() {
 }
 
 void Viewport3D::videoPlayerUI(){
-    static char videoPath[256] = "";
+    static char videoPath[5000] = "";
     static bool loopVideo = true;
     static bool paused = false;
     // enum RenderMode currentMode;
@@ -1081,7 +1081,11 @@ void Viewport3D::videoPlayerUI(){
                 imageHandler.updateAudio();
             }
             else {
-                imageHandler.updateBothVideoAndAudio();
+                // if (imageHandler.fps <= 24) {
+                //     imageHandler.updateBothVideoAndAudio24fps();
+                // } else {
+                    imageHandler.updateBothVideoAndAudio();
+                // }
             }
         }
             renderVideoFrame();
@@ -1525,7 +1529,7 @@ int main(int argc, char* argv[]){
         Logger::Log("Creating uniform descriptor sets...");
         viewport.createUniformDescriptorSets();
         
-        // Langkah 7: Initialize camera (PENTING!)
+        // Langkah 7: Initialize camera
         Logger::Log("Initializing camera...");
         if (viewport.camera == nullptr) {
             viewport.camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));

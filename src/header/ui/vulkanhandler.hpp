@@ -30,6 +30,7 @@ class VulkanHandler {
         bool isPlaying = false;
         void updateAudio();
         void updateBothVideoAndAudio();
+        void updateBothVideoAndAudio24fps();
         void setAndUpdateWidthAndHeight(int width, int height){
             this->width = width;
             this->height = height;
