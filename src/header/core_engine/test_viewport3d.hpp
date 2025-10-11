@@ -1,35 +1,33 @@
-// #pragma once
-// #include <Debugger.hpp>
-// #include <vulkan/vulkan.h>
-// #include <SDL_vulkan.h>
-// #include <SDL.h>
-// #include <string>
-// #include <iostream>
-// #include <imgui.h>
-// #include <imgui_impl_vulkan.h>
-// #include <stdlib.h>
-// #include <imgui_impl_sdl3.h>
+#pragma once
 #include <chrono>
 #include <vector>
 #include <camera.hpp>
 #include <map>
 #include <vulkanhandler.hpp>
-// #define STB_IMAGE_IMPLEMENTATION
-// #include <stb/stb_image.h>
-// #include <stdexcept>
 #include <fstream>
-// using namespace std;
-// using namespace Debug;
-// using namespace glm;
+
+#define MAX_CONCURRENT_FRAMES 2
 
 class Viewport3D {
     public:
         VulkanHandler imageHandler;
+
+        struct ShaderData {
+            glm::mat4 projectionMatrix;
+            glm::mat4 modelMatrix;
+            glm::mat4 viewMatrix;
+	    };
+
         struct UniformBufferObject {
-            glm::mat4 model;
-            glm::mat4 view;
-            glm::mat4 proj;
+            VkDeviceMemory memory{ VK_NULL_HANDLE };
+            VkBuffer buffer{ VK_NULL_HANDLE };
+            // The descriptor set stores the resources bound to the binding points in a shader
+            // It connects the binding points of the different shaders with the buffers and images used for those bindings
+            VkDescriptorSet descriptorSet{ VK_NULL_HANDLE };
+            // We keep a pointer to the mapped buffer, so we can easily update it's contents via a memcpy
+            uint8_t* mapped{ nullptr };
         };
+	    array<UniformBufferObject, MAX_CONCURRENT_FRAMES> uniformBuffers;
 
         struct Vertex {
             glm::vec3 pos;     // Position
@@ -44,8 +42,8 @@ class Viewport3D {
                 return bindingDescription;
             }
 
-            static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-                std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+            static array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+                array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
                 
                 // Position
                 attributeDescriptions[0].binding = 0;
@@ -69,9 +67,21 @@ class Viewport3D {
             }
         };
 
+        struct {
+            VkDeviceMemory memory{ VK_NULL_HANDLE }; // Handle to the device memory for this buffer
+            VkBuffer buffer{ VK_NULL_HANDLE };		 // Handle to the Vulkan buffer object that the memory is bound to
+        } vertices;
+
+        // Index buffer
+        struct {
+            VkDeviceMemory memory{ VK_NULL_HANDLE };
+            VkBuffer buffer{ VK_NULL_HANDLE };
+            uint32_t count{ 0 };
+        } indices;
+
         SDL_Window* mainWindow = nullptr;
         // Camera
-        Camera* camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
+        Camera camera;
         // Main Component vulkan
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         ImGuiIO currentIo;
@@ -93,15 +103,24 @@ class Viewport3D {
         VkPipelineLayout pipelineLayout;
         VkPipeline graphicsPipeline;
         VkRenderPass renderPass;
-
+        VkSwapchainKHR swapChain;
         void createRenderPass();
-        void createGraphicsPipeline(const std::string& vertShaderPath, const std::string& fragShaderPath);
-        VkShaderModule createShaderModule(const std::vector<char>& code);
-        static std::vector<char> readFile(const std::string& filename);
+        void createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath);
+        VkShaderModule createShaderModule(const vector<char>& code);
+        static vector<char> readFile(const string& filename);
         void CreateOffscreenResources(int width, int height);
         void CreateOffscreenPipeline();
         void RenderOffscreen(uint32_t width, uint32_t height);
+        void setupFrameBuffer(uint32_t width, uint32_t height);
+        void setupDepthStencil(uint32_t width, uint32_t height);
         void DrawViewport3D();
+        VkFormat depthFormat;
+
+        void glm4Deserealize(const glm::mat4& targetMat4);
+        vector<VkSemaphore> presentCompleteSemaphores;
+        vector<VkSemaphore> renderCompleteSemaphores;
+        vector<VkFramebuffer> framebuffers;
+        // VulkanSwapChain swapChain;
 
         // Offscreen render target
         VkImage offscreenImage;
@@ -111,9 +130,17 @@ class Viewport3D {
         VkFramebuffer offscreenFramebuffer;
         VkRenderPass offscreenRenderPass;
 
+        vector<VkImage> images;
+        vector<VkImageView> imageViews;
+
+        struct {
+            VkImageView imageView;
+            VkImage image;
+            VkDeviceMemory memory;
+        } depthStencil {};
+
         VkDescriptorSet offscreenDescriptorSet;
         VkDescriptorSetLayout descriptorSetLayout;
-        VkDescriptorPool imguiDescriptorPool;
 
         // Command buffer khusus offscreen 
         VkCommandBuffer offscreenCmdBuffer = VK_NULL_HANDLE;// Offscreen command pool + semaphore
@@ -134,7 +161,7 @@ class Viewport3D {
         };
 
         void showCurrentCameraPosition(){
-            ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", camera->Position.x, camera->Position.y, camera->Position.z);
+            ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", camera.matrices.view[3][0], camera.matrices.view[3][1], camera.matrices.view[3][2]);
         }
 
         string convertUintVariabletoString(auto var){
@@ -154,7 +181,7 @@ class Viewport3D {
         void renderViewport();
         VkDescriptorSet LoadImage(const char* filename);
         void DrawImage();
-        uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+        uint32_t FindMemoryType(VkMemoryRequirements memRequirements, VkPhysicalDeviceMemoryProperties memProperties, VkMemoryPropertyFlags properties);
         VkBuffer CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
         // void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
         // void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
@@ -177,6 +204,19 @@ class Viewport3D {
             return commandBuffer;
         }
 
+        VkCommandBufferAllocateInfo commandBufferAllocateInfo(
+			VkCommandPool commandPool, 
+			VkCommandBufferLevel level, 
+			uint32_t bufferCount)
+		{
+			VkCommandBufferAllocateInfo commandBufferAllocateInfo {};
+			commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			commandBufferAllocateInfo.commandPool = commandPool;
+			commandBufferAllocateInfo.level = level;
+			commandBufferAllocateInfo.commandBufferCount = bufferCount;
+			return commandBufferAllocateInfo;
+		}
+
         void EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
             vkEndCommandBuffer(commandBuffer);
 
@@ -185,16 +225,29 @@ class Viewport3D {
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers = &commandBuffer;
 
+            VkFenceCreateInfo fenceCI{};
+            fenceCI.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fenceCI.flags = 0;
+            VkFence fence;
+            check_vk_result(vkCreateFence(g_Device, &fenceCI, nullptr, &fence));
+
             vkQueueSubmit(g_Queue, 1, &submitInfo, VK_NULL_HANDLE);
+		    // check_vk_result(vkWaitForFences(g_Device, 1, &fence, VK_TRUE, 100000000000));
+		    // vkDestroyFence(g_Device, fence, nullptr);
+            
             vkQueueWaitIdle(g_Queue);
 
             vkFreeCommandBuffers(g_Device, offscreenCommandPool, 1, &commandBuffer);
         }
 
         static void check_vk_result(VkResult err) {
-            if (err == VK_SUCCESS) return;
+            // Logger::Log("[vulkan] Info: VkResult = " + to_string(err), LogLevel::INFO);
 
-            Logger::Log("[vulkan] Error: VkResult = " + std::to_string(err), LogLevel::CRASH);
+            if (err == VK_SUCCESS){ 
+                return;
+            }
+
+            Logger::Log("[vulkan] Error: VkResult = " + to_string(err), LogLevel::CRASH);
             
             switch (err) {
                 case VK_ERROR_DEVICE_LOST:
@@ -207,7 +260,7 @@ class Viewport3D {
                     break;
                 default:
                     if (err < 0) {
-                        throw std::runtime_error("Unhandled Vulkan error");
+                        throw runtime_error("Unhandled Vulkan error");
                     }
                     break;
             }
@@ -226,6 +279,7 @@ class Viewport3D {
         VkDescriptorSetLayout uniformDescriptorSetLayout;
         VkDescriptorSet uniformDescriptorSet;
         vector<VkDescriptorSet> uniformDescriptorSets;
+    	VkCommandPool commandPool{ VK_NULL_HANDLE };
 
         // Add these method declarations
         void createUniformBuffers();
@@ -234,10 +288,14 @@ class Viewport3D {
         void updateUniformBuffer();
         void createVertexBuffer();
         void renderVideoFrame();
+        void createCommandBuffers();
         void helperInitImage(){
             imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool);
         }
 
+        array<VkCommandBuffer, MAX_CONCURRENT_FRAMES> commandBuffers{};
+        array<VkFence, MAX_CONCURRENT_FRAMES> waitFences{};
+        void createSynchronizationPrimitives();
     private:
         int viewportWidth, viewportHeight;
 
@@ -326,4 +384,16 @@ class Viewport3D {
 
             return pipelineInfo;
         }
+
+        VkPipelineShaderStageCreateInfo createShaderStageInfo(VkShaderModule shaderModule){
+            VkPipelineShaderStageCreateInfo stageInfo{};
+            stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stageInfo.module = shaderModule;
+            stageInfo.pName = "main";
+
+            return stageInfo;
+        }
+
+        void HandleRenderViewport(uint32_t width, uint32_t height);
 };

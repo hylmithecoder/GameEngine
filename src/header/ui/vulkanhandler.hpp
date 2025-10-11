@@ -43,6 +43,25 @@ class VulkanHandler {
         double currentTime, duration, fps = 0.0;
         AVCodecContext* audioCodecContext = nullptr;
 
+        VkPhysicalDeviceMemoryProperties deviceMemoryProperties{};
+        uint32_t getMemoryTypeIndex(uint32_t typeBits, VkMemoryPropertyFlags properties)
+        {
+            // Iterate over all memory types available for the device used in this example
+            for (uint32_t i = 0; i < deviceMemoryProperties.memoryTypeCount; i++)
+            {
+                if ((typeBits & 1) == 1)
+                {
+                    if ((deviceMemoryProperties.memoryTypes[i].propertyFlags & properties) == properties)
+                    {
+                        return i;
+                    }
+                }
+                typeBits >>= 1;
+            }
+
+            throw "Could not find a suitable memory type!";
+        }
+
     private:
         VkDevice currentDevice;
         VkPhysicalDevice currentPhysicalDevice;

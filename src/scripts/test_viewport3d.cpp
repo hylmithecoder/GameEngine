@@ -478,10 +478,15 @@ void Viewport3D::Update(ImGuiIO& io){
             }
 
             RenderOffscreen(viewportWidth, viewportHeight);
+            try {
+                HandleRenderViewport(viewportWidth, viewportHeight);
+            } catch (const exception& e){
+                Logger::Log("Error in HandleRenderViewport: " + string(e.what()), LogLevel::CRASH);
+            }
             DrawViewport3D();
             DrawImage();
             videoPlayerUI();
-            updateUniformBuffer();
+            // updateUniformBuffer();
 
             ImGui::End();
             ImGui::EndFrame();
@@ -571,6 +576,7 @@ vector<char> Viewport3D::readFile(const string& filename) {
     if (!file.is_open()) throw runtime_error("Failed to open file: " + filename);
     size_t fileSize = (size_t)file.tellg();
     vector<char> buffer(fileSize);
+    // cout << "Buffer data: " << (buffer.data(), fileSize) << endl;
     file.seekg(0);
     file.read(buffer.data(), fileSize);
     file.close();
@@ -587,6 +593,8 @@ VkShaderModule Viewport3D::createShaderModule(const vector<char>& code) {
     if (vkCreateShaderModule(g_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
         throw runtime_error("Failed to create shader module!");
     }
+
+    // delete[] code.data();
     return shaderModule;
 }
 
@@ -704,18 +712,94 @@ void Viewport3D::createRenderPass() {
     }
 }
 
+void Viewport3D::setupDepthStencil(uint32_t width, uint32_t height)
+	{
+		// Create an optimal image used as the depth stencil attachment
+		VkImageCreateInfo imageCI{};
+		imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageCI.imageType = VK_IMAGE_TYPE_2D;
+		imageCI.format = depthFormat;
+		// Use example's height and width
+		imageCI.extent = { width, height, 1 };
+		imageCI.mipLevels = 1;
+		imageCI.arrayLayers = 1;
+		imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		check_vk_result(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
+
+        VkPhysicalDeviceMemoryProperties memProperties;
+        vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+		// Allocate memory for the image (device local) and bind it to our image
+		VkMemoryAllocateInfo memAlloc{};
+		memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		VkMemoryRequirements memReqs;
+		vkGetImageMemoryRequirements(g_Device, depthStencil.image, &memReqs);
+		memAlloc.allocationSize = memReqs.size;
+		memAlloc.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		check_vk_result(vkAllocateMemory(g_Device, &memAlloc, nullptr, &depthStencil.memory));
+		check_vk_result(vkBindImageMemory(g_Device, depthStencil.image, depthStencil.memory, 0));
+
+		// Create a view for the depth stencil image
+		// Images aren't directly accessed in Vulkan, but rather through views described by a subresource range
+		// This allows for multiple views of one image with differing ranges (e.g. for different layers)
+		VkImageViewCreateInfo depthStencilViewCI{};
+		depthStencilViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		depthStencilViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		depthStencilViewCI.format = depthFormat;
+		depthStencilViewCI.subresourceRange = {};
+		depthStencilViewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		// Stencil aspect should only be set on depth + stencil formats (VK_FORMAT_D16_UNORM_S8_UINT..VK_FORMAT_D32_SFLOAT_S8_UINT)
+		if (depthFormat >= VK_FORMAT_D16_UNORM_S8_UINT) {
+			depthStencilViewCI.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+		}
+		depthStencilViewCI.subresourceRange.baseMipLevel = 0;
+		depthStencilViewCI.subresourceRange.levelCount = 1;
+		depthStencilViewCI.subresourceRange.baseArrayLayer = 0;
+		depthStencilViewCI.subresourceRange.layerCount = 1;
+		depthStencilViewCI.image = depthStencil.image;
+		check_vk_result(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
+	}
+
+void Viewport3D::setupFrameBuffer(uint32_t width, uint32_t height)
+	{
+		// Create a frame buffer for every image in the swapchain
+		framebuffers.resize(images.size());
+		for (size_t i = 0; i < framebuffers.size(); i++)
+		{
+			std::array<VkImageView, 2> attachments{};
+			// Color attachment is the view of the swapchain image
+			attachments[0] = imageViews[i];
+			// Depth/Stencil attachment is the same for all frame buffers due to how depth works with current GPUs
+			attachments[1] = depthStencil.imageView;         
+
+			VkFramebufferCreateInfo frameBufferCI{};
+			frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			// All frame buffers use the same renderpass setup
+			frameBufferCI.renderPass = renderPass;
+			frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
+			frameBufferCI.pAttachments = attachments.data();
+			frameBufferCI.width = width;
+			frameBufferCI.height = height;
+			frameBufferCI.layers = 1;
+			// Create the framebuffer
+			check_vk_result(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
+		}
+	}
+
 // Parent Step2 for pipeline
 void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
-    auto vertShaderCode = readFile(vertShaderPath);
-    auto fragShaderCode = readFile(fragShaderPath);
-    Debug::Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
-    Debug::Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
+    vector<char> vertShaderCode = readFile(vertShaderPath);
+    vector<char> fragShaderCode = readFile(fragShaderPath);
+    // Debug::Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
+    // Debug::Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
     // cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
     // cout << "fragshader code: " << fragShaderCode.capacity() << endl;
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-    Debug::Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
-    Debug::Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
+    // Debug::Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
+    // Debug::Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
     // cout << "Vertshader module: " << vertShaderModule << endl;
     // cout << "fragshader module: " << fragShaderModule << endl;
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -738,25 +822,25 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     bindingDescription.stride = sizeof(float) * 9; // 3 for pos + 3 for color + 3 for normal
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+    array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
     
     // Position
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
     attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[0].offset = 0;
+    attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
     // Color
     attributeDescriptions[1].binding = 0;
     attributeDescriptions[1].location = 1;
     attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[1].offset = sizeof(float) * 3;
+    attributeDescriptions[1].offset = offsetof(Vertex, color);
 
     // Normal
-    attributeDescriptions[2].binding = 0;
-    attributeDescriptions[2].location = 2;
-    attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[2].offset = sizeof(float) * 6;
+    // attributeDescriptions[2].binding = 0;
+    // attributeDescriptions[2].location = 2;
+    // attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+    // attributeDescriptions[2].offset = sizeof(float) * 6;
 
     // Vertex input state (sementara kosong, nanti diisi dari model .obj)
     // VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
@@ -767,7 +851,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.vertexAttributeDescriptionCount = 2;
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -824,6 +908,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     // Update pipeline layout to include uniform buffer
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	pipelineLayoutInfo.pNext = nullptr;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
@@ -832,10 +917,12 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
         throw runtime_error("Failed to create pipeline layout!");
     }
 
-
     VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending);
 
     Debug::Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
+    // cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
+    //      << ", Layout: " << reinterpret_cast<void*>(pipelineInfo.layout) 
+    //      << "\nRender Pass: " << pipelineInfo.renderPass << endl;
     Debug::Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
     // cout << "Renderpass: " << renderPass << endl;
     // cout << "Pipeline info: " << pipelineInfo.pStages << endl;
@@ -888,93 +975,239 @@ void Viewport3D::CreateOffscreenPipeline() {
     // TODO: load SPIR-V shaders & buat graphicsPipeline (binding vertex, input layout, dsb)
 }
 
-// void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
-//     // Validasi resources sebelum render
-//     if (graphicsPipeline == VK_NULL_HANDLE) {
-//         Logger::Log("Error: Graphics pipeline not created!", LogLevel::CRASH);
-//         return;
-//     }
+void Viewport3D::createSynchronizationPrimitives()
+	{
+		// Fences are used to check draw command buffer completion on the host
+		for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {		
+			VkFenceCreateInfo fenceCI{};
+			fenceCI.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+			// Create the fences in signaled state (so we don't wait on first render of each command buffer)
+			fenceCI.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+			// Fence used to ensure that command buffer has completed exection before using it again
+			check_vk_result(vkCreateFence(g_Device, &fenceCI, nullptr, &waitFences[i]));
+		}
+		// Semaphores are used for correct command ordering within a queue
+		// Used to ensure that image presentation is complete before starting to submit again
+		presentCompleteSemaphores.resize(MAX_CONCURRENT_FRAMES);
+		for (auto& semaphore : presentCompleteSemaphores) {
+			VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+			check_vk_result(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
+		}
+		// Render completion
+		// Semaphore used to ensure that all commands submitted have been finished before submitting the image to the queue
+		renderCompleteSemaphores.resize(g_SwapChainRebuild);
+		for (auto& semaphore : renderCompleteSemaphores) {
+			VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+			check_vk_result(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
+		}
+}
+
+void Viewport3D::glm4Deserealize(const glm::mat4& targetMat4){
+		for(int i = 0; i < 4; i++) {
+			for(int j = 0; j < 4; j++) {
+				std::cout << targetMat4[i][j] << " ";
+			}
+			std::cout << "\n";
+		}
+		std::cout << std::endl;
+	}
+
+void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
+    // Validasi resources sebelum render
+    if (graphicsPipeline == VK_NULL_HANDLE) {
+        cerr << "Error: Graphics pipeline not created!" << endl;
+        return;
+    }
     
-//     if (renderPass == VK_NULL_HANDLE) {
-//         Logger::Log("Error: Render pass not created!", LogLevel::CRASH);
-//         return;
-//     }
+    if (renderPass == VK_NULL_HANDLE) {
+        cerr << "Error: Render pass not created!" << endl;
+        return;
+    }
     
-//     if (vertexBuffer == VK_NULL_HANDLE) {
-//         Logger::Log("Error: Vertex buffer not created!", LogLevel::CRASH);
-//         return;
-//     }
+    if (vertexBuffer == VK_NULL_HANDLE) {
+        cerr << "Error: Vertex buffer not created!" << endl;
+        return;
+    }
     
-//     // if (uniformDescriptorSet.empty()) {
-//     //     Logger::Log("Error: Descriptor sets not created!", LogLevel::CRASH);
-//     //     return;
-//     // }
+    // if (uniformDescriptorSet.empty()) {
+    //     Logger::Log("Error: Descriptor sets not created!", LogLevel::CRASH);
+    //     return;
+    // }
     
-//     if (camera == nullptr) {
-//         Logger::Log("Error: Camera not initialized!", LogLevel::CRASH);
-//         return;
-//     }
+    if (offscreenCmdBuffer == VK_NULL_HANDLE) {
+        // Create command buffer if not exists
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool = offscreenCommandPool;
+        allocInfo.commandBufferCount = 1;
+
+        if (vkAllocateCommandBuffers(g_Device, &allocInfo, &offscreenCmdBuffer) != VK_SUCCESS) {
+            Logger::Log("Failed to allocate command buffer!", LogLevel::CRASH);
+            return;
+        }
+    }
+
+    if (uniformBuffers[currentFrame].buffer == VK_NULL_HANDLE) {
+        Logger::Log("Error: Uniform buffer not created!", LogLevel::CRASH);
+        return;
+    }
+
+    uint32_t imageIndex;
+
+    if (framebuffers.empty()) {
+        Logger::Log("Error: Framebuffers not created!", LogLevel::CRASH);
+        return;
+    }
     
-//     // Update uniform buffer dengan camera matrices
-//     UniformBufferObject ubo{};
-//     ubo.model = glm::mat4(1.0f); // Identity matrix
-//     ubo.view = camera->GetViewMatrix();
-//     ubo.proj = camera->GetProjectionMatrix((float)width / (float)height, 0.1f, 100.0f);
-    
-//     // Flip Y axis untuk Vulkan
-//     ubo.proj[1][1] *= -1;
-    
-//     // Copy UBO ke uniform buffer
-//     void* data;
-//     vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
-//     memcpy(data, &ubo, sizeof(ubo));
-//     vkUnmapMemory(g_Device, uniformBufferMemory);
-    
-//     // Begin command buffer
-//     VkCommandBufferBeginInfo beginInfo{};
-//     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-//     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    
-//     if (vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo) != VK_SUCCESS) {
-//         Logger::Log("Failed to begin recording command buffer!", LogLevel::CRASH);
-//         return;
-//     }
-    
-//     // Begin render pass
-//     VkRenderPassBeginInfo renderPassInfo{};
-//     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-//     renderPassInfo.renderPass = renderPass;
-//     renderPassInfo.framebuffer = offscreenFramebuffer;
-//     renderPassInfo.renderArea.offset = {0, 0};
-//     renderPassInfo.renderArea.extent = {width, height};
-    
-//     VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-//     renderPassInfo.clearValueCount = 1;
-//     renderPassInfo.pClearValues = &clearColor;
-    
-//     vkCmdBeginRenderPass(offscreenCmdBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    
-//     // Bind pipeline
-//     vkCmdBindPipeline(offscreenCmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    
-//     // Bind vertex buffer
-//     VkBuffer vertexBuffers[] = {vertexBuffer};
-//     VkDeviceSize offsets[] = {0};
-//     vkCmdBindVertexBuffers(offscreenCmdBuffer, 0, 1, vertexBuffers, offsets);
-    
-//     // Bind descriptor set
-//     vkCmdBindDescriptorSets(offscreenCmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-//                            pipelineLayout, 0, 1, &uniformDescriptorSet, 0, nullptr);
-    
-//     // Draw (assuming you have vertex count)
-//     vkCmdDraw(offscreenCmdBuffer, vertexCount, 1, 0, 0);
-    
-//     vkCmdEndRenderPass(offscreenCmdBuffer);
-    
-//     if (vkEndCommandBuffer(offscreenCmdBuffer) != VK_SUCCESS) {
-//         Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
-//     }
-// }
+    try {
+        vkWaitForFences(g_Device, 1, &waitFences[currentFrame], VK_TRUE, UINT64_MAX);
+        check_vk_result(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
+
+        // Update uniform buffer dengan camera matrices
+        ShaderData shaderData{};
+        shaderData.modelMatrix = glm::mat4(1.0f); // Identity matrix
+        shaderData.viewMatrix = camera.matrices.view;
+        shaderData.projectionMatrix = camera.matrices.perspective;
+		cout << "Projection Matrix:\n";
+		glm4Deserealize(shaderData.projectionMatrix);
+		cout << "View Matrix:\n";
+		glm4Deserealize(shaderData.viewMatrix);
+		cout << "Model Matrix:\n";
+		glm4Deserealize(shaderData.modelMatrix);
+        
+        // Flip Y axis untuk Vulkan
+        // shaderData.projectionMatrix[1][1] *= -1;
+        
+        // Copy UBO ke uniform buffer
+        // void* data;
+        // vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ShaderData), 0, &data);
+        cout << "Will check method memcpy..." << endl;
+        cout << "Mapped Uniform Buffer: " << uniformBuffers[currentFrame].mapped << endl;
+        // cout << "Shader data: " << reinterpret_cast<uintptr_t>(shaderData) << endl;
+        memcpy(uniformBuffers[currentFrame].mapped, &shaderData, sizeof(ShaderData));
+        // vkUnmapMemory(g_Device, uniformBufferMemory);
+
+		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+        
+		// VkCommandBufferBeginInfo cmdBufInfo{};
+		// cmdBufInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        
+        // Begin command buffer
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        
+        VkClearValue clearValues[2]{};
+        clearValues[0].color = { { 0.0f, 0.0f, 0.2f, 1.0f } };
+        clearValues[1].depthStencil = { 1.0f, 0 };
+
+        // if (vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo) != VK_SUCCESS) {
+        //     Logger::Log("Failed to begin recording command buffer!", LogLevel::CRASH);
+        //     return;
+        // }
+        
+        // Begin render pass
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		renderPassInfo.pNext = nullptr;
+        renderPassInfo.renderPass = renderPass;
+        renderPassInfo.framebuffer = offscreenFramebuffer;
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = {width, height};    
+        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.pClearValues = clearValues;
+        renderPassInfo.framebuffer = framebuffers[imageIndex];
+        
+		const VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
+		check_vk_result(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+
+        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        
+		VkViewport viewport{};
+		viewport.height = (float)height;
+		viewport.width = (float)width;
+		viewport.minDepth = (float)0.0f;
+		viewport.maxDepth = (float)1.0f;
+		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+        
+        VkRect2D scissor{};
+		scissor.extent.width = width;
+		scissor.extent.height = height;
+		scissor.offset.x = 0;
+		scissor.offset.y = 0;
+		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+        // Bind descriptor set
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                            pipelineLayout, 0, 1, &uniformBuffers[currentFrame].descriptorSet, 0, nullptr);
+
+        // Bind pipeline
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+        // Bind vertex buffer
+        VkBuffer vertexBuffers[] = {vertexBuffer};
+        VkDeviceSize offsets[1]{0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
+        
+        
+		// Bind triangle index buffer
+		vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+		// Draw indexed triangle
+		vkCmdDrawIndexed(commandBuffer, indices.count, 1, 0, 0, 0);
+
+		vkCmdEndRenderPass(commandBuffer);
+
+        // Draw (assuming you have vertex count)
+        // vkCmdDraw(offscreenCmdBuffer, vertexCount, 1, 0, 0);
+        
+        // vkCmdEndRenderPass(offscreenCmdBuffer);
+        
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
+        }
+
+		VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+        // Submit command buffer
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+		submitInfo.pWaitDstStageMask = &waitStageMask;      // Pointer to the list of pipeline stages that the semaphore waits will occur at
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        // Semaphore to wait upon before the submitted command buffer starts executing
+		submitInfo.pWaitSemaphores = &presentCompleteSemaphores[currentFrame];
+		submitInfo.waitSemaphoreCount = 1;
+		// Semaphore to be signaled when command buffers have completed
+		submitInfo.pSignalSemaphores = &renderCompleteSemaphores[imageIndex];
+		submitInfo.signalSemaphoreCount = 1;
+
+        VkResult result = vkQueueSubmit(g_Queue, 1, &submitInfo, waitFences[currentFrame]);
+        if (result != VK_SUCCESS) {
+            Logger::Log("Failed to submit command buffer!", LogLevel::CRASH);
+            return;
+        }
+
+        VkPresentInfoKHR presentInfo{};
+		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+		presentInfo.waitSemaphoreCount = 1;
+		presentInfo.pWaitSemaphores = &renderCompleteSemaphores[imageIndex];
+		presentInfo.swapchainCount = 1;
+		// presentInfo.pSwapchains = &swapChain.swapChain;
+		presentInfo.pImageIndices = &imageIndex;
+		result = vkQueuePresentKHR(g_Queue, &presentInfo);
+
+        // Wait for rendering to complete
+        check_vk_result(vkQueueWaitIdle(g_Queue));
+
+        currentFrame = (currentFrame + 1) % MAX_CONCURRENT_FRAMES;
+    } catch (const exception& e){
+        cerr << "HandleRenderViewport Error: " << e.what() << endl;
+    }
+	
+}
 
 void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     // allocate command buffer (single-use)
@@ -1002,8 +1235,8 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     // Bind pipeline & draw (segitiga)
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    // vkCmdDraw(cmd, 3, 1, 0, 0);
 
     vkCmdEndRenderPass(cmd);
 
@@ -1081,11 +1314,11 @@ void Viewport3D::videoPlayerUI(){
                 imageHandler.updateAudio();
             }
             else {
-                // if (imageHandler.fps <= 24) {
-                //     imageHandler.updateBothVideoAndAudio24fps();
-                // } else {
+                if (imageHandler.fps <= 24) {
+                    imageHandler.updateBothVideoAndAudio24fps();
+                } else {
                     imageHandler.updateBothVideoAndAudio();
-                // }
+                }
             }
         }
             renderVideoFrame();
@@ -1259,6 +1492,28 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
     }
 }
 
+uint32_t Viewport3D::FindMemoryType(VkMemoryRequirements memRequirements, VkPhysicalDeviceMemoryProperties memProperties, VkMemoryPropertyFlags properties) {
+    uint32_t memTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        bool typeSupported = (memRequirements.memoryTypeBits & (1 << i));
+        bool propertiesSupported = (memProperties.memoryTypes[i].propertyFlags & properties) == properties;
+        
+        if (typeSupported && propertiesSupported) {
+            memTypeIndex = i;
+            break;
+        }
+    }
+
+    if (memTypeIndex == UINT32_MAX) {
+        throw std::runtime_error("failed to find suitable memory type!");
+    }
+    else {
+        Logger::Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
+    }
+
+    return memTypeIndex;
+}
+
 VkBuffer Viewport3D::CreateBuffer(
     VkDeviceSize size,
     VkBufferUsageFlags usage,
@@ -1289,23 +1544,7 @@ VkBuffer Viewport3D::CreateBuffer(
     vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
 
     // Find suitable memory type
-    uint32_t memTypeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        bool typeSupported = (memRequirements.memoryTypeBits & (1 << i));
-        bool propertiesSupported = (memProperties.memoryTypes[i].propertyFlags & properties) == properties;
-        
-        if (typeSupported && propertiesSupported) {
-            memTypeIndex = i;
-            break;
-        }
-    }
-
-    if (memTypeIndex == UINT32_MAX) {
-        throw std::runtime_error("failed to find suitable memory type!");
-    }
-    else {
-        Logger::Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
-    }
+    uint32_t memTypeIndex = FindMemoryType(memRequirements, memProperties, properties);
 
     // Allocate memory
     VkMemoryAllocateInfo allocInfo{};
@@ -1329,7 +1568,43 @@ VkBuffer Viewport3D::CreateBuffer(
 }
 
 void Viewport3D::createUniformBuffers() {
-    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+    VkDeviceSize bufferSize = sizeof(ShaderData);
+
+    VkMemoryRequirements memReqs;
+
+	// Vertex shader uniform buffer block
+	VkBufferCreateInfo bufferInfo{};
+	VkMemoryAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.pNext = nullptr;
+	allocInfo.allocationSize = 0;
+	allocInfo.memoryTypeIndex = 0;
+
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.size = sizeof(ShaderData);
+	// This buffer will be used as a uniform buffer
+	bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    
+    for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
+			check_vk_result(vkCreateBuffer(g_Device, &bufferInfo, nullptr, &uniformBuffers[i].buffer));
+			// Get memory requirements including size, alignment and memory type
+			vkGetBufferMemoryRequirements(g_Device, uniformBuffers[i].buffer, &memReqs);
+			allocInfo.allocationSize = memReqs.size;
+			// Get the memory type index that supports host visible memory access
+			// Most implementations offer multiple memory types and selecting the correct one to allocate memory from is crucial
+			// We also want the buffer to be host coherent so we don't have to flush (or sync after every update.
+			// Note: This may affect performance so you might not want to do this in a real world application that updates buffers on a regular base
+			allocInfo.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+			// Allocate memory for the uniform buffer
+			check_vk_result(vkAllocateMemory(g_Device, &allocInfo, nullptr, &(uniformBuffers[i].memory)));
+			// Bind memory to buffer
+			check_vk_result(vkBindBufferMemory(g_Device, uniformBuffers[i].buffer, uniformBuffers[i].memory, 0));
+			// We map the buffer once, so we can update it without having to map it again
+			check_vk_result(vkMapMemory(g_Device, uniformBuffers[i].memory, 0, sizeof(ShaderData), 0, (void**)&uniformBuffers[i].mapped));
+		}
 
     CreateBuffer(
         bufferSize,
@@ -1339,6 +1614,21 @@ void Viewport3D::createUniformBuffers() {
         uniformBufferMemory
     );
 }
+
+void Viewport3D::createCommandBuffers()
+	{
+		// All command buffers are allocated from a command pool
+		VkCommandPoolCreateInfo commandPoolCI{};
+		commandPoolCI.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		commandPoolCI.queueFamilyIndex = g_QueueFamily;
+		commandPoolCI.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		check_vk_result(vkCreateCommandPool(g_Device, &commandPoolCI, nullptr, &commandPool));
+
+		// Allocate one command buffer per max. concurrent frame from above pool
+		VkCommandBufferAllocateInfo cmdBufAllocateInfo = commandBufferAllocateInfo(commandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, MAX_CONCURRENT_FRAMES);
+		check_vk_result(vkAllocateCommandBuffers(g_Device, &cmdBufAllocateInfo, commandBuffers.data()));
+	}
+
 
 void Viewport3D::createUniformDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
@@ -1350,6 +1640,7 @@ void Viewport3D::createUniformDescriptorSetLayout() {
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.pNext = nullptr;
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &uboLayoutBinding;
 
@@ -1359,79 +1650,86 @@ void Viewport3D::createUniformDescriptorSetLayout() {
 }
 
 void Viewport3D::createUniformDescriptorSets() {
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = g_DescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
+		for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool = g_DescriptorPool;
+            allocInfo.descriptorSetCount = 1;
+            allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
-    if (vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformDescriptorSet) != VK_SUCCESS) {
-        throw runtime_error("failed to allocate descriptor sets!");
-    }
+            check_vk_result(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
 
-    VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = uniformBuffer;
-    bufferInfo.offset = 0;
-    bufferInfo.range = sizeof(UniformBufferObject);
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = uniformBuffer;
+            bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(UniformBufferObject);
 
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = uniformDescriptorSet;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pBufferInfo = &bufferInfo;
+            VkWriteDescriptorSet descriptorWrite{};
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.dstSet = uniformBuffers[i].descriptorSet;
+            descriptorWrite.dstBinding = 0;
+            // descriptorWrite.dstArrayElement = 0;
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrite.descriptorCount = 1;
+            descriptorWrite.pBufferInfo = &bufferInfo;
 
-    vkUpdateDescriptorSets(g_Device, 1, &descriptorWrite, 0, nullptr);
+            vkUpdateDescriptorSets(g_Device, 1, &descriptorWrite, 0, nullptr);
+        }
 }
 
-void Viewport3D::updateUniformBuffer() {
-    static auto startTime = chrono::high_resolution_clock::now();
-    // Logger::Log("Start time: "+ to_string(startTime.time_since_epoch().count()), LogLevel::WARNING);
-    auto currentTime = chrono::high_resolution_clock::now();
-    float time = chrono::duration<float, chrono::seconds::period>
-        (currentTime - startTime).count();
+// void Viewport3D::updateUniformBuffer() {
+//     static auto startTime = chrono::high_resolution_clock::now();
+//     // Logger::Log("Start time: "+ to_string(startTime.time_since_epoch().count()), LogLevel::WARNING);
+//     auto currentTime = chrono::high_resolution_clock::now();
+//     float time = chrono::duration<float, chrono::seconds::period>
+//         (currentTime - startTime).count();
 
-    UniformBufferObject ubo{};
-    // Rotate model
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
-        glm::vec3(0.0f, 0.0f, 1.0f));
+//     UniformBufferObject ubo{};
+//     // Rotate model
+//     ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
+//         glm::vec3(0.0f, 0.0f, 1.0f));
     
-    // View matrix from camera
-    ubo.view = camera->GetViewMatrix();
+//     // View matrix from camera
+//     ubo.view = camera->GetViewMatrix();
     
-    // Projection matrix
-    ubo.proj = glm::perspective(glm::radians(45.0f), 
-        viewportWidth / (float) viewportHeight, 0.1f, 100.0f);
+//     // Projection matrix
+//     ubo.proj = glm::perspective(glm::radians(45.0f), 
+//         viewportWidth / (float) viewportHeight, 0.1f, 100.0f);
     
-    // Vulkan NDC uses different coordinate system
-    ubo.proj[1][1] *= -1;
+//     // Vulkan NDC uses different coordinate system
+//     ubo.proj[1][1] *= -1;
 
-    // Copy to uniform buffer
-    void* data;
-    vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
-    memcpy(data, &ubo, sizeof(ubo));
-    vkUnmapMemory(g_Device, uniformBufferMemory);
-}
+//     // Copy to uniform buffer
+//     void* data;
+//     vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
+//     memcpy(data, &ubo, sizeof(ubo));
+//     vkUnmapMemory(g_Device, uniformBufferMemory);
+// }
 
 // Add this method to create and fill vertex buffer
 void Viewport3D::createVertexBuffer() {
-    std::vector<Vertex> vertices = {
-        {{0.0f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{0.5f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}}
+    // Setup vertices
+    std::vector<Vertex> vertexBuffer{
+        { {  1.0f,  1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
+        { { -1.0f,  1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
+        { {  0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }
     };
-    Logger::Log("Vertex count: " + to_string(vertices.size()));
+    uint32_t vertexBufferSize = static_cast<uint32_t>(vertexBuffer.size()) * sizeof(Vertex);
 
-    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+    // Create vertex buffer
+    CreateBuffer(
+        vertexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        vertices.buffer,  // Store in class member
+        vertices.memory   // Store in class member
+    );
 
-    // Create staging buffer
+    // Create staging buffer for vertices
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
-    
     CreateBuffer(
-        bufferSize,
+        vertexBufferSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
@@ -1440,31 +1738,63 @@ void Viewport3D::createVertexBuffer() {
 
     // Copy vertex data to staging buffer
     void* data;
-    vkMapMemory(g_Device, stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), (size_t) bufferSize);
+    vkMapMemory(g_Device, stagingBufferMemory, 0, vertexBufferSize, 0, &data);
+    memcpy(data, vertexBuffer.data(), vertexBufferSize);
     vkUnmapMemory(g_Device, stagingBufferMemory);
 
-    // Create vertex buffer
+    // Setup indices
+    std::vector<uint32_t> indexBuffer{ 0, 1, 2 };
+    indices.count = static_cast<uint32_t>(indexBuffer.size());
+    uint32_t indexBufferSize = indices.count * sizeof(uint32_t);
+
+    // Create index buffer
     CreateBuffer(
-        bufferSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        indexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        vertexBuffer,
-        vertexBufferMemory
+        indices.buffer,  // Store in class member
+        indices.memory   // Store in class member
     );
 
-    // Copy from staging buffer to vertex buffer
+    // Create staging buffer for indices
+    VkBuffer indexStagingBuffer;
+    VkDeviceMemory indexStagingBufferMemory;
+    CreateBuffer(
+        indexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        indexStagingBuffer,
+        indexStagingBufferMemory
+    );
+
+    // Copy index data to staging buffer
+    vkMapMemory(g_Device, indexStagingBufferMemory, 0, indexBufferSize, 0, &data);
+    memcpy(data, indexBuffer.data(), indexBufferSize);
+    vkUnmapMemory(g_Device, indexStagingBufferMemory);
+
+    // Transfer buffers
     VkCommandBuffer commandBuffer = BeginSingleTimeCommands();
 
-    VkBufferCopy copyRegion{};
-    copyRegion.size = bufferSize;
-    vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertexBuffer, 1, &copyRegion);
+    // Copy vertices
+    VkBufferCopy vertexCopy{};
+    vertexCopy.size = vertexBufferSize;
+    vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertices.buffer, 1, &vertexCopy);
+
+    // Copy indices
+    VkBufferCopy indexCopy{};
+    indexCopy.size = indexBufferSize;
+    vkCmdCopyBuffer(commandBuffer, indexStagingBuffer, indices.buffer, 1, &indexCopy);
 
     EndSingleTimeCommands(commandBuffer);
 
-    // Cleanup staging buffer
+    // Cleanup staging buffers
     vkDestroyBuffer(g_Device, stagingBuffer, nullptr);
     vkFreeMemory(g_Device, stagingBufferMemory, nullptr);
+    vkDestroyBuffer(g_Device, indexStagingBuffer, nullptr);
+    vkFreeMemory(g_Device, indexStagingBufferMemory, nullptr);
+
+    // Store vertex count
+    vertexCount = static_cast<uint32_t>(vertexBuffer.size());
 }
 
 int main(int argc, char* argv[]){
@@ -1501,38 +1831,50 @@ int main(int argc, char* argv[]){
         // Langkah 2: Create render pass PERTAMA
         Logger::Log("Creating render pass...");
         viewport.createRenderPass();
+
+        viewport.setupDepthStencil(1280, 720);
+        viewport.setupFrameBuffer(1280, 720);
+
+        viewport.createSynchronizationPrimitives();
+        viewport.createCommandBuffers();
         
         // Langkah 3: Create offscreen resources
         Logger::Log("Creating offscreen resources...");
         viewport.CreateOffscreenCommandResources();
-
-        // init vulkan handler needed variabel
-        viewport.helperInitImage();
-        viewport.CreateOffscreenResources(1280, 720);
-        viewport.CreateOffscreenPipeline();
-        
-        // Langkah 4: Create descriptor set layout
-        Logger::Log("Creating uniform descriptor set layout...");
-        viewport.createUniformDescriptorSetLayout();
-        
-        // Langkah 5: Create graphics pipeline
-        Logger::Log("Creating graphics pipeline...");
-        viewport.createGraphicsPipeline("assets/shaders/vulkan/vert.spv", "assets/shaders/vulkan/frag.spv");
         
         // Langkah 6: Create buffers
         Logger::Log("Creating vertex buffer...");
         viewport.createVertexBuffer();
-        
+
         Logger::Log("Creating uniform buffers...");
         viewport.createUniformBuffers();
-        
+
+        // Langkah 4: Create descriptor set layout
+        Logger::Log("Creating uniform descriptor set layout...");
+        viewport.createUniformDescriptorSetLayout();
+
+        // init vulkan handler needed variabel
+        viewport.helperInitImage();
+        viewport.CreateOffscreenResources(1280, 720);
+
+        viewport.CreateOffscreenPipeline();           
+    
         Logger::Log("Creating uniform descriptor sets...");
         viewport.createUniformDescriptorSets();
         
         // Langkah 7: Initialize camera
-        Logger::Log("Initializing camera...");
-        if (viewport.camera == nullptr) {
-            viewport.camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
+        // Logger::Log("Initializing camera...");
+        // if (viewport.camera == nullptr) {
+        //     viewport.camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
+        // }
+
+        // Langkah 5: Create graphics pipeline
+        Logger::Log("Creating graphics pipeline...");
+        try {
+            viewport.createGraphicsPipeline("assets/shaders/vulkan/triangle.vert.spv", "assets/shaders/vulkan/triangle.frag.spv");
+        } catch (const exception e){
+            Logger::Log("PipeLine error: " + string(e.what()), LogLevel::CRASH);
+            throw e;
         }
         
         // Langkah 8: Update dan render
