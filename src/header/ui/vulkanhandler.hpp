@@ -1,6 +1,8 @@
 #pragma once
 #include <Debugger.hpp>
 #include <vulkan/vulkan.h>
+#include <xcb/xcb.h>
+#include <vulkan/vulkan_xcb.h>
 #include <SDL_audio.h>
 #include <SDL_vulkan.h>
 #include <SDL.h>

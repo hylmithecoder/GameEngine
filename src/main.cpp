@@ -16,10 +16,10 @@
 #include <Debugger.hpp>
 
 // Global state management
-std::atomic<bool> g_shutdown_requested{false};
+atomic<bool> g_shutdown_requested{false};
 
 // Global application manager
-std::unique_ptr<ApplicationManager> g_app;
+unique_ptr<ApplicationManager> g_app;
 
 // Signal handlers for proper cleanup
 void SignalHandler(int signal) {
@@ -32,7 +32,7 @@ void SignalHandler(int signal) {
         case SIGHUP:  signal_name = "SIGHUP"; break;
     }
     
-    Debug::Logger::Log("Received signal: " + std::string(signal_name) + " (" + std::to_string(signal) + ")");
+    Debug::Logger::Log("Received signal: " + string(signal_name) + " (" + to_string(signal) + ")");
     
     // Set shutdown flag
     g_shutdown_requested.store(true);
@@ -42,7 +42,7 @@ void SignalHandler(int signal) {
     }
     
     // Give some time for cleanup
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    this_thread::sleep_for(chrono::milliseconds(100));
     
     exit(signal);
 }
@@ -76,21 +76,21 @@ bool IsRunningInTerminal() {
 void PrintStartupInfo() {
     Debug::Logger::Log("=== Ilmee Editor Starting ===");
     Debug::Logger::Log("Platform: Linux");
-    Debug::Logger::Log("Terminal: " + std::string(IsRunningInTerminal() ? "Yes" : "No"));
+    Debug::Logger::Log("Terminal: " + string(IsRunningInTerminal() ? "Yes" : "No"));
     
     // Get process ID
-    Debug::Logger::Log("Process ID: " + std::to_string(getpid()));
+    Debug::Logger::Log("Process ID: " + to_string(getpid()));
     
     // Get user information
     char* user = getenv("USER");
     if (user) {
-        Debug::Logger::Log("User: " + std::string(user));
+        Debug::Logger::Log("User: " + string(user));
     }
     
     // Get display information
     char* display = getenv("DISPLAY");
     if (display) {
-        Debug::Logger::Log("Display: " + std::string(display));
+        Debug::Logger::Log("Display: " + string(display));
     } else {
         Debug::Logger::Log("Display: Not set (may be running headless)");
     }
@@ -98,7 +98,7 @@ void PrintStartupInfo() {
     // Check for Wayland
     char* wayland_display = getenv("WAYLAND_DISPLAY");
     if (wayland_display) {
-        Debug::Logger::Log("Wayland Display: " + std::string(wayland_display));
+        Debug::Logger::Log("Wayland Display: " + string(wayland_display));
     }
 }
 
@@ -118,13 +118,13 @@ bool CheckSystemRequirements() {
     SDL_GetVersion(&linked);
     
     Debug::Logger::Log("SDL Version - Compiled: " + 
-                      std::to_string(compiled.major) + "." + 
-                      std::to_string(compiled.minor) + "." + 
-                      std::to_string(compiled.patch));
+                      to_string(compiled.major) + "." + 
+                      to_string(compiled.minor) + "." + 
+                      to_string(compiled.patch));
     Debug::Logger::Log("SDL Version - Linked: " + 
-                      std::to_string(linked.major) + "." + 
-                      std::to_string(linked.minor) + "." + 
-                      std::to_string(linked.patch));
+                      to_string(linked.major) + "." + 
+                      to_string(linked.minor) + "." + 
+                      to_string(linked.patch));
     
     return true;
 }
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
     try {        
         // Create application manager
         Debug::Logger::Log("Creating application manager...");
-        g_app = std::make_unique<ApplicationManager>();
+        g_app = make_unique<ApplicationManager>();
         
         // Launch engine
         Debug::Logger::Log("Launching engine...");
@@ -180,8 +180,8 @@ int main(int argc, char* argv[]) {
         Debug::Logger::Log("=== Ilmee Editor Terminated Successfully ===");
         return 0;
         
-    } catch (const std::exception& e) {
-        Debug::Logger::Log("Unhandled exception: " + std::string(e.what()), Debug::LogLevel::CRASH);
+    } catch (const exception& e) {
+        Debug::Logger::Log("Unhandled exception: " + string(e.what()), Debug::LogLevel::CRASH);
         
         if (g_app) {
             try {

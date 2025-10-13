@@ -178,6 +178,8 @@ void Viewport3D::create_vk_surface()
 
 void Viewport3D::SetupVulkanWindow(ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR surface, int width, int height)
 {
+    viewportWidth = width;
+    viewportHeight = height;
     wd->Surface = surface;
 
     // Check for WSI support
@@ -251,11 +253,11 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
     // Print detailed device info for debugging
-    Debug::Logger::Log("\nEvaluating device: " + string(deviceProps.deviceName), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Device Type: " + to_string(deviceProps.deviceType), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Device ID: " + to_string(deviceProps.deviceID), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Vendor ID: " + to_string(deviceProps.vendorID), Debug::LogLevel::INFO);
-    Debug::Logger::Log("Driver Version: " + to_string(deviceProps.driverVersion), Debug::LogLevel::INFO);
+    Logger::Log("\nEvaluating device: " + string(deviceProps.deviceName), LogLevel::INFO);
+    Logger::Log("Device Type: " + to_string(deviceProps.deviceType), LogLevel::INFO);
+    Logger::Log("Device ID: " + to_string(deviceProps.deviceID), LogLevel::INFO);
+    Logger::Log("Vendor ID: " + to_string(deviceProps.vendorID), LogLevel::INFO);
+    Logger::Log("Driver Version: " + to_string(deviceProps.driverVersion), LogLevel::INFO);
 
     int score = 0;
 
@@ -274,7 +276,7 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
         if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
             hasComputeSupport = true;
             score += 500; // Bonus for compute support
-            Debug::Logger::Log("Device has compute support: +500 points", Debug::LogLevel::INFO);
+            Logger::Log("Device has compute support: +500 points", LogLevel::INFO);
             // cout << "Device has compute support" << endl;
             break;
         }
@@ -284,17 +286,17 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     switch(deviceProps.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
             score += 1000;
-            Debug::Logger::Log("Discrete GPU: +1000 points", Debug::LogLevel::INFO);
+            Logger::Log("Discrete GPU: +1000 points", LogLevel::INFO);
             // cout << "Discrete GPU: +1000 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
             score += 100;
-            Debug::Logger::Log("Integrated GPU: +100 points", Debug::LogLevel::INFO);
+            Logger::Log("Integrated GPU: +100 points", LogLevel::INFO);
             // cout << "Integrated GPU: +100 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
             score += 50;
-            Debug::Logger::Log("Virtual GPU: +50 points", Debug::LogLevel::INFO);
+            Logger::Log("Virtual GPU: +50 points", LogLevel::INFO);
             // cout << "Virtual GPU: +50 points" << endl;
             break;
         default:
@@ -312,22 +314,22 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     
     // Convert to GB and add to score
     score += static_cast<int>(maxHeapSize / (1024 * 1024 * 1024));
-    Debug::Logger::Log("Memory size score: +" + to_string(maxHeapSize / (1024 * 1024 * 1024)) + " points", Debug::LogLevel::INFO);
+    Logger::Log("Memory size score: +" + to_string(maxHeapSize / (1024 * 1024 * 1024)) + " points", LogLevel::INFO);
     // cout << "Memory size score: +" << (maxHeapSize / (1024 * 1024 * 1024)) << " points" << endl;
 
     // Check for specific features
     if (deviceFeatures.geometryShader) {
         score += 100;
-        Debug::Logger::Log("Has geometry shader: +100 points", Debug::LogLevel::INFO);
+        Logger::Log("Has geometry shader: +100 points", LogLevel::INFO);
         // cout << "Has geometry shader: +100 points" << endl;
     }
     if (deviceFeatures.tessellationShader) {
         score += 100;
-        Debug::Logger::Log("Has tessellation: +100 points", Debug::LogLevel::INFO);
+        Logger::Log("Has tessellation: +100 points", LogLevel::INFO);
         // cout << "Has tessellation: +100 points" << endl;
     }
 
-    Debug::Logger::Log("Final score: "+ to_string(score), Debug::LogLevel::INFO);
+    Logger::Log("Final score: "+ to_string(score), LogLevel::INFO);
     // cout << "Final score: " << score << endl;
     cout << "------------------------" << endl;
 
@@ -359,7 +361,7 @@ void Viewport3D::pickPhysicalDevice() {
         // physicalDevice = candidates.rbegin()->second;
         VkPhysicalDeviceProperties deviceProps;
         vkGetPhysicalDeviceProperties(g_PhysicalDevice, &deviceProps);
-        Debug::Logger::Log("Selected GPU: " + string(deviceProps.deviceName), Debug::LogLevel::INFO);
+        Logger::Log("Selected GPU: " + string(deviceProps.deviceName), LogLevel::INFO);
         // cout << "Selected GPU: " << deviceProps.deviceName << endl;
     } else {
         throw runtime_error("Failed to find a suitable GPU!");
@@ -670,9 +672,9 @@ void Viewport3D::CreateOffscreenCommandResources() {
         throw runtime_error("failed to create offscreen command pool");
     else
         Logger::Log("Offscreen command pool created", LogLevel::SUCCESS);
-    // Semaphore to signal offscreen completion
-    VkSemaphoreCreateInfo semInfo{};
-    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        // Semaphore to signal offscreen completion
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     if (vkCreateSemaphore(g_Device, &semInfo, nullptr, &offscreenSignalSemaphore) != VK_SUCCESS)
         throw runtime_error("failed to create offscreen semaphore");
     else 
@@ -681,35 +683,87 @@ void Viewport3D::CreateOffscreenCommandResources() {
 
 // Step 1 for pipeline
 void Viewport3D::createRenderPass() {
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = g_MainWindowData.SurfaceFormat.format;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        // Descriptors for the attachments used by this renderpass
+		std::array<VkAttachmentDescription, 2> attachments{};
 
-    VkAttachmentReference colorAttachmentRef{};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		// Color attachment
+		attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;                                  // Use the color format selected by the swapchain
+		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;                                 // We don't use multi sampling in this example
+		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;                            // Clear this attachment at the start of the render pass
+		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;                          // Keep its contents after the render pass is finished (for displaying it)
+		attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;                 // We don't use stencil, so don't care for load
+		attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;               // Same for store
+		attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;                       // Layout at render pass start. Initial doesn't matter, so we use undefined
+		attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;                   // Layout to which the attachment is transitioned when the render pass is finished
+		                                                                                // As we want to present the color buffer to the swapchain, we transition to PRESENT_KHR
+		// Depth attachment
+		attachments[1].format = depthFormat;                                           // A proper depth format is selected in the example base
+		attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;                           // Clear depth at start of first subpass
+		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;                     // We don't need depth after render pass has finished (DONT_CARE may result in better performance)
+		attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;                // No stencil
+		attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;              // No Stencil
+		attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;                      // Layout at render pass start. Initial doesn't matter, so we use undefined
+		attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL; // Transition to depth/stencil attachment
 
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
+		// Setup attachment references
+		VkAttachmentReference colorReference{};
+		colorReference.attachment = 0;                                    // Attachment 0 is color
+		colorReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Attachment layout used as color during the subpass
 
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
+		VkAttachmentReference depthReference{};
+		depthReference.attachment = 1;                                            // Attachment 1 is color
+		depthReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL; // Attachment used as depth/stencil used during the subpass
 
-    if (vkCreateRenderPass(g_Device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        throw runtime_error("Failed to create render pass!");
-    }
+		// Setup a single subpass reference
+		VkSubpassDescription subpassDescription{};
+		subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpassDescription.colorAttachmentCount = 1;                            // Subpass uses one color attachment
+		subpassDescription.pColorAttachments = &colorReference;                 // Reference to the color attachment in slot 0
+		subpassDescription.pDepthStencilAttachment = &depthReference;           // Reference to the depth attachment in slot 1
+		subpassDescription.inputAttachmentCount = 0;                            // Input attachments can be used to sample from contents of a previous subpass
+		subpassDescription.pInputAttachments = nullptr;                         // (Input attachments not used by this example)
+		subpassDescription.preserveAttachmentCount = 0;                         // Preserved attachments can be used to loop (and preserve) attachments through subpasses
+		subpassDescription.pPreserveAttachments = nullptr;                      // (Preserve attachments not used by this example)
+		subpassDescription.pResolveAttachments = nullptr;                       // Resolve attachments are resolved at the end of a sub pass and can be used for e.g. multi sampling
+
+		// Setup subpass dependencies
+		// These will add the implicit attachment layout transitions specified by the attachment descriptions
+		// The actual usage layout is preserved through the layout specified in the attachment reference
+		// Each subpass dependency will introduce a memory and execution dependency between the source and dest subpass described by
+		// srcStageMask, dstStageMask, srcAccessMask, dstAccessMask (and dependencyFlags is set)
+		// Note: VK_SUBPASS_EXTERNAL is a special constant that refers to all commands executed outside of the actual renderpass)
+		std::array<VkSubpassDependency, 2> dependencies{};
+
+		// Does the transition from final to initial layout for the depth an color attachments
+		// Depth attachment
+		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[0].dstSubpass = 0;
+		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		dependencies[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+		dependencies[0].dependencyFlags = 0;
+		// Color attachment
+		dependencies[1].srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[1].dstSubpass = 0;
+		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].srcAccessMask = 0;
+		dependencies[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+		dependencies[1].dependencyFlags = 0;
+
+		// Create the actual renderpass
+		VkRenderPassCreateInfo renderPassCI{};
+		renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		renderPassCI.attachmentCount = static_cast<uint32_t>(attachments.size());  // Number of attachments used by this render pass
+		renderPassCI.pAttachments = attachments.data();                            // Descriptions of the attachments used by the render pass
+		renderPassCI.subpassCount = 1;                                             // We only use one subpass in this example
+		renderPassCI.pSubpasses = &subpassDescription;                             // Description of that subpass
+		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size()); // Number of subpass dependencies
+		renderPassCI.pDependencies = dependencies.data();                          // Subpass dependencies used by the render pass
+		check_vk_result(vkCreateRenderPass(g_Device, &renderPassCI, nullptr, &renderPass));
+        Logger::Log("Created render pass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)), LogLevel::SUCCESS);
 }
 
 void Viewport3D::setupDepthStencil(uint32_t width, uint32_t height)
@@ -766,6 +820,7 @@ void Viewport3D::setupFrameBuffer(uint32_t width, uint32_t height)
 	{
 		// Create a frame buffer for every image in the swapchain
 		framebuffers.resize(images.size());
+        Logger::Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
 		for (size_t i = 0; i < framebuffers.size(); i++)
 		{
 			std::array<VkImageView, 2> attachments{};
@@ -783,8 +838,14 @@ void Viewport3D::setupFrameBuffer(uint32_t width, uint32_t height)
 			frameBufferCI.width = width;
 			frameBufferCI.height = height;
 			frameBufferCI.layers = 1;
+            cout << "Before creating Framebuffer: " << framebuffers[i] << endl;
+            // Logger::Log("Creating framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
 			// Create the framebuffer
 			check_vk_result(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
+            if (framebuffers[i] != VK_NULL_HANDLE) {
+                cout << "Framebuffer: " << framebuffers[i] << endl;
+                // Logger::Log("Created framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
+            }
 		}
 	}
 
@@ -792,14 +853,14 @@ void Viewport3D::setupFrameBuffer(uint32_t width, uint32_t height)
 void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
     vector<char> vertShaderCode = readFile(vertShaderPath);
     vector<char> fragShaderCode = readFile(fragShaderPath);
-    // Debug::Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
-    // Debug::Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
+    // Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
+    // Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
     // cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
     // cout << "fragshader code: " << fragShaderCode.capacity() << endl;
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-    // Debug::Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
-    // Debug::Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
+    // Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
+    // Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
     // cout << "Vertshader module: " << vertShaderModule << endl;
     // cout << "fragshader module: " << fragShaderModule << endl;
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -903,8 +964,6 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
-    // VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    // pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     // Update pipeline layout to include uniform buffer
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -919,11 +978,11 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
     VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending);
 
-    Debug::Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
+    Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
     // cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
     //      << ", Layout: " << reinterpret_cast<void*>(pipelineInfo.layout) 
     //      << "\nRender Pass: " << pipelineInfo.renderPass << endl;
-    Debug::Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
+    Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
     // cout << "Renderpass: " << renderPass << endl;
     // cout << "Pipeline info: " << pipelineInfo.pStages << endl;
 
@@ -931,18 +990,181 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
         throw runtime_error("Failed to create graphics pipeline!");
     }
     else {
-        Debug::Logger::Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
+        Logger::Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
         // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
     }
     vkDestroyShaderModule(g_Device, fragShaderModule, nullptr);
     vkDestroyShaderModule(g_Device, vertShaderModule, nullptr);
 }
 
+void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, bool fullscreen) {
+    // Store the current swap chain handle so we can use it later on to ease up recreation
+	VkSwapchainKHR oldSwapchain = swapChain;
+	std::cout << "Old swapchain: " << oldSwapchain << std::endl;
+
+	// Get physical device surface properties and formats
+	VkSurfaceCapabilitiesKHR surfCaps;
+	check_vk_result(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_PhysicalDevice, surface, &surfCaps));
+
+	VkExtent2D swapchainExtent = {};
+	// If width (and height) equals the special value 0xFFFFFFFF, the size of the surface will be set by the swapchain
+	if (surfCaps.currentExtent.width == (uint32_t)-1)
+	{
+		// If the surface size is undefined, the size is set to the size of the images requested
+		swapchainExtent.width = width;
+		swapchainExtent.height = height;
+	}
+	else
+	{
+		// If the surface size is defined, the swap chain size must match
+		swapchainExtent = surfCaps.currentExtent;
+		width = surfCaps.currentExtent.width;
+		height = surfCaps.currentExtent.height;
+	}
+
+
+	// Select a present mode for the swapchain
+	uint32_t presentModeCount;
+	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, NULL));
+	assert(presentModeCount > 0);
+
+	std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, presentModes.data()));
+
+	// The VK_PRESENT_MODE_FIFO_KHR mode must always be present as per spec
+	// This mode waits for the vertical blank ("v-sync")
+	VkPresentModeKHR swapchainPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+	// If v-sync is not requested, try to find a mailbox mode
+	// It's the lowest latency non-tearing present mode available
+	if (!vsync)
+	{
+		for (size_t i = 0; i < presentModeCount; i++)
+		{
+			if (presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+			{
+				swapchainPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+				break;
+			}
+			if (presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+			{
+				swapchainPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+			}
+		}
+	}
+
+	// Determine the number of images
+	uint32_t desiredNumberOfSwapchainImages = surfCaps.minImageCount + 1;
+	if ((surfCaps.maxImageCount > 0) && (desiredNumberOfSwapchainImages > surfCaps.maxImageCount))
+	{
+		desiredNumberOfSwapchainImages = surfCaps.maxImageCount;
+	}
+
+	// Find the transformation of the surface
+	VkSurfaceTransformFlagsKHR preTransform;
+	if (surfCaps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+	{
+		// We prefer a non-rotated transform
+		preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+	}
+	else
+	{
+		preTransform = surfCaps.currentTransform;
+	}
+
+	// Find a supported composite alpha format (not all devices support alpha opaque)
+	VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	// Simply select the first composite alpha format available
+	std::vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = {
+		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+	};
+	for (auto& compositeAlphaFlag : compositeAlphaFlags) {
+		if (surfCaps.supportedCompositeAlpha & compositeAlphaFlag) {
+			compositeAlpha = compositeAlphaFlag;
+			break;
+		};
+	}
+
+	VkSwapchainCreateInfoKHR swapchainCI = {};
+	swapchainCI.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+	swapchainCI.surface = surface;
+	swapchainCI.minImageCount = desiredNumberOfSwapchainImages;
+	swapchainCI.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+	swapchainCI.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+	swapchainCI.imageExtent = { swapchainExtent.width, swapchainExtent.height };
+	swapchainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	swapchainCI.preTransform = (VkSurfaceTransformFlagBitsKHR)preTransform;
+	swapchainCI.imageArrayLayers = 1;
+	swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	swapchainCI.queueFamilyIndexCount = 0;
+	swapchainCI.presentMode = swapchainPresentMode;
+	// Setting oldSwapChain to the saved handle of the previous swapchain aids in resource reuse and makes sure that we can still present already acquired images
+	swapchainCI.oldSwapchain = oldSwapchain;
+	// Setting clipped to VK_TRUE allows the implementation to discard rendering outside of the surface area
+	swapchainCI.clipped = VK_TRUE;
+	swapchainCI.compositeAlpha = compositeAlpha;
+
+	// Enable transfer source on swap chain images if supported
+	if (surfCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) {
+		swapchainCI.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	}
+
+	// Enable transfer destination on swap chain images if supported
+	if (surfCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
+		swapchainCI.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
+
+	check_vk_result(vkCreateSwapchainKHR(g_Device, &swapchainCI, nullptr, &swapChain));
+	std::cout << "Created swap chain with " << desiredNumberOfSwapchainImages << " images\n"
+	"swap chain details: " << swapChain << std::endl;
+	// If an existing swap chain is re-created, destroy the old swap chain and the ressources owned by the application (image views, images are owned by the swap chain)
+	if (oldSwapchain != VK_NULL_HANDLE) { 
+		for (auto i = 0; i < images.size(); i++) {
+			vkDestroyImageView(g_Device, imageViews[i], nullptr);
+		}
+		vkDestroySwapchainKHR(g_Device, oldSwapchain, nullptr);
+	}
+	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, nullptr));
+
+	// Get the swap chain images
+	images.resize(imageCount);
+	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, images.data()));
+	std::cout << "Image data: " << images.data() << std::endl;
+
+	// Get the swap chain buffers containing the image and imageview
+	imageViews.resize(imageCount);
+	for (auto i = 0; i < images.size(); i++)
+	{
+		VkImageViewCreateInfo colorAttachmentView = {};
+		colorAttachmentView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		colorAttachmentView.pNext = NULL;
+		colorAttachmentView.format = colorFormat;
+		colorAttachmentView.components = {
+			VK_COMPONENT_SWIZZLE_R,
+			VK_COMPONENT_SWIZZLE_G,
+			VK_COMPONENT_SWIZZLE_B,
+			VK_COMPONENT_SWIZZLE_A
+		};
+		colorAttachmentView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		colorAttachmentView.subresourceRange.baseMipLevel = 0;
+		colorAttachmentView.subresourceRange.levelCount = 1;
+		colorAttachmentView.subresourceRange.baseArrayLayer = 0;
+		colorAttachmentView.subresourceRange.layerCount = 1;
+		colorAttachmentView.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		colorAttachmentView.flags = 0;
+		colorAttachmentView.image = images[i];
+		check_vk_result(vkCreateImageView(g_Device, &colorAttachmentView, nullptr, &imageViews[i]));
+	}
+}
+
 void Viewport3D::CreateOffscreenPipeline() {
     // RenderPass minimal
     VkAttachmentDescription colorAttachment = createColorAttachment();
     
-    Debug::Logger::Log("Color attachment format: " + to_string(colorAttachment.format));
+    Logger::Log("Color attachment format: " + to_string(colorAttachment.format));
     // cout << "Color attachment format: " << colorAttachment.format << endl;
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
@@ -966,8 +1188,8 @@ void Viewport3D::CreateOffscreenPipeline() {
     VkImageView attachments[] = { offscreenImageView };
     VkFramebufferCreateInfo fbInfo = createFrameBuffer(offscreenRenderPass, attachments, viewportWidth, viewportHeight);
 
-    Debug::Logger::Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
-    // Debug::Logger::Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
+    Logger::Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
+    // Logger::Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
     // cout << "Framebuffer width: " << fbInfo.width << ", height: " << fbInfo.height << endl;
     // cout << "Framebuffer render pass: " << offscreenRenderPass << endl;
     vkCreateFramebuffer(g_Device, &fbInfo, nullptr, &offscreenFramebuffer);
@@ -995,7 +1217,8 @@ void Viewport3D::createSynchronizationPrimitives()
 		}
 		// Render completion
 		// Semaphore used to ensure that all commands submitted have been finished before submitting the image to the queue
-		renderCompleteSemaphores.resize(g_SwapChainRebuild);
+        cout << "Count Image size: " <<  images.size() << endl;
+		renderCompleteSemaphores.resize(images.size());
 		for (auto& semaphore : renderCompleteSemaphores) {
 			VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 			check_vk_result(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
@@ -1064,6 +1287,8 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         vkWaitForFences(g_Device, 1, &waitFences[currentFrame], VK_TRUE, UINT64_MAX);
         check_vk_result(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
 
+		VkResult result2 = vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        
         // Update uniform buffer dengan camera matrices
         ShaderData shaderData{};
         shaderData.modelMatrix = glm::mat4(1.0f); // Identity matrix
@@ -1082,7 +1307,8 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         // Copy UBO ke uniform buffer
         // void* data;
         // vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ShaderData), 0, &data);
-        cout << "Will check method memcpy..." << endl;
+        cout << "Current Frame : " << currentFrame << endl; 
+		std::cout << "Total uniform buffer: " << uniformBuffers.size() << std::endl;
         cout << "Mapped Uniform Buffer: " << uniformBuffers[currentFrame].mapped << endl;
         // cout << "Shader data: " << reinterpret_cast<uintptr_t>(shaderData) << endl;
         memcpy(uniformBuffers[currentFrame].mapped, &shaderData, sizeof(ShaderData));
@@ -1096,7 +1322,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         // Begin command buffer
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        // beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         
         VkClearValue clearValues[2]{};
         clearValues[0].color = { { 0.0f, 0.0f, 0.2f, 1.0f } };
@@ -1112,10 +1338,10 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 		renderPassInfo.pNext = nullptr;
         renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = offscreenFramebuffer;
-        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.offset.x = 0;
+        renderPassInfo.renderArea.offset.y = 0;
         renderPassInfo.renderArea.extent = {width, height};    
-        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.clearValueCount = 2;
         renderPassInfo.pClearValues = clearValues;
         renderPassInfo.framebuffer = framebuffers[imageIndex];
         
@@ -1131,6 +1357,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		viewport.maxDepth = (float)1.0f;
 		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         
+        cout << "Scissor step" << endl;
         VkRect2D scissor{};
 		scissor.extent.width = width;
 		scissor.extent.height = height;
@@ -1139,14 +1366,12 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
         // Bind descriptor set
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                            pipelineLayout, 0, 1, &uniformBuffers[currentFrame].descriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &uniformBuffers[currentFrame].descriptorSet, 0, nullptr);
 
         // Bind pipeline
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
         // Bind vertex buffer
-        VkBuffer vertexBuffers[] = {vertexBuffer};
         VkDeviceSize offsets[1]{0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         
@@ -1195,7 +1420,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		presentInfo.waitSemaphoreCount = 1;
 		presentInfo.pWaitSemaphores = &renderCompleteSemaphores[imageIndex];
 		presentInfo.swapchainCount = 1;
-		// presentInfo.pSwapchains = &swapChain.swapChain;
+		presentInfo.pSwapchains = &swapChain;
 		presentInfo.pImageIndices = &imageIndex;
 		result = vkQueuePresentKHR(g_Queue, &presentInfo);
 
@@ -1306,19 +1531,19 @@ void Viewport3D::videoPlayerUI(){
         if (!paused){
             if (isOnlyRender == true && isOnlyAd == false) {
                 // updateVideoFrame();
-                Debug::Logger::Log("Only Render Image", Debug::LogLevel::WARNING);
+                Logger::Log("Only Render Image", LogLevel::WARNING);
                 imageHandler.updateVideoFrame();
             }
             else if (isOnlyRender == false && isOnlyAd == true) {
-                // Debug::Logger::Log("Only Render audio", Debug::LogLevel::WARNING);
+                // Logger::Log("Only Render audio", LogLevel::WARNING);
                 imageHandler.updateAudio();
             }
             else {
-                if (imageHandler.fps <= 24) {
-                    imageHandler.updateBothVideoAndAudio24fps();
-                } else {
+                // if (imageHandler.fps <= 24) {
+                //     imageHandler.updateBothVideoAndAudio24fps();
+                // } else {
                     imageHandler.updateBothVideoAndAudio();
-                }
+                // }
             }
         }
             renderVideoFrame();
@@ -1632,7 +1857,7 @@ void Viewport3D::createCommandBuffers()
 
 void Viewport3D::createUniformDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
+    // uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1660,9 +1885,9 @@ void Viewport3D::createUniformDescriptorSets() {
             check_vk_result(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
 
             VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer = uniformBuffer;
-            bufferInfo.offset = 0;
-            bufferInfo.range = sizeof(UniformBufferObject);
+            bufferInfo.buffer = uniformBuffers[i].buffer;
+            // bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(ShaderData);
 
             VkWriteDescriptorSet descriptorWrite{};
             descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1830,12 +2055,13 @@ int main(int argc, char* argv[]){
         
         // Langkah 2: Create render pass PERTAMA
         Logger::Log("Creating render pass...");
+        viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight,  true, true);
+        viewport.createSynchronizationPrimitives();
         viewport.createRenderPass();
 
         viewport.setupDepthStencil(1280, 720);
         viewport.setupFrameBuffer(1280, 720);
 
-        viewport.createSynchronizationPrimitives();
         viewport.createCommandBuffers();
         
         // Langkah 3: Create offscreen resources

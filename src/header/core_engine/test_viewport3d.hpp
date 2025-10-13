@@ -5,8 +5,10 @@
 #include <map>
 #include <vulkanhandler.hpp>
 #include <fstream>
+using namespace Debug;
 
-#define MAX_CONCURRENT_FRAMES 2
+// #define MAX_CONCURRENT_FRAMES 2
+constexpr auto MAX_CONCURRENT_FRAMES = 2;
 
 class Viewport3D {
     public:
@@ -103,7 +105,10 @@ class Viewport3D {
         VkPipelineLayout pipelineLayout;
         VkPipeline graphicsPipeline;
         VkRenderPass renderPass;
-        VkSwapchainKHR swapChain;
+        VkSwapchainKHR swapChain {VK_NULL_HANDLE};
+
+        // Viewport
+        void createSwapChain(uint32_t& width, uint32_t& height, bool vsync, bool fullscreen);
         void createRenderPass();
         void createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath);
         VkShaderModule createShaderModule(const vector<char>& code);
@@ -115,6 +120,9 @@ class Viewport3D {
         void setupDepthStencil(uint32_t width, uint32_t height);
         void DrawViewport3D();
         VkFormat depthFormat;
+        vector<VkImage> images;
+        vector<VkImageView> imageViews;
+        uint32_t viewportWidth, viewportHeight;
 
         void glm4Deserealize(const glm::mat4& targetMat4);
         vector<VkSemaphore> presentCompleteSemaphores;
@@ -129,9 +137,9 @@ class Viewport3D {
         VkSampler offscreenSampler;
         VkFramebuffer offscreenFramebuffer;
         VkRenderPass offscreenRenderPass;
-
-        vector<VkImage> images;
-        vector<VkImageView> imageViews;
+        VkFormat colorFormat{};
+        VkColorSpaceKHR colorSpace{};
+        uint32_t imageCount{ 0 };
 
         struct {
             VkImageView imageView;
@@ -296,8 +304,8 @@ class Viewport3D {
         array<VkCommandBuffer, MAX_CONCURRENT_FRAMES> commandBuffers{};
         array<VkFence, MAX_CONCURRENT_FRAMES> waitFences{};
         void createSynchronizationPrimitives();
+
     private:
-        int viewportWidth, viewportHeight;
 
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
@@ -332,8 +340,8 @@ class Viewport3D {
 
         VkFramebufferCreateInfo createFrameBuffer(VkRenderPass& currentRenderPass, 
             VkImageView* currentImageView,
-            int& width, 
-            int& height
+            u_int32_t& width, 
+            u_int32_t& height
         )
         {
             VkFramebufferCreateInfo fbInfo{};
