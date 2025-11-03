@@ -31,42 +31,10 @@ class Viewport3D {
         };
 	    array<UniformBufferObject, MAX_CONCURRENT_FRAMES> uniformBuffers;
 
+        
         struct Vertex {
-            glm::vec3 pos;     // Position
-            glm::vec3 color;   // warna
-            glm::vec3 normal;  // vector
-
-            static VkVertexInputBindingDescription getBindingDescription() {
-                VkVertexInputBindingDescription bindingDescription{};
-                bindingDescription.binding = 0;
-                bindingDescription.stride = sizeof(Vertex);
-                bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-                return bindingDescription;
-            }
-
-            static array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-                array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
-                
-                // Position
-                attributeDescriptions[0].binding = 0;
-                attributeDescriptions[0].location = 0;
-                attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-                attributeDescriptions[0].offset = offsetof(Vertex, pos);
-                
-                // Color
-                attributeDescriptions[1].binding = 0;
-                attributeDescriptions[1].location = 1;
-                attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-                attributeDescriptions[1].offset = offsetof(Vertex, color);
-                
-                // Normal
-                attributeDescriptions[2].binding = 0;
-                attributeDescriptions[2].location = 2;
-                attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-                attributeDescriptions[2].offset = offsetof(Vertex, normal);
-
-                return attributeDescriptions;
-            }
+            float position[3];
+            float color[3];
         };
 
         struct {
@@ -116,15 +84,18 @@ class Viewport3D {
         void CreateOffscreenResources(int width, int height);
         void CreateOffscreenPipeline();
         void RenderOffscreen(uint32_t width, uint32_t height);
-        void setupFrameBuffer(uint32_t width, uint32_t height);
-        void setupDepthStencil(uint32_t width, uint32_t height);
+        void CreateFrameBuffer(uint32_t width, uint32_t height);
+        void CreateDepthStencil(uint32_t width, uint32_t height);
         void DrawViewport3D();
+        void recreateOffscreenResources(uint32_t width, uint32_t height);
         VkFormat depthFormat;
         vector<VkImage> images;
         vector<VkImageView> imageViews;
         uint32_t viewportWidth, viewportHeight;
+        glm::vec4 position;
+        glm::vec3 rotation = glm::vec3(0.0f, 0.0f, 0.0f);
 
-        void glm4Deserealize(const glm::mat4& targetMat4);
+        vector<glm::mat4> glm4Deserealize(const glm::mat4& targetMat4);
         vector<VkSemaphore> presentCompleteSemaphores;
         vector<VkSemaphore> renderCompleteSemaphores;
         vector<VkFramebuffer> framebuffers;
@@ -374,7 +345,8 @@ class Viewport3D {
             VkPipelineViewportStateCreateInfo& currentViewportState,
             VkPipelineRasterizationStateCreateInfo& currentRasterizerInfo,
             VkPipelineMultisampleStateCreateInfo& multisampling,
-            VkPipelineColorBlendStateCreateInfo& colorBlending
+            VkPipelineColorBlendStateCreateInfo& colorBlending,
+            VkPipelineDepthStencilStateCreateInfo& currentDepthStencilInfo
         ){
             VkGraphicsPipelineCreateInfo pipelineInfo{};
             pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -389,6 +361,8 @@ class Viewport3D {
             pipelineInfo.layout = pipelineLayout;
             pipelineInfo.renderPass = renderPass;
             pipelineInfo.subpass = 0;
+            pipelineInfo.pDepthStencilState = &currentDepthStencilInfo;
+            pipelineInfo.pNext = nullptr;
 
             return pipelineInfo;
         }

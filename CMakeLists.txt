@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 4.1)
 project(GameEngineSDL VERSION 1.0.0)
 
 # Set C++ standard

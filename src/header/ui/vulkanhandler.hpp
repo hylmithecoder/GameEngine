@@ -15,6 +15,7 @@
 #include <fstream>
 #include "FFmpegWrapper.hpp"
 using namespace std;
+using namespace ImGui;
 using namespace Debug;
 
 class VulkanHandler {

@@ -34,7 +34,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         const char* validation_layer = "VK_LAYER_KHRONOS_validation";
         uint32_t layer_count;
         vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
-        std::vector<VkLayerProperties> available_layers(layer_count);
+        vector<VkLayerProperties> available_layers(layer_count);
         vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
         
         bool validation_found = false;
@@ -214,8 +214,8 @@ void Viewport3D::SetupVulkanWindow(ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR su
 
 void Viewport3D::SetupImgui(){
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    CreateContext();
+    ImGuiIO& io = GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
@@ -372,34 +372,27 @@ void Viewport3D::pickPhysicalDevice() {
 }
 
 void Viewport3D::Events(){
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
+    {
+        ImGui_ImplSDL3_ProcessEvent(&event);
+        if (event.type == SDL_EVENT_QUIT)
+            isRunning = true;
+        else if (event.type == SDL_EVENT_KEY_DOWN){
+            if (event.key.key == SDLK_ESCAPE){
                 isRunning = true;
-            else if (event.type == SDL_EVENT_KEY_DOWN){
-                if (event.key.key == SDLK_ESCAPE){
-                    isRunning = true;
-                }
-             }
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
-                isRunning = true;
-        }
+            }
+            }
+        if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(mainWindow))
+            isRunning = true;
+    }
 }
 
 void Viewport3D::Update(ImGuiIO& io){
-    bool show_demo_window = false;
-    bool show_another_window = false;
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
-    // Main loop
-    // bool done = false;
     while (!isRunning)
     {
         try {
-                Events();
-            // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
+            Events();
             if (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_MINIMIZED)
             {
                 SDL_Delay(10);
@@ -422,101 +415,55 @@ void Viewport3D::Update(ImGuiIO& io){
                 g_MainWindowData.FrameIndex = 0;
                 g_SwapChainRebuild = false;
 
-                // >>> Tambahan penting: rebuild pipeline/objects ImGui sesuai render pass baru
                 check_vk_result(vkDeviceWaitIdle(g_Device));
             }
 
             // Start the Dear ImGui frame
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
-            ImGui::NewFrame();
+            NewFrame();
 
             ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
         
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(viewport->Pos);
-            ImGui::SetNextWindowSize(viewport->Size);
-            ImGui::SetNextWindowViewport(viewport->ID);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGuiViewport* viewport = GetMainViewport();
+            SetNextWindowPos(viewport->Pos);
+            SetNextWindowSize(viewport->Size);
+            SetNextWindowViewport(viewport->ID);
+            PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         
-            ImGui::Begin("DockSpace", nullptr, window_flags);
-            ImGui::PopStyleVar(2);
-            ImGuiID dockspace_id = ImGui::GetID("DockSpace");
+            Begin("DockSpace", nullptr, window_flags);
+            PopStyleVar(2);
+            ImGuiID dockspace_id = GetID("DockSpace");
 
-            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
-            if (show_demo_window)
-                ImGui::ShowDemoWindow(&show_demo_window);
-            {
-                static float f = 0.0f;
-                static int counter = 0;
-
-                ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
-
-                ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-                ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-                ImGui::Checkbox("Another Window", &show_another_window);
-
-                ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-                ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
-
-                if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                    counter++;
-                ImGui::SameLine();
-                ImGui::Text("counter = %d", counter);
-
-                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-                ImGui::End();
-
-                // DrawImguiViewport();
-            }
-
-            if (show_another_window)
-            {
-                ImGui::Begin("Another Window", &show_another_window);
-                if (ImGui::Button("Close Me"))
-                    show_another_window = false;
-                ImGui::End();
-            }
+            DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
             RenderOffscreen(viewportWidth, viewportHeight);
-            try {
-                HandleRenderViewport(viewportWidth, viewportHeight);
-            } catch (const exception& e){
-                Logger::Log("Error in HandleRenderViewport: " + string(e.what()), LogLevel::CRASH);
-            }
-            DrawViewport3D();
             DrawImage();
             videoPlayerUI();
-            // updateUniformBuffer();
+            DrawViewport3D();
 
-            ImGui::End();
-            ImGui::EndFrame();
-            // Rendering
-            ImGui::Render();
+            End();
+            EndFrame();
+            Render();
 
-            ImDrawData* main_draw_data = ImGui::GetDrawData();
+            ImDrawData* main_draw_data = GetDrawData();
             const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
-            // wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
-            // wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
-            // wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
-            // wd->ClearValue.color.float32[3] = clear_color.w;
             if (!main_is_minimized)
                 FrameRender(wd, main_draw_data);
                 FramePresent(wd);
-                // RenderOffscreen();
 
             // Update and Render additional Platform Windows
             if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
             {
-                ImGui::UpdatePlatformWindows();
-                ImGui::RenderPlatformWindowsDefault();
+                UpdatePlatformWindows();
+                RenderPlatformWindowsDefault();
             }
             vkDeviceWaitIdle(g_Device);
 
         }
-        catch (const std::exception& e) {
-            Logger::Log("Critical error in Update loop: " + std::string(e.what()), LogLevel::CRASH);
+        catch (const exception& e) {
+            Logger::Log("Critical error in Update loop: " + string(e.what()), LogLevel::CRASH);
             
             // Try to recover
             // vkDeviceWaitIdle(g_Device);
@@ -570,7 +517,6 @@ void Viewport3D::CleanupVulkan()
     // vkDestroyBuffer(g_Device, uniformBuffer, nullptr);
     // vkFreeMemory(g_Device, uniformBufferMemory, nullptr);
     // vkDestroyDescriptorSetLayout(g_Device, uniformDescriptorSetLayout, nullptr);
-
 }
 
 vector<char> Viewport3D::readFile(const string& filename) {
@@ -602,21 +548,22 @@ VkShaderModule Viewport3D::createShaderModule(const vector<char>& code) {
 
 
 void Viewport3D::CreateOffscreenResources(int width, int height) {
-    viewportWidth = width;
-    viewportHeight = height;
+    viewportWidth = 1280;
+    viewportHeight = 720;
     // Buat VkImage untuk warna
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    imageInfo.extent.width = width;
-    imageInfo.extent.height = height;
+    imageInfo.extent.width = viewportWidth;
+    imageInfo.extent.height = viewportHeight;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    // imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (vkCreateImage(g_Device, &imageInfo, nullptr, &offscreenImage) != VK_SUCCESS) {
         throw runtime_error("Failed to create offscreen image!");
@@ -684,7 +631,7 @@ void Viewport3D::CreateOffscreenCommandResources() {
 // Step 1 for pipeline
 void Viewport3D::createRenderPass() {
         // Descriptors for the attachments used by this renderpass
-		std::array<VkAttachmentDescription, 2> attachments{};
+		array<VkAttachmentDescription, 2> attachments{};
 
 		// Color attachment
 		attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;                                  // Use the color format selected by the swapchain
@@ -733,7 +680,7 @@ void Viewport3D::createRenderPass() {
 		// Each subpass dependency will introduce a memory and execution dependency between the source and dest subpass described by
 		// srcStageMask, dstStageMask, srcAccessMask, dstAccessMask (and dependencyFlags is set)
 		// Note: VK_SUBPASS_EXTERNAL is a special constant that refers to all commands executed outside of the actual renderpass)
-		std::array<VkSubpassDependency, 2> dependencies{};
+		array<VkSubpassDependency, 2> dependencies{};
 
 		// Does the transition from final to initial layout for the depth an color attachments
 		// Depth attachment
@@ -766,7 +713,7 @@ void Viewport3D::createRenderPass() {
         Logger::Log("Created render pass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)), LogLevel::SUCCESS);
 }
 
-void Viewport3D::setupDepthStencil(uint32_t width, uint32_t height)
+void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
 	{
 		// Create an optimal image used as the depth stencil attachment
 		VkImageCreateInfo imageCI{};
@@ -816,14 +763,14 @@ void Viewport3D::setupDepthStencil(uint32_t width, uint32_t height)
 		check_vk_result(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
 	}
 
-void Viewport3D::setupFrameBuffer(uint32_t width, uint32_t height)
+void Viewport3D::CreateFrameBuffer(uint32_t width, uint32_t height)
 	{
 		// Create a frame buffer for every image in the swapchain
 		framebuffers.resize(images.size());
         Logger::Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
 		for (size_t i = 0; i < framebuffers.size(); i++)
 		{
-			std::array<VkImageView, 2> attachments{};
+			array<VkImageView, 2> attachments{};
 			// Color attachment is the view of the swapchain image
 			attachments[0] = imageViews[i];
 			// Depth/Stencil attachment is the same for all frame buffers due to how depth works with current GPUs
@@ -880,7 +827,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     // Update vertex input state
     VkVertexInputBindingDescription bindingDescription{};
     bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(float) * 9; // 3 for pos + 3 for color + 3 for normal
+    bindingDescription.stride = sizeof(Vertex); // 3 for pos + 3 for color + 3 for normal
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
@@ -889,7 +836,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
     attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[0].offset = offsetof(Vertex, pos);
+    attributeDescriptions[0].offset = offsetof(Vertex, position);
 
     // Color
     attributeDescriptions[1].binding = 0;
@@ -907,6 +854,17 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     // VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     // vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencilStateCI{};
+    depthStencilStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencilStateCI.depthTestEnable = VK_TRUE;
+    depthStencilStateCI.depthWriteEnable = VK_TRUE;
+    depthStencilStateCI.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    depthStencilStateCI.depthBoundsTestEnable = VK_FALSE;
+    depthStencilStateCI.back.failOp = VK_STENCIL_OP_KEEP;
+    depthStencilStateCI.back.passOp = VK_STENCIL_OP_KEEP;
+    depthStencilStateCI.back.compareOp = VK_COMPARE_OP_ALWAYS;
+    depthStencilStateCI.stencilTestEnable = VK_FALSE;
+    depthStencilStateCI.front = depthStencilStateCI.back;
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -918,7 +876,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
+    // inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     VkViewport viewport{};
     viewport.x = 0.0f;
@@ -951,18 +909,16 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.pSampleMask = nullptr;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
-
+    VkPipelineColorBlendAttachmentState blendAttachmentState{};
+    blendAttachmentState.colorWriteMask = 0xf;
+    blendAttachmentState.blendEnable = VK_FALSE;
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.pAttachments = &blendAttachmentState;
 
     // Update pipeline layout to include uniform buffer
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -976,7 +932,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
         throw runtime_error("Failed to create pipeline layout!");
     }
 
-    VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending);
+    VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending, depthStencilStateCI);
 
     Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
     // cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
@@ -1000,7 +956,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, bool fullscreen) {
     // Store the current swap chain handle so we can use it later on to ease up recreation
 	VkSwapchainKHR oldSwapchain = swapChain;
-	std::cout << "Old swapchain: " << oldSwapchain << std::endl;
+	cout << "Old swapchain: " << oldSwapchain << endl;
 
 	// Get physical device surface properties and formats
 	VkSurfaceCapabilitiesKHR surfCaps;
@@ -1028,7 +984,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, NULL));
 	assert(presentModeCount > 0);
 
-	std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+	vector<VkPresentModeKHR> presentModes(presentModeCount);
 	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, presentModes.data()));
 
 	// The VK_PRESENT_MODE_FIFO_KHR mode must always be present as per spec
@@ -1075,7 +1031,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	// Find a supported composite alpha format (not all devices support alpha opaque)
 	VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 	// Simply select the first composite alpha format available
-	std::vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = {
+	vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = {
 		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
 		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
 		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
@@ -1095,7 +1051,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	swapchainCI.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
 	swapchainCI.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
 	swapchainCI.imageExtent = { swapchainExtent.width, swapchainExtent.height };
-	swapchainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	swapchainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 	swapchainCI.preTransform = (VkSurfaceTransformFlagBitsKHR)preTransform;
 	swapchainCI.imageArrayLayers = 1;
 	swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -1118,8 +1074,8 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	}
 
 	check_vk_result(vkCreateSwapchainKHR(g_Device, &swapchainCI, nullptr, &swapChain));
-	std::cout << "Created swap chain with " << desiredNumberOfSwapchainImages << " images\n"
-	"swap chain details: " << swapChain << std::endl;
+	cout << "Created swap chain with " << desiredNumberOfSwapchainImages << " images\n"
+	"swap chain details: " << swapChain << endl;
 	// If an existing swap chain is re-created, destroy the old swap chain and the ressources owned by the application (image views, images are owned by the swap chain)
 	if (oldSwapchain != VK_NULL_HANDLE) { 
 		for (auto i = 0; i < images.size(); i++) {
@@ -1132,7 +1088,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	// Get the swap chain images
 	images.resize(imageCount);
 	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, images.data()));
-	std::cout << "Image data: " << images.data() << std::endl;
+	cout << "Image data: " << images.data() << endl;
 
 	// Get the swap chain buffers containing the image and imageview
 	imageViews.resize(imageCount);
@@ -1225,16 +1181,21 @@ void Viewport3D::createSynchronizationPrimitives()
 		}
 }
 
-void Viewport3D::glm4Deserealize(const glm::mat4& targetMat4){
-		for(int i = 0; i < 4; i++) {
-			for(int j = 0; j < 4; j++) {
-				std::cout << targetMat4[i][j] << " ";
-			}
-			std::cout << "\n";
-		}
-		std::cout << std::endl;
-	}
+vector<glm::mat4> Viewport3D::glm4Deserealize(const glm::mat4& targetMat4){
+    vector<glm::mat4> currentGlm;
+    for(int i = 0; i < 4; i++) {
+        for(int j = 0; j < 4; j++) {
+            cout << targetMat4[i][j] << " ";
+            currentGlm.push_back(targetMat4[i][j]);
+            // cout << "Debuging: " << currentGlm.size();
+        }
+        cout << "\n";
+    }
+    cout << endl;
+    return currentGlm;
+}
 
+#pragma region Handle Render Viewport
 void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
     // Validasi resources sebelum render
     if (graphicsPipeline == VK_NULL_HANDLE) {
@@ -1251,12 +1212,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         cerr << "Error: Vertex buffer not created!" << endl;
         return;
     }
-    
-    // if (uniformDescriptorSet.empty()) {
-    //     Logger::Log("Error: Descriptor sets not created!", LogLevel::CRASH);
-    //     return;
-    // }
-    
+
     if (offscreenCmdBuffer == VK_NULL_HANDLE) {
         // Create command buffer if not exists
         VkCommandBufferAllocateInfo allocInfo{};
@@ -1286,9 +1242,11 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
     try {
         vkWaitForFences(g_Device, 1, &waitFences[currentFrame], VK_TRUE, UINT64_MAX);
         check_vk_result(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
-
+        // Text("Wait fences: %i", waitFences[currentFrame]);
+        cout << "Wait Fences: " << waitFences[currentFrame] << endl;
 		VkResult result2 = vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
         
+        check_vk_result(result2);
         // Update uniform buffer dengan camera matrices
         ShaderData shaderData{};
         shaderData.modelMatrix = glm::mat4(1.0f); // Identity matrix
@@ -1302,13 +1260,13 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		glm4Deserealize(shaderData.modelMatrix);
         
         // Flip Y axis untuk Vulkan
-        // shaderData.projectionMatrix[1][1] *= -1;
+        shaderData.projectionMatrix[1][1] *= -1;
         
         // Copy UBO ke uniform buffer
         // void* data;
         // vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ShaderData), 0, &data);
         cout << "Current Frame : " << currentFrame << endl; 
-		std::cout << "Total uniform buffer: " << uniformBuffers.size() << std::endl;
+		cout << "Total uniform buffer: " << uniformBuffers.size() << endl;
         cout << "Mapped Uniform Buffer: " << uniformBuffers[currentFrame].mapped << endl;
         // cout << "Shader data: " << reinterpret_cast<uintptr_t>(shaderData) << endl;
         memcpy(uniformBuffers[currentFrame].mapped, &shaderData, sizeof(ShaderData));
@@ -1316,13 +1274,9 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         
-		// VkCommandBufferBeginInfo cmdBufInfo{};
-		// cmdBufInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        
-        // Begin command buffer
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        // beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         
         VkClearValue clearValues[2]{};
         clearValues[0].color = { { 0.0f, 0.0f, 0.2f, 1.0f } };
@@ -1373,21 +1327,18 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
         // Bind vertex buffer
         VkDeviceSize offsets[1]{0};
+		cout << "Vertikal buffer: " << vertices.buffer << endl;
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         
         
 		// Bind triangle index buffer
+		cout << "Index buffer: " << indices.buffer << endl;
 		vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 		// Draw indexed triangle
 		vkCmdDrawIndexed(commandBuffer, indices.count, 1, 0, 0, 0);
 
 		vkCmdEndRenderPass(commandBuffer);
-
-        // Draw (assuming you have vertex count)
-        // vkCmdDraw(offscreenCmdBuffer, vertexCount, 1, 0, 0);
-        
-        // vkCmdEndRenderPass(offscreenCmdBuffer);
         
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
@@ -1395,7 +1346,6 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
 		VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-        // Submit command buffer
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.commandBufferCount = 1;
@@ -1433,6 +1383,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
     }
 	
 }
+#pragma endregion
 
 void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     // allocate command buffer (single-use)
@@ -1459,10 +1410,6 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Bind pipeline & draw (segitiga)
-    // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    // vkCmdDraw(cmd, 3, 1, 0, 0);
-
     vkCmdEndRenderPass(cmd);
 
     // End
@@ -1482,8 +1429,9 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     vkFreeCommandBuffers(g_Device, offscreenCommandPool, 1, &cmd);
 }
 
-// Draw viewport
 void Viewport3D::DrawViewport3D() {
+    static bool isShowViewport = true;
+    static float currentPosition[3] = { 0.0f, -1.0f, -2.5f }, currentRotation[3] = { 0.0f, 30.0f, 0.0f };
     static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
     
     // Initialize viewport texture descriptor set
@@ -1496,11 +1444,50 @@ void Viewport3D::DrawViewport3D() {
         );
     }
 
-    ImGui::Begin("3D Viewport");
-    ImGui::Text("This is a 3D viewport using Vulkan and ImGui.");
-    ImGui::Image((ImTextureID)viewportTexture, ImVec2(640, 480));
+    Begin("3D Viewport");
+    Text("This is a 3D viewport using Vulkan and ImGui.\nCamera Position: ");
+    SameLine();
+    DragFloat3("##Camera Position", currentPosition);
+    Text("Camera Rotation: ");
+    SameLine();
+    DragFloat3("##Camera Rotation", currentRotation);
+    position = glm::vec4(currentPosition[0], currentPosition[1], currentPosition[2], 0.0f);
+    rotation = glm::vec3(currentRotation[0], currentRotation[1], currentRotation[2]);
+    camera.setPosition(position);
+    camera.setRotation(rotation);
     showCurrentCameraPosition();
-    ImGui::End();
+    Text("Camera Rotation: (%.2f, %.2f, %.2f)", camera.rotation.x, camera.rotation.y, camera.rotation.z);
+    Checkbox("Show Viewport", &isShowViewport);
+    if (isShowViewport) {
+        HandleRenderViewport(viewportWidth, viewportHeight);
+    }
+    Image((ImTextureID)viewportTexture, ImVec2(640, 480));
+    
+    End();
+}
+
+void Viewport3D::recreateOffscreenResources(uint32_t width, uint32_t height) {
+    vkDeviceWaitIdle(g_Device);
+    
+    // Cleanup old resources
+    if (offscreenFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(g_Device, offscreenFramebuffer, nullptr);
+    }
+    if (offscreenImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(g_Device, offscreenImageView, nullptr);
+    }
+    if (offscreenImage != VK_NULL_HANDLE) {
+        vkDestroyImage(g_Device, offscreenImage, nullptr);
+    }
+    if (offscreenImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(g_Device, offscreenImageMemory, nullptr);
+    }
+
+    // Recreate offscreen resources
+    CreateOffscreenResources(width, height);
+    CreateDepthStencil(width, height);
+    CreateFrameBuffer(width, height);
+    
 }
 
 void Viewport3D::videoPlayerUI(){
@@ -1511,21 +1498,21 @@ void Viewport3D::videoPlayerUI(){
     static bool isOnlyRender = imageHandler.isOnlyRenderImage;
     static bool isOnlyAd = imageHandler.isOnlyAudio;
 
-    ImGui::Begin("Video Player");
-    ImGui::InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
-    ImGui::SameLine();
-    if (ImGui::Button("Open")) {
+    Begin("Video Player");
+    InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
+    SameLine();
+    if (Button("Open")) {
         if (strlen(videoPath) > 0) {
             imageHandler.OpenFileVideo(videoPath);
             paused = false;
         }
     }
 
-    ImGui::Checkbox("Loop Video", &loopVideo);
-    ImGui::SameLine();
-    ImGui::Checkbox("Only Render Image", &isOnlyRender);
-    ImGui::SameLine();
-    ImGui::Checkbox("Only Audio", &isOnlyAd);
+    Checkbox("Loop Video", &loopVideo);
+    SameLine();
+    Checkbox("Only Render Image", &isOnlyRender);
+    SameLine();
+    Checkbox("Only Audio", &isOnlyAd);
 
     if (imageHandler.isPlaying) {  
         if (!paused){
@@ -1540,40 +1527,40 @@ void Viewport3D::videoPlayerUI(){
             }
             else {
                 // if (imageHandler.fps <= 24) {
-                //     imageHandler.updateBothVideoAndAudio24fps();
+                    imageHandler.updateBothVideoAndAudio24fps();
                 // } else {
-                    imageHandler.updateBothVideoAndAudio();
+                //     imageHandler.updateBothVideoAndAudio();
                 // }
             }
         }
             renderVideoFrame();
 
-        ImGui::Separator();
-        if (ImGui::Button(paused ? "Play" : "Pause")) {
+        Separator();
+        if (Button(paused ? "Play" : "Pause")) {
                 paused = !paused;
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Stop")) {
+            SameLine();
+            if (Button("Stop")) {
                 av_seek_frame(imageHandler.formatContext, imageHandler.videoStream, 0, AVSEEK_FLAG_BACKWARD);
                 imageHandler.currentTime = 0;
                 paused = true;
             }
 
-            ImGui::Text("Time: %.2f / %.2f", imageHandler.currentTime, imageHandler.duration);
+            Text("Time: %.2f / %.2f", imageHandler.currentTime, imageHandler.duration);
 
             // Informasi video
-            ImGui::Text("Resolution: %dx%d | FPS: %.2f", 
+            Text("Resolution: %dx%d | FPS: %.2f", 
                         imageHandler.width, imageHandler.height, imageHandler.fps);
             if (!isOnlyRender | isOnlyAd) {
-                ImGui::Separator();
-                ImGui::Text("Frequency: %d | Channels: %d", 
+                Separator();
+                Text("Frequency: %d | Channels: %d", 
                         imageHandler.audioCodecContext->sample_rate, imageHandler.audioCodecContext->ch_layout.nb_channels);
             }
     } else {
-        ImGui::Text("No video loaded or playing.");
+        Text("No video loaded or playing.");
     }
 
-    ImGui::End();
+    End();
 }
 
 void Viewport3D::renderVideoFrame(){
@@ -1582,7 +1569,7 @@ void Viewport3D::renderVideoFrame(){
         float aspectRatio = static_cast<float>(imageHandler.width) / static_cast<float>(imageHandler.height);
         
         // Hitung dimensi tampilan
-        ImVec2 contentSize = ImGui::GetContentRegionAvail();
+        ImVec2 contentSize = GetContentRegionAvail();
         float displayWidth = contentSize.x;
         float displayHeight = displayWidth / aspectRatio;
         
@@ -1590,27 +1577,18 @@ void Viewport3D::renderVideoFrame(){
             displayHeight = contentSize.y;
             displayWidth = displayHeight * aspectRatio;
         }
-        
-        // Debug: Print display dimensions
-        // cout << "Display dimensions: " << displayWidth << "x" << displayHeight << endl;
-        
+
         // Pusatkan video di ruang yang tersedia  
         float posX = (contentSize.x - displayWidth) * 0.5f;
         float posY = (contentSize.y - displayHeight) * 0.5f;
         
-        ImGui::SetCursorPos(ImVec2(posX, posY));
-        
-        // Coba render dengan berbagai cara untuk test
-        
-        // Method 1: Current method
-        // ui::Image(reinterpret_cast<ImTextureID>(reinterpret_cast<void*>(static_cast<intptr_t>(videoPlayer->glTextureID))),
-        //          ImVec2(displayWidth, displayHeight));
-        
+        SetCursorPos(ImVec2(posX, posY));
+
         float w = displayWidth, h = displayHeight;
-        ImGui::Image((ImTextureID)imageHandler.getVideoDescriptorSet(), 
+        Image((ImTextureID)imageHandler.getVideoDescriptorSet(), 
                     ImVec2(w, h));
     } else {
-        ImGui::Text("No texture available");
+        Text("No texture available");
     }
 }
 
@@ -1621,9 +1599,29 @@ void Viewport3D::DrawImage()
     if (imguiTexture == VK_NULL_HANDLE){
         imguiTexture = imageHandler.LoadImage("assets/images/backgrounds/shiroko_bluearchive.jpg");
     }
-    ImGui::Begin("Image Test");
-    ImGui::Image((ImTextureID)imguiTexture, ImVec2(640, 360));
-    ImGui::End();
+    Begin("Image Test");
+    float aspectRatio = static_cast<float>(1280) / static_cast<float>(720);
+        
+    // Hitung dimensi tampilan
+    ImVec2 contentSize = GetContentRegionAvail();
+    float displayWidth = contentSize.x;
+    float displayHeight = displayWidth / aspectRatio;
+
+    if (displayHeight > contentSize.y) {
+        displayHeight = contentSize.y;
+        displayWidth = displayHeight * aspectRatio;
+    }
+
+    // Pusatkan video di ruang yang tersedia  
+    float posX = (contentSize.x - displayWidth) * 0.5f;
+    float posY = (contentSize.y - displayHeight) * 0.5f;
+    
+    SetCursorPos(ImVec2(posX, posY));
+    
+    float w = displayWidth, h = displayHeight;
+
+    Image((ImTextureID)imguiTexture, ImVec2(w, h));
+    End();
 }
 
 void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
@@ -1707,12 +1705,12 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
         err = vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence);
         check_vk_result(err);
 
-    } catch (const std::exception& e) {
+    } catch (const exception& e) {
         // Handle device lost error
         if (g_Device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(g_Device);
             g_SwapChainRebuild = true;
-            Logger::Log("Device lost error: " + std::string(e.what()), LogLevel::CRASH);
+            Logger::Log("Device lost error: " + string(e.what()), LogLevel::CRASH);
         }
     }
 }
@@ -1730,7 +1728,7 @@ uint32_t Viewport3D::FindMemoryType(VkMemoryRequirements memRequirements, VkPhys
     }
 
     if (memTypeIndex == UINT32_MAX) {
-        throw std::runtime_error("failed to find suitable memory type!");
+        throw runtime_error("failed to find suitable memory type!");
     }
     else {
         Logger::Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
@@ -1754,7 +1752,7 @@ VkBuffer Viewport3D::CreateBuffer(
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(g_Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create buffer!");
+        throw runtime_error("failed to create buffer!");
     }
     else {
         Logger::Log("Buffer created successfully. Size: " + to_string(size) + " bytes", LogLevel::SUCCESS);
@@ -1778,7 +1776,7 @@ VkBuffer Viewport3D::CreateBuffer(
     allocInfo.memoryTypeIndex = memTypeIndex;
 
     if (vkAllocateMemory(g_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate buffer memory!");
+        throw runtime_error("failed to allocate buffer memory!");
     }
     else {
         Logger::Log("Allocate memory successfully. Size: " + to_string(allocInfo.allocationSize) + " bytes", LogLevel::SUCCESS);
@@ -1786,7 +1784,7 @@ VkBuffer Viewport3D::CreateBuffer(
 
     // Bind buffer with allocated memory
     if (vkBindBufferMemory(g_Device, buffer, bufferMemory, 0) != VK_SUCCESS) {
-        throw std::runtime_error("failed to bind buffer memory!");
+        throw runtime_error("failed to bind buffer memory!");
     }
 
     return buffer;
@@ -1814,22 +1812,23 @@ void Viewport3D::createUniformBuffers() {
     vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
     
     for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
-			check_vk_result(vkCreateBuffer(g_Device, &bufferInfo, nullptr, &uniformBuffers[i].buffer));
-			// Get memory requirements including size, alignment and memory type
-			vkGetBufferMemoryRequirements(g_Device, uniformBuffers[i].buffer, &memReqs);
-			allocInfo.allocationSize = memReqs.size;
-			// Get the memory type index that supports host visible memory access
-			// Most implementations offer multiple memory types and selecting the correct one to allocate memory from is crucial
-			// We also want the buffer to be host coherent so we don't have to flush (or sync after every update.
-			// Note: This may affect performance so you might not want to do this in a real world application that updates buffers on a regular base
-			allocInfo.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-			// Allocate memory for the uniform buffer
-			check_vk_result(vkAllocateMemory(g_Device, &allocInfo, nullptr, &(uniformBuffers[i].memory)));
-			// Bind memory to buffer
-			check_vk_result(vkBindBufferMemory(g_Device, uniformBuffers[i].buffer, uniformBuffers[i].memory, 0));
-			// We map the buffer once, so we can update it without having to map it again
-			check_vk_result(vkMapMemory(g_Device, uniformBuffers[i].memory, 0, sizeof(ShaderData), 0, (void**)&uniformBuffers[i].mapped));
-		}
+        check_vk_result(vkCreateBuffer(g_Device, &bufferInfo, nullptr, &uniformBuffers[i].buffer));
+        // Get memory requirements including size, alignment and memory type
+        vkGetBufferMemoryRequirements(g_Device, uniformBuffers[i].buffer, &memReqs);
+        allocInfo.allocationSize = memReqs.size;
+        // Get the memory type index that supports host visible memory access
+        // Most implementations offer multiple memory types and selecting the correct one to allocate memory from is crucial
+        // We also want the buffer to be host coherent so we don't have to flush (or sync after every update.
+        // Note: This may affect performance so you might not want to do this in a real world application that updates buffers on a regular base
+        allocInfo.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        // Allocate memory for the uniform buffer
+        check_vk_result(vkAllocateMemory(g_Device, &allocInfo, nullptr, &(uniformBuffers[i].memory)));
+        // Bind memory to buffer
+        check_vk_result(vkBindBufferMemory(g_Device, uniformBuffers[i].buffer, uniformBuffers[i].memory, 0));
+        // We map the buffer once, so we can update it without having to map it again
+        check_vk_result(vkMapMemory(g_Device, uniformBuffers[i].memory, 0, sizeof(ShaderData), 0, (void**)&uniformBuffers[i].mapped));
+        cout << "Map Memory: " << uniformBuffers[i].mapped << endl;
+    }
 
     CreateBuffer(
         bufferSize,
@@ -1875,66 +1874,37 @@ void Viewport3D::createUniformDescriptorSetLayout() {
 }
 
 void Viewport3D::createUniformDescriptorSets() {
-		for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
-            VkDescriptorSetAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocInfo.descriptorPool = g_DescriptorPool;
-            allocInfo.descriptorSetCount = 1;
-            allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
+    for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = g_DescriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
-            check_vk_result(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
+        check_vk_result(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
 
-            VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer = uniformBuffers[i].buffer;
-            // bufferInfo.offset = 0;
-            bufferInfo.range = sizeof(ShaderData);
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = uniformBuffers[i].buffer;
+        // bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(ShaderData);
 
-            VkWriteDescriptorSet descriptorWrite{};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = uniformBuffers[i].descriptorSet;
-            descriptorWrite.dstBinding = 0;
-            // descriptorWrite.dstArrayElement = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pBufferInfo = &bufferInfo;
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = uniformBuffers[i].descriptorSet;
+        descriptorWrite.dstBinding = 0;
+        // descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
 
-            vkUpdateDescriptorSets(g_Device, 1, &descriptorWrite, 0, nullptr);
-        }
+        vkUpdateDescriptorSets(g_Device, 1, &descriptorWrite, 0, nullptr);
+    }
 }
-
-// void Viewport3D::updateUniformBuffer() {
-//     static auto startTime = chrono::high_resolution_clock::now();
-//     // Logger::Log("Start time: "+ to_string(startTime.time_since_epoch().count()), LogLevel::WARNING);
-//     auto currentTime = chrono::high_resolution_clock::now();
-//     float time = chrono::duration<float, chrono::seconds::period>
-//         (currentTime - startTime).count();
-
-//     UniformBufferObject ubo{};
-//     // Rotate model
-//     ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
-//         glm::vec3(0.0f, 0.0f, 1.0f));
-    
-//     // View matrix from camera
-//     ubo.view = camera->GetViewMatrix();
-    
-//     // Projection matrix
-//     ubo.proj = glm::perspective(glm::radians(45.0f), 
-//         viewportWidth / (float) viewportHeight, 0.1f, 100.0f);
-    
-//     // Vulkan NDC uses different coordinate system
-//     ubo.proj[1][1] *= -1;
-
-//     // Copy to uniform buffer
-//     void* data;
-//     vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
-//     memcpy(data, &ubo, sizeof(ubo));
-//     vkUnmapMemory(g_Device, uniformBufferMemory);
-// }
 
 // Add this method to create and fill vertex buffer
 void Viewport3D::createVertexBuffer() {
     // Setup vertices
-    std::vector<Vertex> vertexBuffer{
+    vector<Vertex> vertexBuffer{
         { {  1.0f,  1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
         { { -1.0f,  1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
         { {  0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }
@@ -1968,7 +1938,7 @@ void Viewport3D::createVertexBuffer() {
     vkUnmapMemory(g_Device, stagingBufferMemory);
 
     // Setup indices
-    std::vector<uint32_t> indexBuffer{ 0, 1, 2 };
+    vector<uint32_t> indexBuffer{ 0, 1, 2 };
     indices.count = static_cast<uint32_t>(indexBuffer.size());
     uint32_t indexBufferSize = indices.count * sizeof(uint32_t);
 
@@ -2004,12 +1974,13 @@ void Viewport3D::createVertexBuffer() {
     VkBufferCopy vertexCopy{};
     vertexCopy.size = vertexBufferSize;
     vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertices.buffer, 1, &vertexCopy);
+    cout << "Vertice: " << vertices.buffer << endl;
 
     // Copy indices
     VkBufferCopy indexCopy{};
     indexCopy.size = indexBufferSize;
     vkCmdCopyBuffer(commandBuffer, indexStagingBuffer, indices.buffer, 1, &indexCopy);
-
+    Logger::Log("Indices count from createVertexBuffer: " + to_string(indices.count), LogLevel::WARNING);
     EndSingleTimeCommands(commandBuffer);
 
     // Cleanup staging buffers
@@ -2049,18 +2020,24 @@ int main(int argc, char* argv[]){
     try {
         Viewport3D viewport;
         
+		// Setup a default look-at camera
+		viewport.camera.type = Camera::CameraType::firstperson;
+		viewport.camera.setPosition(glm::vec3(0.0f, -1.0f, -2.5f));
+		viewport.camera.setRotation(glm::vec3(0.0f, 30.0f, 30.0f));
+		viewport.camera.setPerspective(60.0f, (float)1280 / (float)720, 1.0f, 256.0f);
+
         // Langkah 1: Initialize Vulkan
         Logger::Log("Initializing Vulkan...");
         viewport.initVulkan(extensions, mainWindow);
         
         // Langkah 2: Create render pass PERTAMA
         Logger::Log("Creating render pass...");
-        viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight,  true, true);
+        viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight,  false, false);
         viewport.createSynchronizationPrimitives();
         viewport.createRenderPass();
 
-        viewport.setupDepthStencil(1280, 720);
-        viewport.setupFrameBuffer(1280, 720);
+        viewport.CreateDepthStencil(1280, 720);
+        viewport.CreateFrameBuffer(1280, 720);
 
         viewport.createCommandBuffers();
         
@@ -2088,13 +2065,6 @@ int main(int argc, char* argv[]){
         Logger::Log("Creating uniform descriptor sets...");
         viewport.createUniformDescriptorSets();
         
-        // Langkah 7: Initialize camera
-        // Logger::Log("Initializing camera...");
-        // if (viewport.camera == nullptr) {
-        //     viewport.camera = new Camera(glm::vec3(0.0f, 0.0f, 3.0f));
-        // }
-
-        // Langkah 5: Create graphics pipeline
         Logger::Log("Creating graphics pipeline...");
         try {
             viewport.createGraphicsPipeline("assets/shaders/vulkan/triangle.vert.spv", "assets/shaders/vulkan/triangle.frag.spv");
@@ -2110,7 +2080,7 @@ int main(int argc, char* argv[]){
         // Cleanup
         viewport.CleanupVulkan();
     }
-    catch (const std::exception& e) {
+    catch (const exception& e) {
         Logger::Log("Exception caught: " + string(e.what()), LogLevel::CRASH);
         return -1;
     }
