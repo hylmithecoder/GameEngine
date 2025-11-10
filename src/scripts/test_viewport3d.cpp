@@ -1431,7 +1431,7 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
 
 void Viewport3D::DrawViewport3D() {
     static bool isShowViewport = true;
-    static float currentPosition[3] = { 0.0f, -1.0f, -2.5f }, currentRotation[3] = { 0.0f, 30.0f, 0.0f };
+    static float currentPosition[3] = { 0.0f, 0.0f, -2.5f }, currentRotation[3] = { 0.0f, 0.0f, -180.0f };
     static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
     
     // Initialize viewport texture descriptor set
@@ -1445,7 +1445,8 @@ void Viewport3D::DrawViewport3D() {
     }
 
     Begin("3D Viewport");
-    Text("This is a 3D viewport using Vulkan and ImGui.\nCamera Position: ");
+    Text("This is a 3D viewport using Vulkan and ImGui.");
+    Text("Camera Position: ");
     SameLine();
     DragFloat3("##Camera Position", currentPosition);
     Text("Camera Rotation: ");
@@ -1527,9 +1528,9 @@ void Viewport3D::videoPlayerUI(){
             }
             else {
                 // if (imageHandler.fps <= 24) {
-                    imageHandler.updateBothVideoAndAudio24fps();
+                //    imageHandler.updateBothVideoAndAudio24fps();
                 // } else {
-                //     imageHandler.updateBothVideoAndAudio();
+                     imageHandler.updateBothVideoAndAudio();
                 // }
             }
         }
@@ -2022,8 +2023,8 @@ int main(int argc, char* argv[]){
         
 		// Setup a default look-at camera
 		viewport.camera.type = Camera::CameraType::firstperson;
-		viewport.camera.setPosition(glm::vec3(0.0f, -1.0f, -2.5f));
-		viewport.camera.setRotation(glm::vec3(0.0f, 30.0f, 30.0f));
+		viewport.camera.setPosition(glm::vec3(0.0f, 0.0f, -2.5f));
+		viewport.camera.setRotation(glm::vec3(0.0f));
 		viewport.camera.setPerspective(60.0f, (float)1280 / (float)720, 1.0f, 256.0f);
 
         // Langkah 1: Initialize Vulkan
