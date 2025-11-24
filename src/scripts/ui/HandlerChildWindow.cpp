@@ -23,11 +23,11 @@ void MainWindow::RenderHierarchyWindow() {
         }
     } else {
         struct SceneElement {
-            std::string name;
-            std::vector<std::string> properties;
+            string name;
+            vector<string> properties;
         };
 
-        std::vector<SceneElement> elements = {
+        vector<SceneElement> elements = {
             {"Main Camera", {"Properties"}},
             {"Player", {"Sprite", "Collider"}},
             {"Enemy", {"AI Controller"}}
@@ -49,7 +49,7 @@ void MainWindow::RenderHierarchyWindow() {
     ImGui::End();
 }
 
-void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const std::string& assetPath , bool firstOpenProject) {
+void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, HandlerProject::AssetFile assetFolder, const string& assetPath , bool firstOpenProject) {
     ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
     ImVec2 pos = ImGui::GetWindowPos();
     ImVec2 size = ImGui::GetWindowSize();
@@ -95,7 +95,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, Han
                 ImGui::SameLine();
 
                 // Back button - disabled if in root directory
-                std::string rootPath = projectHandler.projectPath + "\\assets";
+                string rootPath = projectHandler.projectPath + "\\assets";
                 bool isInRootDirectory = (projectHandler.currentDirectory == rootPath);
 
                 // Disable button if in root directory
@@ -112,7 +112,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot, Han
                 } else {
                     if (ImGui::Button("Back")) {
                         size_t lastSlash = projectHandler.currentDirectory.find_last_of("/\\");
-                        if (lastSlash != std::string::npos) {
+                        if (lastSlash != string::npos) {
                             projectHandler.currentDirectory = projectHandler.currentDirectory.substr(0, lastSlash);
                             projectHandler.selectedAsset = nullptr; // Reset selection when navigating
                         }
@@ -682,19 +682,19 @@ void MainWindow::RenderConsoleWindow() {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
         
         static char consoleBuffer[4096];
-        std::string combinedLog;
+        string combinedLog;
         int number = 1;
         
         for (const auto& line : messages) {
             // Filter messages based on selected filter
             if (currentFilter == 0 || // All
-                (currentFilter == 1 && line.find("[INFO]") != std::string::npos) ||
-                (currentFilter == 2 && line.find("[WARNING]") != std::string::npos) ||
-                (currentFilter == 3 && line.find("[ERROR]") != std::string::npos)) {
+                (currentFilter == 1 && line.find("[INFO]") != string::npos) ||
+                (currentFilter == 2 && line.find("[WARNING]") != string::npos) ||
+                (currentFilter == 3 && line.find("[ERROR]") != string::npos)) {
                 
                 // Search filter
-                if (strlen(searchBuffer) == 0 || line.find(searchBuffer) != std::string::npos) {
-                    combinedLog += "[" + std::to_string(number++) + "] " + line + "\n";
+                if (strlen(searchBuffer) == 0 || line.find(searchBuffer) != string::npos) {
+                    combinedLog += "[" + to_string(number++) + "] " + line + "\n";
                 }
             }
         }
@@ -854,7 +854,7 @@ void MainWindow::HandleBackground(const ImVec2& windowPos, const ImVec2& windowS
     r = assets.r;
     g = assets.g;
     b = assets.b;
-    // Debug::Logger::Log("Dominant Color: " + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b), Debug::LogLevel::INFO);
+    // Debug::Logger::Log("Dominant Color: " + to_string(r) + ", " + to_string(g) + ", " + to_string(b), Debug::LogLevel::INFO);
     // First draw the dominant color background for the entire window
     ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
         r, g, b, volume));
@@ -879,7 +879,7 @@ void MainWindow::HandleBackground(const ImVec2& windowPos, const ImVec2& windowS
 void MainWindow::HandleSearch() {
     // Buffer pencarian dan container hasil pencarian.
     static char searchBuffer[128] = "";
-    static std::vector<HandlerProject::AssetFile> searchResults;
+    static vector<HandlerProject::AssetFile> searchResults;
 
     // Atur lebar input sesuai jendela.
     // ImGui::PushItemWidth(-1);
@@ -936,7 +936,7 @@ void MainWindow::HandleSearch() {
         ImGui::Text("Search Results:");
         for (const auto &result : searchResults) {
             // Buat label dengan menampilkan nama dan menandai direktori.
-            std::string label;
+            string label;
             if (result.isDirectory)
                 label = "[DIR] " + result.name;
             else
@@ -946,16 +946,16 @@ void MainWindow::HandleSearch() {
             if (ImGui::Selectable(label.c_str())) {
                 // Jika yang dipilih adalah file, periksa ekstensi file.
                 if (!result.isDirectory) {
-                    std::string extension;
+                    string extension;
                     size_t pos = result.name.find_last_of('.');
-                    if (pos != std::string::npos)
+                    if (pos != string::npos)
                         extension = result.name.substr(pos);
 
                     // Jika file ber-ekstensi '.cpp', buka dengan VS Code.
                     if (extension == ".cpp") {
                         // Gunakan perintah sistem; pastikan "code" sudah ada di PATH.
-                        std::string command = "code \"" + result.fullPath + "\"";
-                        std::system(command.c_str());
+                        string command = "code \"" + result.fullPath + "\"";
+                        system(command.c_str());
                     }
                 }
             }
@@ -1042,8 +1042,8 @@ void MainWindow::RenderPlayMenu() {
     ImGui::PopStyleVar(4);
 }
 
-void MainWindow::PushMessage(const std::string& message) {
-    std::lock_guard<std::mutex> lock(messagesMutex);
+void MainWindow::PushMessage(const string& message) {
+    lock_guard<mutex> lock(messagesMutex);
     messages.push_back(message);
         
     // Limit buffer size
@@ -1053,6 +1053,6 @@ void MainWindow::PushMessage(const std::string& message) {
 }
 
 void MainWindow::ClearMessages() {
-    std::lock_guard<std::mutex> lock(messagesMutex);
+    lock_guard<mutex> lock(messagesMutex);
     messages.clear();
 }

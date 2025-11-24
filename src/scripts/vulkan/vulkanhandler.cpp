@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
-     // Load PNG pakai stb_image
+    // Load PNG pakai stb_image
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(filename, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     if (!pixels)
@@ -108,12 +108,13 @@ VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
     return imguiDescSet;
 }
 
-void VulkanHandler::setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentGraphicQueue, VkCommandPool commandPool) {
+void VulkanHandler::setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentGraphicQueue, VkCommandPool commandPool, VkPhysicalDeviceMemoryProperties memoryProperties) {
     Logger::Log("Setting current device and physical device", LogLevel::SUCCESS);
     currentDevice = device;
     currentPhysicalDevice = physicalDevice;
     currentOffscreenCommandPool = commandPool;
     currentGraphicsQueue = graphicsQueue;
+    currentMemoryProperties = memoryProperties;
 
     // VkCommandPoolCreateInfo poolInfo{};
     // poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -255,7 +256,7 @@ bool VulkanHandler::OpenFileVideo(const char* filePath){
     
     cout << "[MainWindow] Video size: " << width << "x" << height << endl;
     int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, width, 
-                                          height, 1);
+                                        height, 1);
     buffer = (uint8_t *)av_malloc(numBytes * sizeof(uint8_t));
     
     av_image_fill_arrays(frameRGB->data, frameRGB->linesize, 
@@ -264,8 +265,8 @@ bool VulkanHandler::OpenFileVideo(const char* filePath){
     
     lastGoodFrameRGB = av_frame_alloc();
     av_image_alloc(lastGoodFrameRGB->data, lastGoodFrameRGB->linesize,
-                  width, height, AV_PIX_FMT_RGB24, 1);
-                  hasValidFrame = false;
+                width, height, AV_PIX_FMT_RGB24, 1);
+                hasValidFrame = false;
     
     // Initialize SWS context for software scaling
     cout << "[MainWindow] Initializing SWS context" << endl;
@@ -343,8 +344,8 @@ bool VulkanHandler::createVideoTexture() {
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, 
-                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
-                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     if (vkAllocateMemory(currentDevice, &allocInfo, nullptr, &stagingBufferMemory) != VK_SUCCESS) {
         cerr << "Failed to allocate staging buffer memory!" << endl;
@@ -378,7 +379,7 @@ bool VulkanHandler::createVideoTexture() {
 
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, 
-                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     if (vkAllocateMemory(currentDevice, &allocInfo, nullptr, &videoImageMemory) != VK_SUCCESS) {
         cerr << "Failed to allocate image memory!" << endl;
@@ -427,7 +428,7 @@ bool VulkanHandler::createVideoTexture() {
 
     // Create descriptor set for ImGui
     videoDescriptorSet = ImGui_ImplVulkan_AddTexture(videoSampler, videoImageView, 
-                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     Logger::Log("Video texture created", LogLevel::SUCCESS);
     return true;
@@ -461,7 +462,7 @@ void VulkanHandler::updateVideoTexture() {
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
@@ -475,7 +476,7 @@ void VulkanHandler::updateVideoTexture() {
     region.imageExtent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
 
     vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, videoImage, 
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -483,7 +484,7 @@ void VulkanHandler::updateVideoTexture() {
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, 
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     endSingleTimeCommands(commandBuffer);
 }
@@ -530,8 +531,8 @@ bool VulkanHandler::updateVideoFrame() {
 
     if (frameFinished) {
         sws_scale(swsContext, (uint8_t const* const*)frame->data,
-                  frame->linesize, 0, height,
-                  frameRGB->data, frameRGB->linesize);
+                frame->linesize, 0, height,
+                frameRGB->data, frameRGB->linesize);
 
         // SDL_UpdateTexture(texture, NULL, frameRGB->data[0],
         //                   frameRGB->linesize[0]);
@@ -556,7 +557,7 @@ bool VulkanHandler::updateVideoFrame() {
 bool VulkanHandler::openAudio() {
     // Find the best audio stream
     audioStreamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO,
-                                      -1, -1, nullptr, 0);
+                                    -1, -1, nullptr, 0);
     if (audioStreamIndex < 0) {
         cerr << "Could not find audio stream" << endl;
         return false;
@@ -1284,4 +1285,29 @@ void VulkanHandler::updateBothVideoAndAudio24fps(){
             // via a callback/timer if your architecture supports it
         }
     }
+}
+
+
+VkPipelineShaderStageCreateInfo VulkanHandler::loadShader(const char* fileName, VkShaderStageFlagBits stage)
+{
+    VkPipelineShaderStageCreateInfo shaderStage{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = stage,
+        .pName = "main"
+    };
+    Logger::Log("Open file: " + string(fileName));
+    try {
+
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+        shaderStage.module = vkhandler::tools::loadShader(androidApp->activity->assetManager, fileName.c_str(), device);
+#else
+        shaderStage.module = vkhandler::tools::loadShader(fileName, currentDevice);
+#endif
+        assert(shaderStage.module != VK_NULL_HANDLE);
+        shaderModules.push_back(shaderStage.module);
+        
+    } catch (const exception& e){
+        cerr << e.what() << endl;
+    }
+	return shaderStage;
 }

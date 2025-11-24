@@ -5,14 +5,16 @@
 #include <map>
 #include <vulkanhandler.hpp>
 #include <fstream>
+#include <texture.hpp>
 using namespace Debug;
+using namespace vkhandler;
 
-// #define MAX_CONCURRENT_FRAMES 2
-constexpr auto MAX_CONCURRENT_FRAMES = 2;
+// constexpr auto MAX_CONCURRENT_FRAMES = 2;
 
 class Viewport3D {
     public:
         VulkanHandler imageHandler;
+        TextureBase textureHandler;
 
         struct ShaderData {
             glm::mat4 projectionMatrix;
@@ -87,8 +89,9 @@ class Viewport3D {
         void CreateFrameBuffer(uint32_t width, uint32_t height);
         void CreateDepthStencil(uint32_t width, uint32_t height);
         void DrawViewport3D();
+        void HandleCameraMovement();
         void recreateOffscreenResources(uint32_t width, uint32_t height);
-        VkFormat depthFormat;
+        VkFormat depthFormat {VK_FORMAT_UNDEFINED};
         vector<VkImage> images;
         vector<VkImageView> imageViews;
         uint32_t viewportWidth, viewportHeight;
@@ -226,7 +229,7 @@ class Viewport3D {
                 return;
             }
 
-            Logger::Log("[vulkan] Error: VkResult = " + to_string(err), LogLevel::CRASH);
+            // Logger::Log("[vulkan] Error: VkResult = " + to_string(err), LogLevel::CRASH);
             
             switch (err) {
                 case VK_ERROR_DEVICE_LOST:
@@ -234,7 +237,7 @@ class Viewport3D {
                     break;
                 case VK_ERROR_OUT_OF_DATE_KHR:
                 case VK_SUBOPTIMAL_KHR:
-                    Logger::Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
+                    // Logger::Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
                     // g_SwapChainRebuild = true;
                     break;
                 default:
@@ -269,7 +272,11 @@ class Viewport3D {
         void renderVideoFrame();
         void createCommandBuffers();
         void helperInitImage(){
-            imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool);
+            cout << "Device: " << g_Device << "\n"
+            "Physical Device" << g_PhysicalDevice << "\n"
+            "Queue: " << g_Queue << endl; 
+            imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool, memoryProperties);
+            textureHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool, memoryProperties);
         }
 
         array<VkCommandBuffer, MAX_CONCURRENT_FRAMES> commandBuffers{};
@@ -277,6 +284,8 @@ class Viewport3D {
         void createSynchronizationPrimitives();
 
     private:
+
+        VkPhysicalDeviceMemoryProperties memoryProperties{};
 
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
@@ -346,11 +355,15 @@ class Viewport3D {
             VkPipelineRasterizationStateCreateInfo& currentRasterizerInfo,
             VkPipelineMultisampleStateCreateInfo& multisampling,
             VkPipelineColorBlendStateCreateInfo& colorBlending,
-            VkPipelineDepthStencilStateCreateInfo& currentDepthStencilInfo
+            VkPipelineDepthStencilStateCreateInfo& currentDepthStencilInfo,
+            VkPipelineDynamicStateCreateInfo& currentDynameState,
+            int& sizeShaderStage
         ){
             VkGraphicsPipelineCreateInfo pipelineInfo{};
             pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            pipelineInfo.stageCount = 2;
+            pipelineInfo.stageCount = sizeShaderStage;
+            pipelineInfo.basePipelineIndex = -1;
+			pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
             pipelineInfo.pStages = currentShaderStage;
             pipelineInfo.pVertexInputState = &currentVertexInput;
             pipelineInfo.pInputAssemblyState = &currentInputAssembly;
@@ -363,7 +376,7 @@ class Viewport3D {
             pipelineInfo.subpass = 0;
             pipelineInfo.pDepthStencilState = &currentDepthStencilInfo;
             pipelineInfo.pNext = nullptr;
-
+            pipelineInfo.pDynamicState = &currentDynameState;
             return pipelineInfo;
         }
 

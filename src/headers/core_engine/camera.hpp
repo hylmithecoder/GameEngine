@@ -41,7 +41,8 @@ private:
 		if (matrices.view != currentMatrix) {
 			updated = true;
 		}
-	};
+	}
+
 public:
 	enum CameraType { lookat, firstperson };
 	CameraType type = CameraType::lookat;
@@ -152,6 +153,9 @@ public:
 
 	void update(float deltaTime)
 	{
+		if (keys.up || keys.down || keys.left || keys.right) {
+			std::cout << "Camera Position: " << position.x << ", " << position.y << ", " << position.z << std::endl;
+		}
 		updated = false;
 		if (type == CameraType::firstperson)
 		{
@@ -241,5 +245,4 @@ public:
 
 		return retVal;
 	}
-
 };

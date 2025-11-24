@@ -41,7 +41,6 @@ set(SOURCES
     # src/SimpleRenderer.cpp
     src/scripts/ApplicationManager.cpp
     src/scripts/ui/SecondaryWindow.cpp
-    src/scripts/ui/Check_Environment.cpp
     src/scripts/ui/VideoPlayer.cpp
     src/scripts/ui/assets.cpp
     src/scripts/ui/HandlerProject.cpp
@@ -49,6 +48,7 @@ set(SOURCES
     src/scripts/core_engine/SceneSerializer.cpp
     src/scripts/core_engine/SceneRenderer2D.cpp
     src/scripts/core_engine/TextureManager.cpp
+    src/scripts/core_engine/Check_Environment.cpp
 )
 
 set(SOURCE_TEST_VULKAN
@@ -60,51 +60,51 @@ set(SOURCE_CORE
     src/scripts/core_engine/core/CoreDebugger.cpp
 )
 
-# Add header files
+# Add headers files
 set(HEADERS
-    src/header/ui/MainWindow.hpp
-    # src/header/RocketInterfaces.hpp
-    src/header/ui/SimpleRenderer.hpp
-    src/header/ui/SecondaryWindow.hpp
-    src/header/ui/FFmpegWrapper.hpp
-    src/header/ui/VideoPlayer.hpp
-    src/header/ui/assets.hpp
-    src/header/ui/HandlerProject.hpp
-    src/header/core_engine/Scene.hpp
-    src/header/core_engine/SceneSerializer.hpp
-    src/header/core_engine/SceneRenderer2D.hpp
-    src/header/core_engine/TextureManager.hpp
-    src/header/core_engine/GLHeader.hpp
-    src/header/core_engine/Debugger.hpp
-    src/header/core_engine/NetworkManager.hpp
-    src/header/ui/Application.hpp
+    src/headers/ui/MainWindow.hpp
+    # src/headers/RocketInterfaces.hpp
+    src/headers/ui/SimpleRenderer.hpp
+    src/headers/ui/SecondaryWindow.hpp
+    src/headers/ui/VideoPlayer.hpp
+    src/headers/ui/assets.hpp
+    src/headers/ui/HandlerProject.hpp
+    src/headers/core_engine/Scene.hpp
+    src/headers/core_engine/SceneSerializer.hpp
+    src/headers/core_engine/SceneRenderer2D.hpp
+    src/headers/core_engine/TextureManager.hpp
+    src/headers/core_engine/GLHeader.hpp
+    src/headers/core_engine/Debugger.hpp
+    src/headers/core_engine/NetworkManager.hpp
+    src/headers/core_engine/Check_Environment.hpp
+    src/headers/ui/Application.hpp
 )
 
-set(HEADER_GLSL
-    src/header/core_engine/test_glsl.hpp
+set(HEADERS_GLSL
+    src/headers/core_engine/test_glsl.hpp
 )
 
-set(HEADER_VULKAN
-    src/header/core_engine/test_vulkan.hpp
+set(HEADERS_VULKAN
+    src/headers/core_engine/test_vulkan.hpp
 )
 
-set(HEADER_CORE
-    # src/header/core_engine/core/Component.hpp
-    # src/header/core_engine/core/Scene.hpp
-    src/header/core_engine/core/GameEngine.h
-    src/header/core_engine/core/CoreDebugger.h
-    # src/header/core_engine/core/EngineCore.hpp
-    # src/header/core_engine/core/LifeCycleManager.hpp
+set(HEADERS_CORE
+    # src/headers/core_engine/core/Component.hpp
+    # src/headers/core_engine/core/Scene.hpp
+    src/headers/core_engine/core/GameEngine.h
+    src/headers/core_engine/core/CoreDebugger.h
+    # src/headers/core_engine/core/EngineCore.hpp
+    # src/headers/core_engine/core/LifeCycleManager.hpp
 )
 
-set(HEADER_CORE_EDITOR
-    src/header/core_engine/core_editor/IlmeeeEditor.h
-    src/header/core_engine/core_editor/TCPConnection.hpp
+set(HEADERS_CORE_EDITOR
+    src/headers/core_engine/core_editor/IlmeeeEditor.h
+    src/headers/core_engine/core_editor/TCPConnection.hpp
 )
 
 set(SOURCE_TEST
     src/scripts/ui/assets.cpp
-    src/header/ui/assets.hpp
+    src/headers/ui/assets.hpp
     src/scripts/ui/test_main.cpp
 )
 
@@ -124,7 +124,7 @@ set(SOURCE_TEST_GLSL
 set(SOURCE_HANDLER
     src/scripts/core_engine/core/Launcher.cpp 
     src/scripts/core_engine/core/HandlerLauncher.cpp
-    src/header/core_engine/Debugger.hpp
+    src/headers/core_engine/Debugger.hpp
 )
 
 # Add ImGui source files
@@ -185,10 +185,13 @@ set(GLAD_VULKAN
 )
 
 set(TESTVIEWPORT_3D
-    src/scripts/test_viewport3d.cpp 
-    src/header/core_engine/test_viewport3d.hpp 
-    src/header/ui/vulkanhandler.hpp
-    src/scripts/ui/vulkanhandler.cpp
+    src/scripts/main_viewport3d.cpp 
+    src/scripts/vulkan/vulkanhandler.cpp
+    src/scripts/vulkan/texture.cpp
+    src/scripts/vulkan/vkerrorhandler.cpp
+    src/scripts/vulkan/VkBuffer.cpp
+    src/scripts/vulkan/VkDevice.cpp
+    src/scripts/vulkan/VkTools.cpp
 )
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
@@ -203,7 +206,7 @@ pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
-add_executable(${PROJECT_NAME} ${NFD_SOURCES} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+add_executable(${PROJECT_NAME} ${NFD_SOURCES} ${HEADERS} ${SOURCES} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 # target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestBackground PRIVATE -mconsole)
@@ -211,12 +214,12 @@ add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
 target_link_options(TestGLEW PRIVATE -mconsole)
 add_executable(TestGLM ${SOURCE_TEST_GLM})
 # target_link_options(TestGLM PRIVATE -mconsole)
-add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_GLSL} ${ICON_SOURCE})
+add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADERS_GLSL} ${ICON_SOURCE})
 # target_link_options(TestGLSL PRIVATE -mconsole)
-add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
+add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADERS_VULKAN} ${ICON_SOURCE})
 # target_link_options(TestVulkan PRIVATE -mconsole)
 
-add_library(IlmeeeEngine SHARED src/IlmeeeEngine.rc ${SOURCE_CORE} ${HEADER_CORE})
+add_library(IlmeeeEngine SHARED src/IlmeeeEngine.rc ${SOURCE_CORE} ${HEADERS_CORE})
 # target_link_options(IlmeeeEngine PRIVATE -mconsole)
 add_definitions(-DILMEEEENGINE_EXPORTS)
 set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -238,7 +241,7 @@ set_target_properties(IlmeeeEngine PROPERTIES
     OUTPUT_NAME "IlmeeeEngine"
 )
 include_directories(${GTK3_INCLUDE_DIRS})
-add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
+add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${headers_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
 # target_link_options(IlmeeeEditor PRIVATE -mconsole)
 # Define macro untuk export symbols
 add_definitions(-DILMEEEDITOR_EXPORTS)
@@ -277,10 +280,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     # /usr/include/GLFW
     ${GTK3_INCLUDE_DIRS}
     # Project directories
-    ${CMAKE_SOURCE_DIR}/src/header
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${CMAKE_SOURCE_DIR}/src/scripts/ui
+    ${CMAKE_SOURCE_DIR}/src/headers
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     ${CMAKE_SOURCE_DIR}/vendor/icons
     # Custom/third-party libraries
     ${IMGUI_DIR}
@@ -299,8 +301,8 @@ target_include_directories(TestBackground PRIVATE
     # ${SDL2_DIR}/include
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     # ${FFMPEG_DIR}
     # ${STB}
     ${GLFW}/include
@@ -319,7 +321,7 @@ target_include_directories(TestGLEW PRIVATE
     # ${SDL2_DIR}/include
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
     # ${FFMPEG_DIR}
     # ${STB}
     ${GLFW}/include
@@ -349,8 +351,8 @@ target_include_directories(TestGLSL PRIVATE
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     # ${FFMPEG_DIR}
     ${NFD}/src/include
     ${JSON_DIR}
@@ -377,8 +379,8 @@ target_include_directories(TestVulkan PRIVATE
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     # ${FFMPEG_DIR}
     ${NFD}/src/include
     ${JSON_DIR}
@@ -399,23 +401,23 @@ target_include_directories(TestVulkan PRIVATE
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     # ${DLFCN}/src
     ${GTK3_INCLUDE_DIRS}
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
 )
 
 target_include_directories(IlmeeeEngine PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/core_engine/core>
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
 target_include_directories(IlmeeeEditor PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core_editor>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/core_engine/core_editor>
     $<BUILD_INTERFACE:/usr/include/SDL2>
     $<BUILD_INTERFACE:/usr/include/GLFW>
     $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}>
     $<BUILD_INTERFACE:${ICON_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/ui>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/ui>
     $<BUILD_INTERFACE:${NFD}/src/include>
     $<BUILD_INTERFACE:${JSON_DIR}>
     $<BUILD_INTERFACE:${GLAD_4_DIR}/include>
@@ -434,8 +436,8 @@ target_include_directories(IlmeeeHub PRIVATE
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     ${NFD}/src/include
     /usr/include/winpr3
     ${JSON_DIR}
@@ -451,11 +453,13 @@ target_include_directories(IlmeeeHub PRIVATE
 target_include_directories(ViewPort3D PRIVATE
     /usr/include/stb
     Vulkan
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${CMAKE_SOURCE_DIR}/src/header/ui
+    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
+    ${CMAKE_SOURCE_DIR}/src/headers/vulkan
+    ${CMAKE_SOURCE_DIR}/src/headers/audio
     /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    # vendor/ktx/include
 )
 
 # First, find this section and modify it:
@@ -477,8 +481,8 @@ export(EXPORT IlmeeeEngineTargets
     FILE "${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineTargets.cmake"
     NAMESPACE IlmeeeEngine::
 )
-# Install header files
-install(FILES ${HEADER_CORE} DESTINATION include)
+# Install headers files
+install(FILES ${headers_CORE} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
 set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEngine)
@@ -524,8 +528,8 @@ export(EXPORT IlmeeeEditorTargets
     NAMESPACE IlmeeeEditor::
 )
 
-# Install header files
-install(FILES ${HEADER_CORE_EDITOR} DESTINATION include)
+# Install headers files
+install(FILES ${headers_CORE_EDITOR} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
 set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEditor)
@@ -663,6 +667,7 @@ target_link_libraries(ViewPort3D PRIVATE
     avutil
     swresample
     swscale
+    ktx
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE

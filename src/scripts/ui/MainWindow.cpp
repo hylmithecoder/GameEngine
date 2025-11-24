@@ -1,10 +1,10 @@
-#include "../../header/ui/MainWindow.hpp"
-#include "../../header/ui/SecondaryWindow.hpp"
+#include "../../headers/ui/MainWindow.hpp"
+#include "../../headers/ui/SecondaryWindow.hpp"
 #include <string>
 #include <vector>
 #include <iostream>
 #include <memory>
-#include "FFmpegWrapper.hpp"
+#include "../audio/FFmpegWrapper.hpp"
 #include <fstream>
 // #include <libavformat/avformat.h>
 #include <stb_image.h>

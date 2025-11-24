@@ -14,15 +14,32 @@
 #include <imgui_impl_sdl3.h>
 #include <fstream>
 #include "FFmpegWrapper.hpp"
+#include <vector>
+#include <VkInitializer.hpp>
+// #include <VkDevice.hpp>
+#include <VkTools.hpp>
+#include <vector>
+#include <array>
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 using namespace std;
 using namespace ImGui;
 using namespace Debug;
 
+constexpr auto MAX_CONCURRENT_FRAMES = 2;
+
 class VulkanHandler {
     public: 
         VkDescriptorSet LoadImage(const char* filename);
-        void setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentQueueFamily, VkCommandPool commandPool);
 
+        void setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentQueueFamily, VkCommandPool commandPool, VkPhysicalDeviceMemoryProperties memoryProperties);
         // FFmpeg
         bool OpenFileVideo(const char* filename);
         void cleanupVideoTexture();
@@ -65,13 +82,30 @@ class VulkanHandler {
             throw "Could not find a suitable memory type!";
         }
 
-    private:
+        string folderShadersVulkan(){
+            return "assets/shaders/vulkan/";
+        }
+
+        VkClearColorValue defaultClearColor = { { 0.025f, 0.025f, 0.025f, 1.0f } };
+        VkClearColorValue blueClearColor = { { 0.0f, 0.0f, 0.2f, 1.0f } };
+        VkPipelineShaderStageCreateInfo loadShader(const char* fileName, VkShaderStageFlagBits stage);
+        uint32_t currentFrame = 0;
+        uint32_t currentImageIndex = 0;
+        vector<VkFramebuffer> currentFrameBuffers;
+
+    protected :
         VkDevice currentDevice;
         VkPhysicalDevice currentPhysicalDevice;
         VkQueue currentGraphicsQueue;
         VkCommandPool currentOffscreenCommandPool;
         uint32_t currentQueueFamily;
+        VkDescriptorPool currentDescriptorPool;
+        vector<VkShaderModule> shaderModules;
+        VkRenderPass currentRenderPass;
+        VkPipeline currentPipeline;
+        VkPhysicalDeviceMemoryProperties currentMemoryProperties{};
 
+    private :
         // Video texture variables for Vulkan
         VkImage videoImage;
         VkDeviceMemory videoImageMemory;

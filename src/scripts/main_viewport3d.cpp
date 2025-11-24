@@ -450,6 +450,7 @@ void Viewport3D::Update(ImGuiIO& io){
             ImDrawData* main_draw_data = GetDrawData();
             const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
             if (!main_is_minimized)
+                // HandleRenderViewport(viewportWidth, viewportHeight);
                 FrameRender(wd, main_draw_data);
                 FramePresent(wd);
 
@@ -710,91 +711,99 @@ void Viewport3D::createRenderPass() {
 		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size()); // Number of subpass dependencies
 		renderPassCI.pDependencies = dependencies.data();                          // Subpass dependencies used by the render pass
 		check_vk_result(vkCreateRenderPass(g_Device, &renderPassCI, nullptr, &renderPass));
+        Logger::Log("Device: "+ to_string(reinterpret_cast<uintptr_t>(g_Device)), LogLevel::SUCCESS);
         Logger::Log("Created render pass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)), LogLevel::SUCCESS);
 }
 
 void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
-	{
-		// Create an optimal image used as the depth stencil attachment
-		VkImageCreateInfo imageCI{};
-		imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-		imageCI.imageType = VK_IMAGE_TYPE_2D;
-		imageCI.format = depthFormat;
-		// Use example's height and width
-		imageCI.extent = { width, height, 1 };
-		imageCI.mipLevels = 1;
-		imageCI.arrayLayers = 1;
-		imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
-		imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
-		imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-		imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		check_vk_result(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
+{
+    // Validate depth format
+    // VkFormatProperties formatProperties;
+    // vkGetPhysicalDeviceFormatProperties(g_PhysicalDevice, depthFormat, &formatProperties);
+    // if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+    //     throw std::runtime_error("Selected depth format is not supported as a depth-stencil attachment!");
+    // }
 
-        VkPhysicalDeviceMemoryProperties memProperties;
-        vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
-		// Allocate memory for the image (device local) and bind it to our image
-		VkMemoryAllocateInfo memAlloc{};
-		memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		VkMemoryRequirements memReqs;
-		vkGetImageMemoryRequirements(g_Device, depthStencil.image, &memReqs);
-		memAlloc.allocationSize = memReqs.size;
-		memAlloc.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		check_vk_result(vkAllocateMemory(g_Device, &memAlloc, nullptr, &depthStencil.memory));
-		check_vk_result(vkBindImageMemory(g_Device, depthStencil.image, depthStencil.memory, 0));
+    // Create an optimal image used as the depth stencil attachment
+    VkImageCreateInfo imageCI{};
+    imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageCI.imageType = VK_IMAGE_TYPE_2D;
+    imageCI.format = depthFormat;
+    // Use example's height and width
+    imageCI.extent = { width, height, 1 };
+    imageCI.mipLevels = 1;
+    imageCI.arrayLayers = 1;
+    imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    check_vk_result(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
 
-		// Create a view for the depth stencil image
-		// Images aren't directly accessed in Vulkan, but rather through views described by a subresource range
-		// This allows for multiple views of one image with differing ranges (e.g. for different layers)
-		VkImageViewCreateInfo depthStencilViewCI{};
-		depthStencilViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		depthStencilViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		depthStencilViewCI.format = depthFormat;
-		depthStencilViewCI.subresourceRange = {};
-		depthStencilViewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-		// Stencil aspect should only be set on depth + stencil formats (VK_FORMAT_D16_UNORM_S8_UINT..VK_FORMAT_D32_SFLOAT_S8_UINT)
-		if (depthFormat >= VK_FORMAT_D16_UNORM_S8_UINT) {
-			depthStencilViewCI.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-		}
-		depthStencilViewCI.subresourceRange.baseMipLevel = 0;
-		depthStencilViewCI.subresourceRange.levelCount = 1;
-		depthStencilViewCI.subresourceRange.baseArrayLayer = 0;
-		depthStencilViewCI.subresourceRange.layerCount = 1;
-		depthStencilViewCI.image = depthStencil.image;
-		check_vk_result(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
-	}
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    // Allocate memory for the image (device local) and bind it to our image
+    VkMemoryAllocateInfo memAlloc{};
+    memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(g_Device, depthStencil.image, &memReqs);
+    memAlloc.allocationSize = memReqs.size;
+    memAlloc.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    check_vk_result(vkAllocateMemory(g_Device, &memAlloc, nullptr, &depthStencil.memory));
+    check_vk_result(vkBindImageMemory(g_Device, depthStencil.image, depthStencil.memory, 0));
+
+    // Create a view for the depth stencil image
+    // Images aren't directly accessed in Vulkan, but rather through views described by a subresource range
+    // This allows for multiple views of one image with differing ranges (e.g. for different layers)
+    VkImageViewCreateInfo depthStencilViewCI{};
+    depthStencilViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    depthStencilViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    depthStencilViewCI.format = depthFormat;
+    depthStencilViewCI.subresourceRange = {};
+    depthStencilViewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    // Stencil aspect should only be set on depth + stencil formats (VK_FORMAT_D16_UNORM_S8_UINT..VK_FORMAT_D32_SFLOAT_S8_UINT)
+    if (depthFormat >= VK_FORMAT_D16_UNORM_S8_UINT) {
+        depthStencilViewCI.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+    depthStencilViewCI.subresourceRange.baseMipLevel = 0;
+    depthStencilViewCI.subresourceRange.levelCount = 1;
+    depthStencilViewCI.subresourceRange.baseArrayLayer = 0;
+    depthStencilViewCI.subresourceRange.layerCount = 1;
+    depthStencilViewCI.image = depthStencil.image;
+    check_vk_result(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
+}
 
 void Viewport3D::CreateFrameBuffer(uint32_t width, uint32_t height)
-	{
-		// Create a frame buffer for every image in the swapchain
-		framebuffers.resize(images.size());
-        Logger::Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
-		for (size_t i = 0; i < framebuffers.size(); i++)
-		{
-			array<VkImageView, 2> attachments{};
-			// Color attachment is the view of the swapchain image
-			attachments[0] = imageViews[i];
-			// Depth/Stencil attachment is the same for all frame buffers due to how depth works with current GPUs
-			attachments[1] = depthStencil.imageView;         
+{
+    // Create a frame buffer for every image in the swapchain
+    framebuffers.resize(images.size());
+    Logger::Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
+    for (size_t i = 0; i < framebuffers.size(); i++)
+    {
+        array<VkImageView, 2> attachments{};
+        // Color attachment is the view of the swapchain image
+        attachments[0] = imageViews[i];
+        // Depth/Stencil attachment is the same for all frame buffers due to how depth works with current GPUs
+        attachments[1] = depthStencil.imageView;         
 
-			VkFramebufferCreateInfo frameBufferCI{};
-			frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			// All frame buffers use the same renderpass setup
-			frameBufferCI.renderPass = renderPass;
-			frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
-			frameBufferCI.pAttachments = attachments.data();
-			frameBufferCI.width = width;
-			frameBufferCI.height = height;
-			frameBufferCI.layers = 1;
-            cout << "Before creating Framebuffer: " << framebuffers[i] << endl;
-            // Logger::Log("Creating framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
-			// Create the framebuffer
-			check_vk_result(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
-            if (framebuffers[i] != VK_NULL_HANDLE) {
-                cout << "Framebuffer: " << framebuffers[i] << endl;
-                // Logger::Log("Created framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
-            }
-		}
-	}
+        VkFramebufferCreateInfo frameBufferCI{};
+        frameBufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        // All frame buffers use the same renderpass setup
+        frameBufferCI.renderPass = renderPass;
+        frameBufferCI.attachmentCount = static_cast<uint32_t>(attachments.size());
+        frameBufferCI.pAttachments = attachments.data();
+        frameBufferCI.width = width;
+        frameBufferCI.height = height;
+        frameBufferCI.layers = 1;
+        cout << "Before creating Framebuffer: " << framebuffers[i] << endl;
+        // Logger::Log("Creating framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
+        // Create the framebuffer
+        check_vk_result(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
+        if (framebuffers[i] != VK_NULL_HANDLE) {
+            cout << "Framebuffer: " << framebuffers[i] << endl;
+            // Logger::Log("Created framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
+        }
+    }
+}
 
 // Parent Step2 for pipeline
 void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
@@ -822,15 +831,33 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     fragShaderStageInfo.module = fragShaderModule;
     fragShaderStageInfo.pName = "main";
 
-    VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+    // example for implement an image to texture but 3D
+    array<VkPipelineShaderStageCreateInfo, 2> quadShaders;
 
+    // Quad Shaders
+    quadShaders[0] = imageHandler.loadShader("assets/shaders/vulkan/templatetexture.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    quadShaders[1] = imageHandler.loadShader("assets/shaders/vulkan/templatetexture.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    // end example
+
+    vector<VkPipelineShaderStageCreateInfo> shaderStages(2);
+    shaderStages[0] = vertShaderStageInfo;
+    shaderStages[1] = fragShaderStageInfo;
+    // shaderStages[0] = quadShaders[0];
+    // shaderStages[1] = quadShaders[1];
+
+    int sizeShaderStages = shaderStages.size();
     // Update vertex input state
-    VkVertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(Vertex); // 3 for pos + 3 for color + 3 for normal
-    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vector<VkVertexInputBindingDescription> bindingDescription(1);
+    bindingDescription[0].binding = 0;
+    bindingDescription[0].stride = sizeof(Vertex); // 3 for pos + 3 for color + 3 for normal
+    bindingDescription[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    // bindingDescription[1].binding = 1;
+    // bindingDescription[1].stride = sizeof(TextureBase::Vertex);
+    // bindingDescription[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    vector<VkVertexInputAttributeDescription> attributeDescriptions(2);
     
     // Position
     attributeDescriptions[0].binding = 0;
@@ -844,15 +871,26 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescriptions[1].offset = offsetof(Vertex, color);
 
-    // Normal
+    // Position texture 
+    // attributeDescriptions[0].binding = 0;
+    // attributeDescriptions[0].location = 0;
+    // attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    // attributeDescriptions[0].offset = offsetof(TextureBase::Vertex, pos);
+
+    // // UV texture
+    // attributeDescriptions[1].binding = 0;
+    // attributeDescriptions[1].location = 1;
+    // attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
+    // attributeDescriptions[1].offset = offsetof(TextureBase::Vertex, uv);
+
+    // // Normal UV
     // attributeDescriptions[2].binding = 0;
     // attributeDescriptions[2].location = 2;
     // attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-    // attributeDescriptions[2].offset = sizeof(float) * 6;
+    // attributeDescriptions[2].offset = offsetof(TextureBase::Vertex, normal);
 
-    // Vertex input state (sementara kosong, nanti diisi dari model .obj)
-    // VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    // vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    Logger::Log("Input binding description size: "+ to_string(static_cast<uint32_t>(bindingDescription.size())), LogLevel::SUCCESS);
+    Logger::Log("Input attribute description: " + to_string(static_cast<uint32_t>(attributeDescriptions.size())), LogLevel::SUCCESS );
 
     VkPipelineDepthStencilStateCreateInfo depthStencilStateCI{};
     depthStencilStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -868,15 +906,12 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = 2;
+    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescription.size());
+    vertexInputInfo.pVertexBindingDescriptions = bindingDescription.data();
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    // inputAssembly.primitiveRestartEnable = VK_FALSE;
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = vkhandler::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
 
     VkViewport viewport{};
     viewport.x = 0.0f;
@@ -897,15 +932,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     viewportState.scissorCount = 1;
     viewportState.pScissors = &scissor;
 
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    VkPipelineRasterizationStateCreateInfo rasterizer = vkhandler::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -915,6 +942,7 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     VkPipelineColorBlendAttachmentState blendAttachmentState{};
     blendAttachmentState.colorWriteMask = 0xf;
     blendAttachmentState.blendEnable = VK_FALSE;
+    
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.attachmentCount = 1;
@@ -927,22 +955,34 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
+    std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+
+    VkPipelineDynamicStateCreateInfo dynamicStateInfo{};
+    dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicStateInfo.pDynamicStates =  dynamicStateEnables.data();
+    dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStateEnables.size());
+    dynamicStateInfo.flags = 0;
+
     cout << pipelineLayoutInfo.pSetLayouts << "\n" << pipelineLayout << endl;
+    
     if (vkCreatePipelineLayout(g_Device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         throw runtime_error("Failed to create pipeline layout!");
     }
 
-    VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages, vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending, depthStencilStateCI);
+    VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages.data(), vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending, depthStencilStateCI, dynamicStateInfo, sizeShaderStages);
 
     Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
-    // cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
-    //      << ", Layout: " << reinterpret_cast<void*>(pipelineInfo.layout) 
-    //      << "\nRender Pass: " << pipelineInfo.renderPass << endl;
+    cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
+         << ", Layout: " << reinterpret_cast<void*>(pipelineInfo.layout) 
+         << "\nRender Pass: " << pipelineInfo.renderPass << endl;
     Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
-    // cout << "Renderpass: " << renderPass << endl;
-    // cout << "Pipeline info: " << pipelineInfo.pStages << endl;
+    cout << "Renderpass: " << renderPass << endl;
+    cout << "Pipeline info: " << pipelineInfo.pStages << endl;
 
-    if (vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
+	VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+    vkCreatePipelineCache(g_Device, &pipelineCacheCreateInfo, nullptr, &g_PipelineCache);
+    // check_vk_result(vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
+    if (vkCreateGraphicsPipelines(g_Device, g_PipelineCache, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
         throw runtime_error("Failed to create graphics pipeline!");
     }
     else {
@@ -1086,7 +1126,8 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, nullptr));
 
 	// Get the swap chain images
-	images.resize(imageCount);
+    cout << "Image count: " << imageCount << endl;
+    images.resize(imageCount);
 	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, images.data()));
 	cout << "Image data: " << images.data() << endl;
 
@@ -1112,11 +1153,13 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 		colorAttachmentView.viewType = VK_IMAGE_VIEW_TYPE_2D;
 		colorAttachmentView.flags = 0;
 		colorAttachmentView.image = images[i];
+        cout << "Image: " << images[i] << endl;
 		check_vk_result(vkCreateImageView(g_Device, &colorAttachmentView, nullptr, &imageViews[i]));
 	}
 }
 
 void Viewport3D::CreateOffscreenPipeline() {
+    Logger::Log("Create Offscreen pipeline !!!");
     // RenderPass minimal
     VkAttachmentDescription colorAttachment = createColorAttachment();
     
@@ -1233,7 +1276,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
     }
 
     uint32_t imageIndex;
-
+    
     if (framebuffers.empty()) {
         Logger::Log("Error: Framebuffers not created!", LogLevel::CRASH);
         return;
@@ -1243,35 +1286,47 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         vkWaitForFences(g_Device, 1, &waitFences[currentFrame], VK_TRUE, UINT64_MAX);
         check_vk_result(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
         // Text("Wait fences: %i", waitFences[currentFrame]);
-        cout << "Wait Fences: " << waitFences[currentFrame] << endl;
-		VkResult result2 = vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-        
-        check_vk_result(result2);
+        // cout << "Wait Fences: " << waitFences[currentFrame] << endl;
+		check_vk_result(vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
+
         // Update uniform buffer dengan camera matrices
         ShaderData shaderData{};
         shaderData.modelMatrix = glm::mat4(1.0f); // Identity matrix
         shaderData.viewMatrix = camera.matrices.view;
         shaderData.projectionMatrix = camera.matrices.perspective;
-		cout << "Projection Matrix:\n";
-		glm4Deserealize(shaderData.projectionMatrix);
-		cout << "View Matrix:\n";
-		glm4Deserealize(shaderData.viewMatrix);
-		cout << "Model Matrix:\n";
-		glm4Deserealize(shaderData.modelMatrix);
+		// cout << "Projection Matrix:\n";
+		// glm4Deserealize(shaderData.projectionMatrix);
+		// cout << "View Matrix:\n";
+		// glm4Deserealize(shaderData.viewMatrix);
+		// cout << "Model Matrix:\n";
+		// glm4Deserealize(shaderData.modelMatrix);
         
         // Flip Y axis untuk Vulkan
         shaderData.projectionMatrix[1][1] *= -1;
         
+
+        TextureBase::UniformData uniformData{};
+        // uniformData. = glm::mat4(1.0f); // Identity matrix
+        uniformData.modelView = camera.matrices.view;
+        uniformData.projection = camera.matrices.perspective;
+        uniformData.viewPos = camera.viewPos;
         // Copy UBO ke uniform buffer
+        uniformData.projection[1][1] *= -1;
         // void* data;
         // vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ShaderData), 0, &data);
-        cout << "Current Frame : " << currentFrame << endl; 
-		cout << "Total uniform buffer: " << uniformBuffers.size() << endl;
-        cout << "Mapped Uniform Buffer: " << uniformBuffers[currentFrame].mapped << endl;
-        // cout << "Shader data: " << reinterpret_cast<uintptr_t>(shaderData) << endl;
+        // cout << "Current Frame : " << currentFrame << endl; 
+		// cout << "Total uniform buffer: " << uniformBuffers.size() << endl;
+        // cout << "Mapped Uniform Buffer: " << uniformBuffers[currentFrame].mapped << endl;
+        // cout << "Total uniform buffer from texture: " << textureHandler.uniformBuffers.size() << endl;
+        // cout << "Mapped Uniform Buffer from texture: " << textureHandler.uniformBuffers[currentFrame].mapped << endl;
+        textureHandler.currentFrame = currentFrame;
+        // memcpy(textureHandler.uniformBuffers[currentFrame].mapped, &textureHandler.uniformData, sizeof(textureHandler.uniformData));
+
+        // textureHandler.buildCommandBuffer();
         memcpy(uniformBuffers[currentFrame].mapped, &shaderData, sizeof(ShaderData));
         // vkUnmapMemory(g_Device, uniformBufferMemory);
 
+		// vkResetCommandBuffer(textureHandler.drawCmdBuffers[textureHandler.currentFrame], 0);
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         
         VkCommandBufferBeginInfo beginInfo{};
@@ -1279,7 +1334,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         
         VkClearValue clearValues[2]{};
-        clearValues[0].color = { { 0.0f, 0.0f, 0.2f, 1.0f } };
+        clearValues[0].color = imageHandler.defaultClearColor;
         clearValues[1].depthStencil = { 1.0f, 0 };
 
         // if (vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo) != VK_SUCCESS) {
@@ -1299,10 +1354,14 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         renderPassInfo.pClearValues = clearValues;
         renderPassInfo.framebuffer = framebuffers[imageIndex];
         
+        const VkCommandBuffer cmdTexture = textureHandler.drawCmdBuffers[currentFrame];
+        // cout << "CMD Texture: " << cmdTexture <<  endl;
 		const VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
 		check_vk_result(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+		// check_vk_result(vkBeginCommandBuffer(cmdTexture, &beginInfo));
 
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        // vkCmdBeginRenderPass(cmdTexture, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         
 		VkViewport viewport{};
 		viewport.height = (float)height;
@@ -1310,39 +1369,52 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		viewport.minDepth = (float)0.0f;
 		viewport.maxDepth = (float)1.0f;
 		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+		// vkCmdSetViewport(cmdTexture, 0, 1, &viewport);
         
-        cout << "Scissor step" << endl;
+        // cout << "Scissor step" << endl;
         VkRect2D scissor{};
 		scissor.extent.width = width;
 		scissor.extent.height = height;
 		scissor.offset.x = 0;
 		scissor.offset.y = 0;
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+		// vkCmdSetScissor(cmdTexture, 0, 1, &scissor);
 
         // Bind descriptor set
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &uniformBuffers[currentFrame].descriptorSet, 0, nullptr);
+        // vkCmdBindDescriptorSets(cmdTexture, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &textureHandler.descriptorSets[currentFrame], 0, nullptr);
+        // cout << "Texture handler descriptorsets " << textureHandler.descriptorSets[currentFrame] << endl;
 
         // Bind pipeline
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        // vkCmdBindPipeline(cmdTexture, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
         // Bind vertex buffer
         VkDeviceSize offsets[1]{0};
-		cout << "Vertikal buffer: " << vertices.buffer << endl;
+		// cout << "Vertikal buffer: " << vertices.buffer << endl;
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
+        // vkCmdBindVertexBuffers(cmdTexture, 0, 1, &textureHandler.vertexBuffer.buffer, offsets);
         
         
 		// Bind triangle index buffer
-		cout << "Index buffer: " << indices.buffer << endl;
+		// cout << "Index buffer: " << indices.buffer << endl;
 		vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+		// vkCmdBindIndexBuffer(cmdTexture, textureHandler.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 		// Draw indexed triangle
 		vkCmdDrawIndexed(commandBuffer, indices.count, 1, 0, 0, 0);
+		// vkCmdDrawIndexed(cmdTexture, textureHandler.indexCount, 1, 0, 0, 0);
 
 		vkCmdEndRenderPass(commandBuffer);
+		// vkCmdEndRenderPass(cmdTexture);
         
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
         }
+
+        // if (vkEndCommandBuffer(cmdTexture) != VK_SUCCESS){
+        //     Logger::Log("Failed to record command buffer from texture!", LogLevel::CRASH);
+        // }
 
 		VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
@@ -1351,6 +1423,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         submitInfo.commandBufferCount = 1;
 		submitInfo.pWaitDstStageMask = &waitStageMask;      // Pointer to the list of pipeline stages that the semaphore waits will occur at
         submitInfo.pCommandBuffers = &commandBuffer;
+        // submitInfo.pCommandBuffers = &cmdTexture;
 
         // Semaphore to wait upon before the submitted command buffer starts executing
 		submitInfo.pWaitSemaphores = &presentCompleteSemaphores[currentFrame];
@@ -1433,13 +1506,12 @@ void Viewport3D::DrawViewport3D() {
     static bool isShowViewport = true;
     static float currentPosition[3] = { 0.0f, 0.0f, -2.5f }, currentRotation[3] = { 0.0f, 0.0f, -180.0f };
     static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
-    
+
     // Initialize viewport texture descriptor set
     if (viewportTexture == VK_NULL_HANDLE) {
-        // Create descriptor set for viewport texture
         viewportTexture = ImGui_ImplVulkan_AddTexture(
             offscreenSampler,
-            offscreenImageView,
+            imageViews[1],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     }
@@ -1456,15 +1528,74 @@ void Viewport3D::DrawViewport3D() {
     rotation = glm::vec3(currentRotation[0], currentRotation[1], currentRotation[2]);
     camera.setPosition(position);
     camera.setRotation(rotation);
-    showCurrentCameraPosition();
+    // showCurrentCameraPosition();
     Text("Camera Rotation: (%.2f, %.2f, %.2f)", camera.rotation.x, camera.rotation.y, camera.rotation.z);
+   
     Checkbox("Show Viewport", &isShowViewport);
     if (isShowViewport) {
         HandleRenderViewport(viewportWidth, viewportHeight);
     }
-    Image((ImTextureID)viewportTexture, ImVec2(640, 480));
-    
+
+    ImVec2 viewportSize = ImGui::GetContentRegionAvail();
+
+    // Update viewport dimensions if window resized
+    if (viewportWidth != static_cast<int>(viewportSize.x) || viewportHeight != static_cast<int>(viewportSize.y)) {
+        viewportWidth = static_cast<int>(viewportSize.x);
+        viewportHeight = static_cast<int>(viewportSize.y);
+    }
+
+    Text("Viewport Size: %d x %d", viewportWidth, viewportHeight);
+
+    // Get cursor position and viewport position
+    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+    ImVec2 mousePos = ImGui::GetMousePos();
+
+    Text("Mouse Position: (%.2f, %.2f)", mousePos.x, mousePos.y);
+    Text("Viewport Position: (%.2f, %.2f)", cursorPos.x, cursorPos.y);
+    // Check if mouse is inside the viewport
+    bool isMouseInsideViewport = mousePos.x >= cursorPos.x &&
+                                 mousePos.y >= cursorPos.y &&
+                                 mousePos.x <= cursorPos.x + viewportSize.x &&
+                                 mousePos.y <= cursorPos.y + viewportSize.y;
+
+    // Render the viewport image
+    Image((ImTextureID)viewportTexture, viewportSize);
+
+    // Handle WASD input if mouse is inside the viewport
+    if (isMouseInsideViewport) {
+        HandleCameraMovement();
+    }
+
     End();
+}
+
+void Viewport3D::HandleCameraMovement() {
+    const float deltaTime = 0.016f; // Simulasi waktu frame (60 FPS)
+    const float moveSpeed = camera.movementSpeed * deltaTime;
+
+    // Check ImGui IO for key presses
+    ImGuiIO& io = ImGui::GetIO();
+
+    const Uint8* state = reinterpret_cast<const Uint8*>(SDL_GetKeyboardState(NULL));
+    if (state[SDL_SCANCODE_W]) {
+        Logger::Log("W pressed", LogLevel::INFO);
+        camera.keys.up;
+    }
+    if (state[SDL_SCANCODE_S]) {
+        Logger::Log("S pressed", LogLevel::INFO);
+        camera.keys.down;
+    }
+    if (state[SDL_SCANCODE_A]) {
+        Logger::Log("A pressed", LogLevel::INFO);
+        camera.keys.left;
+    }
+    if (state[SDL_SCANCODE_D]) {
+        Logger::Log("D pressed", LogLevel::INFO);
+        camera.keys.right;
+    }
+
+    // Update camera based on movement keys
+    camera.update(deltaTime);
 }
 
 void Viewport3D::recreateOffscreenResources(uint32_t width, uint32_t height) {
@@ -1527,14 +1658,15 @@ void Viewport3D::videoPlayerUI(){
                 imageHandler.updateAudio();
             }
             else {
-                // if (imageHandler.fps <= 24) {
-                //    imageHandler.updateBothVideoAndAudio24fps();
-                // } else {
-                     imageHandler.updateBothVideoAndAudio();
-                // }
+                if (imageHandler.fps <= 24) {
+                    imageHandler.updateBothVideoAndAudio24fps();
+                } else {
+                    imageHandler.updateBothVideoAndAudio();
+                }
             }
         }
-            renderVideoFrame();
+
+        renderVideoFrame();
 
         Separator();
         if (Button(paused ? "Play" : "Pause")) {
@@ -2020,9 +2152,9 @@ int main(int argc, char* argv[]){
 
     try {
         Viewport3D viewport;
-        
+        viewport.textureHandler.convertToKtx("assets/images/backgrounds/Hanako_Swimsuit.png");
 		// Setup a default look-at camera
-		viewport.camera.type = Camera::CameraType::firstperson;
+		viewport.camera.type = Camera::CameraType::lookat;
 		viewport.camera.setPosition(glm::vec3(0.0f, 0.0f, -2.5f));
 		viewport.camera.setRotation(glm::vec3(0.0f));
 		viewport.camera.setPerspective(60.0f, (float)1280 / (float)720, 1.0f, 256.0f);
@@ -2033,7 +2165,7 @@ int main(int argc, char* argv[]){
         
         // Langkah 2: Create render pass PERTAMA
         Logger::Log("Creating render pass...");
-        viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight,  false, false);
+        viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight, false, false);
         viewport.createSynchronizationPrimitives();
         viewport.createRenderPass();
 
@@ -2061,7 +2193,12 @@ int main(int argc, char* argv[]){
         viewport.helperInitImage();
         viewport.CreateOffscreenResources(1280, 720);
 
-        viewport.CreateOffscreenPipeline();           
+        viewport.textureHandler.loadTexture("assets/texture/metalplate01_rgba.ktx");
+        viewport.textureHandler.generateQuad();
+        viewport.textureHandler.setupDescriptors();
+        viewport.textureHandler.prepareUniformBuffers();
+        // Create offscreen pipeline
+        viewport.CreateOffscreenPipeline();
     
         Logger::Log("Creating uniform descriptor sets...");
         viewport.createUniformDescriptorSets();

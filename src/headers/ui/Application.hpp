@@ -7,13 +7,15 @@
 #include <string>
 #include <MainWindow.hpp>
 #include <NetworkManager.hpp>
-#include <Check_Environment.cpp>
+#include <Check_Environment.hpp>
 #include <Debugger.hpp>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
 #include <future>
+
+using namespace core_engine;
 
 class ApplicationManager {
 private:

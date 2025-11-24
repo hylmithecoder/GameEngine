@@ -24,7 +24,7 @@
 #include <algorithm>
 #include <nfd.h>
 #include <SceneSerializer.hpp>
-#include <FFmpegWrapper.hpp>
+#include "../audio/FFmpegWrapper.hpp"
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
