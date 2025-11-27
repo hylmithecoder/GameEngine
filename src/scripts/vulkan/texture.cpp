@@ -17,7 +17,7 @@ void TextureBase::generateQuad() {
     // Setup indices
     vector<uint32_t> indices = { 0,1,2, 2,3,0 };
     indexCount = static_cast<uint32_t>(indices.size());
-    Logger::Log("Index count: " + to_string(reinterpret_cast<uint32_t>(indexCount)));
+    Log("Index count: " + to_string(reinterpret_cast<uint32_t>(indexCount)));
 
     // Create buffers and upload data to the GPU
     struct StagingBuffers {
@@ -36,7 +36,7 @@ void TextureBase::generateQuad() {
     // Copy from host do device
     vulkanDevice.copyBuffer(&stagingBuffers.vertices, &vertexBuffer, currentGraphicsQueue);
     vulkanDevice.copyBuffer(&stagingBuffers.indices, &indexBuffer, currentGraphicsQueue);
-
+    Log("Success to create vertex buffer texture !", LogLevel::SUCCESS);
     // Clean up
     stagingBuffers.vertices.destroy();
     stagingBuffers.indices.destroy();
@@ -45,14 +45,14 @@ void TextureBase::generateQuad() {
 void TextureBase::setupDescriptors()
 {
     // Pool
-    vector<VkDescriptorPoolSize> poolSizes = {
-        vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_CONCURRENT_FRAMES),
-        // The sample uses a combined image + sampler descriptor to sample the texture in the fragment shader
-        // We need multiple descriptors (NOT images) due to how we set up the descriptor bindings in this sample
-        vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_CONCURRENT_FRAMES)
-    };
-    VkDescriptorPoolCreateInfo descriptorPoolInfo = vkhandler::initializers::descriptorPoolCreateInfo(poolSizes, 2);
-    VK_CHECK_RESULT(vkCreateDescriptorPool(currentDevice, &descriptorPoolInfo, nullptr, &currentDescriptorPool));
+    // vector<VkDescriptorPoolSize> poolSizes = {
+    //     vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_CONCURRENT_FRAMES),
+    //     // The sample uses a combined image + sampler descriptor to sample the texture in the fragment shader
+    //     // We need multiple descriptors (NOT images) due to how we set up the descriptor bindings in this sample
+    //     vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_CONCURRENT_FRAMES)
+    // };
+    // VkDescriptorPoolCreateInfo descriptorPoolInfo = vkhandler::initializers::descriptorPoolCreateInfo(poolSizes, 2);
+    // VK_CHECK_RESULT(vkCreateDescriptorPool(currentDevice, &descriptorPoolInfo, nullptr, &currentDescriptorPool));
 
     // Layout
     vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
@@ -75,9 +75,13 @@ void TextureBase::setupDescriptors()
 
     // Sets per frame, just like the buffers themselves
     VkDescriptorSetAllocateInfo allocInfo = vkhandler::initializers::descriptorSetAllocateInfo(currentDescriptorPool, &descriptorSetLayout, 1);
-    for (auto i = 0; i < uniformBuffers.size(); i++) {
+    DEBUG_LOG("Uniformbuffer size: %i", uniformBuffers.size());
+    for (uint32_t i = 0; i < uniformBuffers.size(); i++) {
+        Log("Before bind descriptorSets");
         VK_CHECK_RESULT(vkAllocateDescriptorSets(currentDevice, &allocInfo, &descriptorSets[i]));
+        Log("After bind descriptorSets");
 
+        Log("Before write descriptor sets");
         vector<VkWriteDescriptorSet> writeDescriptorSets = {
             // Binding 0 : Vertex shader uniform buffer
             vkhandler::initializers::writeDescriptorSet(descriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, &uniformBuffers[i].descriptor),
@@ -90,61 +94,173 @@ void TextureBase::setupDescriptors()
                 3,												// Shader binding point 1
                 &textureDescriptor)								// Pointer to the descriptor image for our texture
         };
+        Log("After write descriptor sets");
 
+        Log("Write Descriptor sets: %i", static_cast<uint32_t>(writeDescriptorSets[0].descriptorCount));
         vkUpdateDescriptorSets(currentDevice, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+        DEBUG_LOGF("Success to write descriptor texture ! %p", LogLevel::SUCCESS, textureDescriptor.imageView);
+        DEBUG_LOGF("Success to write uniform buffer descriptor texture ! %p", LogLevel::SUCCESS, uniformBuffers[i].descriptor.buffer);
     }
 }
 
-void TextureBase::preparePipelines()
-{
-    // Layout
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vkhandler::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
-    VK_CHECK_RESULT(vkCreatePipelineLayout(currentDevice, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+void TextureBase::preparePipelines() {
+    try {
+        // Validasi render pass sebelum membuat pipeline
+        if (currentRenderPass == VK_NULL_HANDLE) {
+            throw std::runtime_error("Render pass not initialized! Call setupRenderPass() first.");
+        } else {
+            cout << "Render pass: " << currentRenderPass << endl;
+        }
 
-    // Pipeline
-    VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = vkhandler::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
-    VkPipelineRasterizationStateCreateInfo rasterizationState = vkhandler::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
-    VkPipelineColorBlendAttachmentState blendAttachmentState = vkhandler::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
-    VkPipelineColorBlendStateCreateInfo colorBlendState = vkhandler::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
-    VkPipelineDepthStencilStateCreateInfo depthStencilState = vkhandler::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
-    VkPipelineViewportStateCreateInfo viewportState = vkhandler::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
-    VkPipelineMultisampleStateCreateInfo multisampleState = vkhandler::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
-    vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dynamicState = vkhandler::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
+        if (currentDevice == VK_NULL_HANDLE) {
+            throw std::runtime_error("Device not initialized!");
+        }
 
-    array<VkPipelineShaderStageCreateInfo,2> shaderStages;
+        if (pipelineLayout == VK_NULL_HANDLE) {
+            // Create pipeline layout
+            if (descriptorSetLayout == VK_NULL_HANDLE) {
+                throw std::runtime_error("Descriptor set layout not initialized! Call setupDescriptors() first.");
+            } else {
+                cout << "Descriptor set layout: " << descriptorSetLayout << endl;
+            }
+            VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = 
+                vkhandler::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
+            
+            VK_CHECK_RESULT(vkCreatePipelineLayout(currentDevice, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+            Log("Pipeline layout created successfully", LogLevel::SUCCESS);
+        }
 
-    // Shaders
-    shaderStages[0] = loadShader((folderShadersVulkan() + "templatetexture.vert.spv").c_str(), VK_SHADER_STAGE_VERTEX_BIT);
-    shaderStages[1] = loadShader((folderShadersVulkan() + "templatetexture.frag.spv").c_str(), VK_SHADER_STAGE_FRAGMENT_BIT);
+        // Load shader stages
+        array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
+        try {
+            shaderStages[0] = loadShader((folderShadersVulkan() + "templatetexture.vert.spv").c_str(), 
+                                        VK_SHADER_STAGE_VERTEX_BIT);
+            shaderStages[1] = loadShader((folderShadersVulkan() + "templatetexture.frag.spv").c_str(), 
+                                        VK_SHADER_STAGE_FRAGMENT_BIT);
+            
+            Log("Shaders loaded successfully", LogLevel::SUCCESS);
+            Log("Vert shader module: %p", (void*)shaderStages[0].module);
+            Log("Frag shader module: %p", (void*)shaderStages[1].module);
 
-    // Vertex input state
-    vector<VkVertexInputBindingDescription> vertexInputBindings = {
-        vkhandler::initializers::vertexInputBindingDescription(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX)
-    };
-    vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
-        vkhandler::initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)),
-        vkhandler::initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)),
-        vkhandler::initializers::vertexInputAttributeDescription(0, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)),
-    };
-    VkPipelineVertexInputStateCreateInfo vertexInputState = vkhandler::initializers::pipelineVertexInputStateCreateInfo();
-    vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
-    vertexInputState.pVertexBindingDescriptions = vertexInputBindings.data();
-    vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
-    vertexInputState.pVertexAttributeDescriptions = vertexInputAttributes.data();
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Failed to load shaders: " + std::string(e.what()));
+        }
 
-    VkGraphicsPipelineCreateInfo pipelineCreateInfo = vkhandler::initializers::pipelineCreateInfo(pipelineLayout, currentRenderPass, 0);
-    pipelineCreateInfo.pVertexInputState = &vertexInputState;
-    pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
-    pipelineCreateInfo.pRasterizationState = &rasterizationState;
-    pipelineCreateInfo.pColorBlendState = &colorBlendState;
-    pipelineCreateInfo.pMultisampleState = &multisampleState;
-    pipelineCreateInfo.pViewportState = &viewportState;
-    pipelineCreateInfo.pDepthStencilState = &depthStencilState;
-    pipelineCreateInfo.pDynamicState = &dynamicState;
-    pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
-    pipelineCreateInfo.pStages = shaderStages.data();
-    VK_CHECK_RESULT(vkCreateGraphicsPipelines(currentDevice, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipeline));
+        // Setup vertex input state
+        vector<VkVertexInputBindingDescription> vertexInputBindings = {
+            vkhandler::initializers::vertexInputBindingDescription(
+                0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX)
+        };
+
+        vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
+            vkhandler::initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)),
+            vkhandler::initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)),
+            vkhandler::initializers::vertexInputAttributeDescription(0, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)),
+        };
+
+        VkPipelineVertexInputStateCreateInfo vertexInputState = 
+            vkhandler::initializers::pipelineVertexInputStateCreateInfo();
+        vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
+        vertexInputState.pVertexBindingDescriptions = vertexInputBindings.data();
+        vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
+        vertexInputState.pVertexAttributeDescriptions = vertexInputAttributes.data();
+
+        // Setup pipeline states
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = 
+            vkhandler::initializers::pipelineInputAssemblyStateCreateInfo(
+                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
+
+        VkPipelineRasterizationStateCreateInfo rasterizationState = 
+            vkhandler::initializers::pipelineRasterizationStateCreateInfo(
+                VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+
+        VkPipelineColorBlendAttachmentState blendAttachmentState = 
+            vkhandler::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
+
+        VkPipelineColorBlendStateCreateInfo colorBlendState = 
+            vkhandler::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilState = 
+            vkhandler::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+            viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            viewportState.viewportCount = 0;
+            viewportState.pViewports = nullptr;
+            viewportState.scissorCount = 0;
+            viewportState.pScissors = nullptr;
+            // vkhandler::initializers::pipelineViewportStateCreateInfo(0, 0, 0);
+
+        VkPipelineMultisampleStateCreateInfo multisampleState = 
+            vkhandler::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
+
+        vector<VkDynamicState> dynamicStateEnables = { 
+            VK_DYNAMIC_STATE_VIEWPORT, 
+            VK_DYNAMIC_STATE_SCISSOR 
+        };
+        VkPipelineDynamicStateCreateInfo dynamicState = 
+            vkhandler::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
+
+        // Create graphics pipeline
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo = 
+            vkhandler::initializers::pipelineCreateInfo(pipelineLayout, currentRenderPass, 0);
+
+        assert(pipelineLayout != VK_NULL_HANDLE);
+        
+        VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+        vkCreatePipelineCache(currentDevice, &pipelineCacheCreateInfo, nullptr, &pipelineCache);
+        // LogPointer("Vertex input attributes: ", vertexInputAttributes.data());
+        // LogPointer("Vertex input bindings: ", vertexInputBindings.data());
+        // LogPointer("Input assembly state: ", inputAssemblyState);
+        // LogPointer("Rasterization state: ", rasterizationState);
+        // LogPointer("Colorblend state: ", colorBlendState);
+        // LogPointer("Multisample state: ", multisampleState);
+        // LogPointer("Viewport state: ", viewportState);
+        // LogPointer("Depth stencil state: ", depthStencilState);
+        pipelineCreateInfo.pVertexInputState = &vertexInputState;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
+        pipelineCreateInfo.pRasterizationState = &rasterizationState;
+        pipelineCreateInfo.pColorBlendState = &colorBlendState;
+        pipelineCreateInfo.pMultisampleState = &multisampleState;
+        pipelineCreateInfo.pViewportState = &viewportState;
+        pipelineCreateInfo.pDepthStencilState = &depthStencilState;
+        pipelineCreateInfo.pDynamicState = &dynamicState;
+        pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+        pipelineCreateInfo.pStages = shaderStages.data();
+
+        LogPointer("Pipeline Layout: ", pipelineLayout);
+        Log("stageCount=%u", pipelineCreateInfo.stageCount);
+        Log("vertexBindingCount=%u", vertexInputState.vertexBindingDescriptionCount);
+        Log("vertexAttrCount=%u", vertexInputState.vertexAttributeDescriptionCount);
+        Log("viewportCount=%u scissorCount=%u", viewportState.viewportCount, viewportState.scissorCount);
+        Log("colorBlendAttachmentCount=%u", colorBlendState.attachmentCount);
+        LogPointer("pStages", pipelineCreateInfo.pStages);
+
+        // Log debugging info
+        Log("Creating graphics pipeline...");
+        Log("Shader stages: %i",  shaderStages.size());
+        Log("Vertex input bindings: %i",  vertexInputBindings.size());
+        Log("Vertex input attributes: %i",  vertexInputAttributes.size());
+        LogPointer("Render pass: ",  currentRenderPass);
+        LogPointer("Device ", currentDevice);
+
+        if (vkCreateGraphicsPipelines(currentDevice, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipeline) != VK_SUCCESS) {
+            throw runtime_error("Failed to create graphics pipeline!");
+        }
+        else {
+            LogPointer("Graphic Pipeline info: ", pipeline);
+            // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
+        }
+        // VK_CHECK_RESULT(vkCreateGraphicsPipelines(currentDevice, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipeline));
+        Log("Graphics pipeline created successfully!", LogLevel::SUCCESS);
+
+    } catch (const std::exception& e) {
+        Log("Error in preparePipelines: " + std::string(e.what()), LogLevel::CRASH);
+        throw e;
+    } catch (...) {
+        Log("Unknown error in preparePipelines", LogLevel::CRASH);
+        throw;
+    }
 }
 
 void TextureBase::prepareUniformBuffers()
@@ -152,7 +268,9 @@ void TextureBase::prepareUniformBuffers()
     for (auto& buffer : uniformBuffers) {
         VK_CHECK_RESULT(vulkanDevice.createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &buffer, sizeof(UniformData), &uniformData));
         VK_CHECK_RESULT(buffer.map());
+        cout << "Buffer map address: " << buffer.map() << endl;
     }
+    Log("Success to prepare uniform buffers texture !", LogLevel::SUCCESS);
 }
 
 string TextureBase::convertToKtx(const string& imageNameWillConvert) {
@@ -207,13 +325,13 @@ string TextureBase::convertToKtx(const string& imageNameWillConvert) {
     if (result != KTX_SUCCESS) {
         throw std::runtime_error("Failed to write KTX file: " + outPath.string());
     }
-    Logger::Log("KTX file created: " + outPath.string(), LogLevel::SUCCESS);
+    Log("KTX file created: " + outPath.string(), LogLevel::SUCCESS);
     return outPath.string();
 }
 
 void TextureBase::loadTexture(const string& ktxTexturePath)
 {
-    Logger::Log("Load Texture now: " + ktxTexturePath, LogLevel::SUCCESS);
+    Log("Load Texture now: " + ktxTexturePath, LogLevel::SUCCESS);
     // We use the Khronos texture format (https://www.khronos.org/opengles/sdk/tools/KTX/file_format_spec/)
     std::string filename = ktxTexturePath;
     // Texture data contains 4 channels (RGBA) with unnormalized 8-bit values, this is the most commonly supported format
@@ -538,6 +656,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
     // The view will be based on the texture's image
     view.image = texture.image;
     VK_CHECK_RESULT(vkCreateImageView(currentDevice, &view, nullptr, &texture.view));
+    Log("Successfully to create a texture");
 }
 
 // void TextureBase::updateUniformBuffers(){
@@ -591,4 +710,72 @@ void TextureBase::buildCommandBuffer()
     vkCmdEndRenderPass(cmdBuffer);
 
     VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuffer));
+}
+
+void TextureBase::setupRenderPassTexture(){
+    std::array<VkAttachmentDescription, 2> attachments{
+		// Color attachment
+		VkAttachmentDescription{
+			.format = VK_FORMAT_B8G8R8A8_UNORM,
+			.samples = VK_SAMPLE_COUNT_1_BIT,
+			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+			.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+			.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+			.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+			.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+		},
+		// Depth attachment
+		VkAttachmentDescription{
+			.format = depthFormat,
+			.samples = VK_SAMPLE_COUNT_1_BIT,
+			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+			.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+			.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+			.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+			.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+		}
+	};
+
+	VkAttachmentReference colorReference{ .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+	VkAttachmentReference depthReference{ .attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+
+	VkSubpassDescription subpassDescription{
+		.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+		.colorAttachmentCount = 1,
+		.pColorAttachments = &colorReference,
+		.pDepthStencilAttachment = &depthReference,
+	};
+
+	// Subpass dependencies for layout transitions
+	std::array<VkSubpassDependency, 2> dependencies{
+		VkSubpassDependency{
+			.srcSubpass = VK_SUBPASS_EXTERNAL,
+			.dstSubpass = 0,
+			.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+			.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+			.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+		},
+		VkSubpassDependency{
+			.srcSubpass = VK_SUBPASS_EXTERNAL,
+			.dstSubpass = 0,
+			.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			.srcAccessMask = 0,
+			.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+		}
+	};
+
+	VkRenderPassCreateInfo renderPassInfo{
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+		.attachmentCount = static_cast<uint32_t>(attachments.size()),
+		.pAttachments = attachments.data(),
+		.subpassCount = 1,
+		.pSubpasses = &subpassDescription,
+		.dependencyCount = static_cast<uint32_t>(dependencies.size()),
+		.pDependencies = dependencies.data(),
+	};
+	VK_CHECK_RESULT(vkCreateRenderPass(currentDevice, &renderPassInfo, nullptr, &currentRenderPass));
 }

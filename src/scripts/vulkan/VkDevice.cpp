@@ -425,7 +425,8 @@ namespace vkhandler
 		buffer->setupDescriptor();
 
 		// Attach the memory to the buffer object
-		Logger::Log("Success add a buffer vkhandler namespace", LogLevel::SUCCESS);
+		cout << "Buffer" << buffer << endl;
+		Log("Success add a buffer vkhandler namespace", LogLevel::SUCCESS);
 		return buffer->bind();
 	}
 

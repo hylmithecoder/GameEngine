@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <memory>
+#include <typeinfo>
 
 class TextureBase : public VulkanHandler {
     public :
@@ -17,8 +18,8 @@ class TextureBase : public VulkanHandler {
         string convertToKtx(const string& imageNameWillConvert);
         void loadTexture(const string& ktxTexturePath);
 
-        virtual void setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentGraphicQueue, VkCommandPool commandPool, VkPhysicalDeviceMemoryProperties memoryProperties){
-            Logger::Log("Override to this vulkandevice class");
+        virtual void setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, VkCommandPool commandPool, VkPhysicalDeviceMemoryProperties memoryProperties, VkRenderPass renderPass, VkPhysicalDeviceProperties deviceProps, VkPhysicalDeviceFeatures deviceFeatures, VkDescriptorPool descriptorPool) {
+            Log("Override to this vulkandevice class");
             
             try {
                 currentDevice = device;
@@ -26,14 +27,26 @@ class TextureBase : public VulkanHandler {
                 currentOffscreenCommandPool = commandPool;
                 currentGraphicsQueue = graphicsQueue;
                 currentMemoryProperties = memoryProperties;
+                currentDescriptorPool = descriptorPool;
+                // currentRenderPass = renderPass;
 
-                cout << "Device: " << currentDevice << "\n"
-                "Physical Device" << currentPhysicalDevice << "\n"
-                "Queue: " << graphicsQueue << endl; 
+                LogPointer("Get Device: ", currentDevice);
+                LogPointer("Get Physical Device: ", currentPhysicalDevice);
+                LogPointer("Get Queue: ", currentGraphicsQueue);
+                LogPointer("Get Descriptor pool ", currentDescriptorPool);
                 vulkanDevice.logicalDevice = device;
                 vulkanDevice.physicalDevice = physicalDevice;
                 vulkanDevice.memoryProperties = currentMemoryProperties;
                 vulkanDevice.commandPool = commandPool;
+                vulkanDevice.properties = deviceProps;
+                vulkanDevice.features = deviceFeatures;
+
+                if (vulkanDevice.features.samplerAnisotropy) {
+                    vulkanDevice.enabledFeatures.samplerAnisotropy = VK_TRUE;
+                    Log("Device supports samplerAnisotropy", LogLevel::SUCCESS);
+                } else {
+                    Log("Device does not support samplerAnisotropy", LogLevel::WARNING);
+                }
                 // setAllInitVulkanToVulkanDevice();
             } catch (const exception& e){
                 cerr << e.what() << endl;
@@ -48,6 +61,7 @@ class TextureBase : public VulkanHandler {
 
         // Global for render current texture
         void buildCommandBuffer();
+        void setupRenderPassTexture();
 
         struct UniformData {
             glm::mat4 projection;
@@ -63,6 +77,7 @@ class TextureBase : public VulkanHandler {
         vkhandler::Buffer vertexBuffer;
         vkhandler::Buffer indexBuffer;
         uint32_t indexCount{ 0 };
+        VkPipelineLayout pipelineLayout{ VK_NULL_HANDLE };
 
     private :
         struct Texture {
@@ -80,8 +95,7 @@ class TextureBase : public VulkanHandler {
 
         VkPipeline pipeline{ VK_NULL_HANDLE };
         VkPipelineCache pipelineCache{ VK_NULL_HANDLE };
-        VkPipelineLayout pipelineLayout{ VK_NULL_HANDLE };
-
+        VkFormat depthFormat {VK_FORMAT_UNDEFINED};
 
         // helper
         // VkPipelineShaderStageCreateInfo loadShader(const char* fileName, VkShaderStageFlagBits stage);

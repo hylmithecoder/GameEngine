@@ -224,7 +224,7 @@ class VulkanHandler {
             }
 
             // Debug print after successful allocation
-            Logger::Log("Command Buffer allocated: " + std::to_string((uint64_t)commandBuffer), LogLevel::INFO);
+            Log("Command Buffer allocated: " + std::to_string((uint64_t)commandBuffer), LogLevel::INFO);
 
             return commandBuffer;
         }

@@ -12,7 +12,7 @@ VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
 
     VkDeviceSize imageSize = texWidth * texHeight * 4;
     
-    Debug::Logger::Log("Texture size: "+to_string(imageSize));
+    DEBUG_LOG("Texture size: %i", imageSize);
     // Buat image yang langsung bisa diakses CPU (HOST_VISIBLE)
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -33,7 +33,7 @@ VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
     if (vkCreateImage(currentDevice, &imageInfo, nullptr, &textureImage) != VK_SUCCESS)
         throw runtime_error("Failed to create image!");
         
-    Debug::Logger::Log("Texture image: "+to_string(reinterpret_cast<uintptr_t>(textureImage)));
+    Log("Texture image: "+to_string(reinterpret_cast<uintptr_t>(textureImage)));
 
     // Alokasi memory
     VkMemoryRequirements memRequirements;
@@ -96,8 +96,8 @@ VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
         throw runtime_error("Failed to create texture sampler!");
     // cout << "TextureSampler loaded: " << textureSampler << endl;
     // cout << "TextureImageView loaded: " << textureImageView << endl;
-    Debug::Logger::Log("TextureSampler loaded: " + to_string(reinterpret_cast<uintptr_t>(textureSampler)));
-    Debug::Logger::Log("TextureImageView loaded: " + to_string(reinterpret_cast<uintptr_t>(textureImageView)));
+    Log("TextureSampler loaded: " + to_string(reinterpret_cast<uintptr_t>(textureSampler)));
+    Log("TextureImageView loaded: " + to_string(reinterpret_cast<uintptr_t>(textureImageView)));
     // Tambahin ke ImGui
     VkDescriptorSet imguiDescSet = ImGui_ImplVulkan_AddTexture(
         textureSampler,
@@ -109,7 +109,7 @@ VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
 }
 
 void VulkanHandler::setCurrentDeviceAndPhysic(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, uint32_t currentGraphicQueue, VkCommandPool commandPool, VkPhysicalDeviceMemoryProperties memoryProperties) {
-    Logger::Log("Setting current device and physical device", LogLevel::SUCCESS);
+    Log("Setting current device and physical device", LogLevel::SUCCESS);
     currentDevice = device;
     currentPhysicalDevice = physicalDevice;
     currentOffscreenCommandPool = commandPool;
@@ -314,7 +314,7 @@ bool VulkanHandler::OpenFileVideo(const char* filePath){
     if (audioStreamIndex){
         openAudio();
     } else {
-        Logger::Log("Audio Stream Not found", LogLevel::CRASH);
+        Log("Audio Stream Not found", LogLevel::CRASH);
     }
 
     isPlaying = true;
@@ -430,7 +430,7 @@ bool VulkanHandler::createVideoTexture() {
     videoDescriptorSet = ImGui_ImplVulkan_AddTexture(videoSampler, videoImageView, 
                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    Logger::Log("Video texture created", LogLevel::SUCCESS);
+    Log("Video texture created", LogLevel::SUCCESS);
     return true;
 }
 
@@ -695,12 +695,12 @@ bool VulkanHandler::openAudio() {
 
 void VulkanHandler::updateAudio() {
     if (!audioCodecContext || !swrContext || audioStream == nullptr) {
-        // Logger::Log("Audio not initialized");
+        // Log("Audio not initialized");
         return; // Audio not initialized
     }
 
     if (!isPlaying) {
-        Logger::Log("Video not playing");
+        Log("Video not playing");
         return; // Video not playing
     }
 
@@ -886,7 +886,7 @@ void VulkanHandler::updateBothVideoAndAudio(){
     while (packetsProcessed < maxPacketsToProcess || !videoFrameProcessed) {
         AVPacket* pkt = av_packet_alloc();
         if (!pkt) {
-            Logger::Log("Could not allocate packet", LogLevel::CRASH);
+            Log("Could not allocate packet", LogLevel::CRASH);
             break;
         }
 
@@ -901,7 +901,7 @@ void VulkanHandler::updateBothVideoAndAudio(){
                 if (seekResult < 0) {
                     char errbuf[256];
                     av_strerror(seekResult, errbuf, sizeof(errbuf));
-                    Logger::Log("Error seeking to beginning: " + std::string(errbuf), LogLevel::CRASH);
+                    Log("Error seeking to beginning: " + std::string(errbuf), LogLevel::CRASH);
                 } else {
                     // Flush codec buffers
                     if (codecContext) avcodec_flush_buffers(codecContext);
@@ -910,7 +910,7 @@ void VulkanHandler::updateBothVideoAndAudio(){
             } else {
                 char errbuf[256];
                 av_strerror(readResult, errbuf, sizeof(errbuf));
-                Logger::Log("Error reading frame: " + std::string(errbuf), LogLevel::CRASH);
+                Log("Error reading frame: " + std::string(errbuf), LogLevel::CRASH);
             }
             break;
         }
@@ -944,7 +944,7 @@ void VulkanHandler::updateBothVideoAndAudio(){
         
         // Safety check to prevent infinite loops
         if (packetsProcessed > 20 && !videoFrameProcessed) {
-            Logger::Log("Warning: Processed 20 packets without finding a video frame", LogLevel::WARNING);
+            Log("Warning: Processed 20 packets without finding a video frame", LogLevel::WARNING);
             break;
         }
     }
@@ -953,7 +953,7 @@ void VulkanHandler::updateBothVideoAndAudio(){
     if (hasAudio) {
         const int AUDIO_QUEUE_SIZE = SDL_GetAudioStreamQueued(audioStream);
         if (AUDIO_QUEUE_SIZE < MIN_AUDIO_QUEUE_SIZE) {
-            Logger::Log("Low audio buffer: " + std::to_string(AUDIO_QUEUE_SIZE) + " bytes", LogLevel::WARNING);
+            Log("Low audio buffer: " + std::to_string(AUDIO_QUEUE_SIZE) + " bytes", LogLevel::WARNING);
         }
     }
 }
@@ -1295,7 +1295,7 @@ VkPipelineShaderStageCreateInfo VulkanHandler::loadShader(const char* fileName, 
         .stage = stage,
         .pName = "main"
     };
-    Logger::Log("Open file: " + string(fileName));
+    Log("Open file: %s", fileName);
     try {
 
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
@@ -1307,7 +1307,8 @@ VkPipelineShaderStageCreateInfo VulkanHandler::loadShader(const char* fileName, 
         shaderModules.push_back(shaderStage.module);
         
     } catch (const exception& e){
-        cerr << e.what() << endl;
+        Log("Error: %s", e.what());
+        throw e;
     }
 	return shaderStage;
 }

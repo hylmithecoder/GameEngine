@@ -29,7 +29,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, nullptr);
         properties.resize(properties_count);
         err = vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, properties.Data);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         const char* validation_layer = "VK_LAYER_KHRONOS_validation";
         uint32_t layer_count;
@@ -73,7 +73,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         create_info.enabledExtensionCount = (uint32_t)instance_extensions.Size;
         create_info.ppEnabledExtensionNames = instance_extensions.Data;
         err = vkCreateInstance(&create_info, g_Allocator, &g_Instance);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 #ifdef IMGUI_IMPL_VULKAN_USE_VOLK
         volkLoadInstance(g_Instance);
 #endif
@@ -88,7 +88,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         debug_report_ci.pfnCallback = debug_report;
         debug_report_ci.pUserData = nullptr;
         err = f_vkCreateDebugReportCallbackEXT(g_Instance, &debug_report_ci, g_Allocator, &g_DebugReport);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 #endif
     }
 
@@ -128,7 +128,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
         create_info.pQueueCreateInfos = queue_info;
         create_info.enabledExtensionCount = (uint32_t)device_extensions.Size;
         create_info.ppEnabledExtensionNames = device_extensions.Data;
-        check_vk_result(vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device));
+        VK_CHECK_RESULT(vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device));
         vkGetDeviceQueue(g_Device, g_QueueFamily, 0, &g_Queue);
     }
 
@@ -157,7 +157,7 @@ void Viewport3D::SetupVulkan(ImVector<const char*> instance_extensions, SDL_Wind
             pool_info.maxSets += pool_size.descriptorCount;
         pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
         pool_info.pPoolSizes = pool_sizes;
-        check_vk_result(vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool));
+        VK_CHECK_RESULT(vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool));
     }
 }
 
@@ -247,23 +247,24 @@ void Viewport3D::SetupImgui(){
 }
 
 int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
-    VkPhysicalDeviceProperties deviceProps;
-    VkPhysicalDeviceFeatures deviceFeatures;
+
     vkGetPhysicalDeviceProperties(device, &deviceProps);
     vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
     // Print detailed device info for debugging
-    Logger::Log("\nEvaluating device: " + string(deviceProps.deviceName), LogLevel::INFO);
-    Logger::Log("Device Type: " + to_string(deviceProps.deviceType), LogLevel::INFO);
-    Logger::Log("Device ID: " + to_string(deviceProps.deviceID), LogLevel::INFO);
-    Logger::Log("Vendor ID: " + to_string(deviceProps.vendorID), LogLevel::INFO);
-    Logger::Log("Driver Version: " + to_string(deviceProps.driverVersion), LogLevel::INFO);
+    DEBUG_LOG("\nEvaluating device: %s", deviceProps.deviceName);
+    DEBUG_LOG("Device Type: %i", deviceProps.deviceType);
+    DEBUG_LOG("Device ID: %i", deviceProps.deviceID);
+    DEBUG_LOG("Vendor ID: %i", deviceProps.vendorID);
+    DEBUG_LOG("Driver Version: %i", deviceProps.driverVersion);
+
+    tools::checkAllFeatures(deviceFeatures);
 
     int score = 0;
 
     // Check for compute capabilities
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(device, &memProps);
+    // VkPhysicalDeviceMemoryProperties memoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(device, &memoryProperties);
 
     // Check queue families for compute support
     uint32_t queueFamilyCount = 0;
@@ -276,7 +277,7 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
         if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
             hasComputeSupport = true;
             score += 500; // Bonus for compute support
-            Logger::Log("Device has compute support: +500 points", LogLevel::INFO);
+            Log("Device has compute support: +500 points", LogLevel::INFO);
             // cout << "Device has compute support" << endl;
             break;
         }
@@ -286,17 +287,17 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     switch(deviceProps.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
             score += 1000;
-            Logger::Log("Discrete GPU: +1000 points", LogLevel::INFO);
+            Log("Discrete GPU: +1000 points", LogLevel::INFO);
             // cout << "Discrete GPU: +1000 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
             score += 100;
-            Logger::Log("Integrated GPU: +100 points", LogLevel::INFO);
+            Log("Integrated GPU: +100 points", LogLevel::INFO);
             // cout << "Integrated GPU: +100 points" << endl;
             break;
         case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
             score += 50;
-            Logger::Log("Virtual GPU: +50 points", LogLevel::INFO);
+            Log("Virtual GPU: +50 points", LogLevel::INFO);
             // cout << "Virtual GPU: +50 points" << endl;
             break;
         default:
@@ -306,30 +307,29 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
 
     // Score based on memory size
     VkDeviceSize maxHeapSize = 0;
-    for(uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
-        if(memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-            maxHeapSize = max(maxHeapSize, memProps.memoryHeaps[i].size);
+    for(uint32_t i = 0; i < memoryProperties.memoryHeapCount; i++) {
+        if(memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            maxHeapSize = max(maxHeapSize, memoryProperties.memoryHeaps[i].size);
         }
     }
     
     // Convert to GB and add to score
     score += static_cast<int>(maxHeapSize / (1024 * 1024 * 1024));
-    Logger::Log("Memory size score: +" + to_string(maxHeapSize / (1024 * 1024 * 1024)) + " points", LogLevel::INFO);
-    // cout << "Memory size score: +" << (maxHeapSize / (1024 * 1024 * 1024)) << " points" << endl;
+    Log("Memory size score: +" + to_string(maxHeapSize / (1024 * 1024 * 1024)) + " points");
 
     // Check for specific features
     if (deviceFeatures.geometryShader) {
         score += 100;
-        Logger::Log("Has geometry shader: +100 points", LogLevel::INFO);
+        Log("Has geometry shader: +100 points", LogLevel::INFO);
         // cout << "Has geometry shader: +100 points" << endl;
     }
     if (deviceFeatures.tessellationShader) {
         score += 100;
-        Logger::Log("Has tessellation: +100 points", LogLevel::INFO);
+        Log("Has tessellation: +100 points", LogLevel::INFO);
         // cout << "Has tessellation: +100 points" << endl;
     }
 
-    Logger::Log("Final score: "+ to_string(score), LogLevel::INFO);
+    Log("Final score: %i", score);
     // cout << "Final score: " << score << endl;
     cout << "------------------------" << endl;
 
@@ -361,7 +361,7 @@ void Viewport3D::pickPhysicalDevice() {
         // physicalDevice = candidates.rbegin()->second;
         VkPhysicalDeviceProperties deviceProps;
         vkGetPhysicalDeviceProperties(g_PhysicalDevice, &deviceProps);
-        Logger::Log("Selected GPU: " + string(deviceProps.deviceName), LogLevel::INFO);
+        Log("Selected GPU: " + string(deviceProps.deviceName), LogLevel::INFO);
         // cout << "Selected GPU: " << deviceProps.deviceName << endl;
     } else {
         throw runtime_error("Failed to find a suitable GPU!");
@@ -388,6 +388,7 @@ void Viewport3D::Events(){
     }
 }
 
+#pragma region Core update
 void Viewport3D::Update(ImGuiIO& io){
     while (!isRunning)
     {
@@ -415,7 +416,7 @@ void Viewport3D::Update(ImGuiIO& io){
                 g_MainWindowData.FrameIndex = 0;
                 g_SwapChainRebuild = false;
 
-                check_vk_result(vkDeviceWaitIdle(g_Device));
+                VK_CHECK_RESULT(vkDeviceWaitIdle(g_Device));
             }
 
             // Start the Dear ImGui frame
@@ -442,6 +443,7 @@ void Viewport3D::Update(ImGuiIO& io){
             DrawImage();
             videoPlayerUI();
             DrawViewport3D();
+            DrawKtxTexture();
 
             End();
             EndFrame();
@@ -464,7 +466,7 @@ void Viewport3D::Update(ImGuiIO& io){
 
         }
         catch (const exception& e) {
-            Logger::Log("Critical error in Update loop: " + string(e.what()), LogLevel::CRASH);
+            Log("Critical error in Update loop: " + string(e.what()), LogLevel::CRASH);
             
             // Try to recover
             // vkDeviceWaitIdle(g_Device);
@@ -477,6 +479,7 @@ void Viewport3D::Update(ImGuiIO& io){
        
     }
 }
+#pragma endregion
 
 void Viewport3D::FramePresent(ImGui_ImplVulkanH_Window* wd)
 {
@@ -496,7 +499,7 @@ void Viewport3D::FramePresent(ImGui_ImplVulkanH_Window* wd)
     if (err == VK_ERROR_OUT_OF_DATE_KHR)
         return;
     if (err != VK_SUBOPTIMAL_KHR)
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
     wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
 }
 
@@ -619,14 +622,14 @@ void Viewport3D::CreateOffscreenCommandResources() {
     if (vkCreateCommandPool(g_Device, &poolInfo, nullptr, &offscreenCommandPool) != VK_SUCCESS)
         throw runtime_error("failed to create offscreen command pool");
     else
-        Logger::Log("Offscreen command pool created", LogLevel::SUCCESS);
+        Log("Offscreen command pool created", LogLevel::SUCCESS);
         // Semaphore to signal offscreen completion
         VkSemaphoreCreateInfo semInfo{};
         semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     if (vkCreateSemaphore(g_Device, &semInfo, nullptr, &offscreenSignalSemaphore) != VK_SUCCESS)
         throw runtime_error("failed to create offscreen semaphore");
     else 
-        Logger::Log("Offscreen semaphore created", LogLevel::SUCCESS);
+        Log("Offscreen semaphore created", LogLevel::SUCCESS);
 }
 
 // Step 1 for pipeline
@@ -635,7 +638,7 @@ void Viewport3D::createRenderPass() {
 		array<VkAttachmentDescription, 2> attachments{};
 
 		// Color attachment
-		attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;                                  // Use the color format selected by the swapchain
+		attachments[0].format = VK_FORMAT_B8G8R8A8_UNORM;                                  // Use the color format selected by the swapchain
 		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;                                 // We don't use multi sampling in this example
 		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;                            // Clear this attachment at the start of the render pass
 		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;                          // Keep its contents after the render pass is finished (for displaying it)
@@ -710,9 +713,9 @@ void Viewport3D::createRenderPass() {
 		renderPassCI.pSubpasses = &subpassDescription;                             // Description of that subpass
 		renderPassCI.dependencyCount = static_cast<uint32_t>(dependencies.size()); // Number of subpass dependencies
 		renderPassCI.pDependencies = dependencies.data();                          // Subpass dependencies used by the render pass
-		check_vk_result(vkCreateRenderPass(g_Device, &renderPassCI, nullptr, &renderPass));
-        Logger::Log("Device: "+ to_string(reinterpret_cast<uintptr_t>(g_Device)), LogLevel::SUCCESS);
-        Logger::Log("Created render pass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)), LogLevel::SUCCESS);
+		VK_CHECK_RESULT(vkCreateRenderPass(g_Device, &renderPassCI, nullptr, &renderPass));
+        LogPointer("Device: ",g_Device, LogLevel::SUCCESS);
+        LogPointer("Created render pass: " ,renderPass, LogLevel::SUCCESS);
 }
 
 void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
@@ -737,19 +740,19 @@ void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
     imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    check_vk_result(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
+    VK_CHECK_RESULT(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
 
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    // VkPhysicalDeviceMemoryProperties memoryProperties;
+    // vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memoryProperties);
     // Allocate memory for the image (device local) and bind it to our image
     VkMemoryAllocateInfo memAlloc{};
     memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     VkMemoryRequirements memReqs;
     vkGetImageMemoryRequirements(g_Device, depthStencil.image, &memReqs);
     memAlloc.allocationSize = memReqs.size;
-    memAlloc.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check_vk_result(vkAllocateMemory(g_Device, &memAlloc, nullptr, &depthStencil.memory));
-    check_vk_result(vkBindImageMemory(g_Device, depthStencil.image, depthStencil.memory, 0));
+    memAlloc.memoryTypeIndex = FindMemoryType(memReqs, memoryProperties, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(g_Device, &memAlloc, nullptr, &depthStencil.memory));
+    VK_CHECK_RESULT(vkBindImageMemory(g_Device, depthStencil.image, depthStencil.memory, 0));
 
     // Create a view for the depth stencil image
     // Images aren't directly accessed in Vulkan, but rather through views described by a subresource range
@@ -769,14 +772,14 @@ void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
     depthStencilViewCI.subresourceRange.baseArrayLayer = 0;
     depthStencilViewCI.subresourceRange.layerCount = 1;
     depthStencilViewCI.image = depthStencil.image;
-    check_vk_result(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
+    VK_CHECK_RESULT(vkCreateImageView(g_Device, &depthStencilViewCI, nullptr, &depthStencil.imageView));
 }
 
 void Viewport3D::CreateFrameBuffer(uint32_t width, uint32_t height)
 {
     // Create a frame buffer for every image in the swapchain
     framebuffers.resize(images.size());
-    Logger::Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
+    Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
     for (size_t i = 0; i < framebuffers.size(); i++)
     {
         array<VkImageView, 2> attachments{};
@@ -795,28 +798,29 @@ void Viewport3D::CreateFrameBuffer(uint32_t width, uint32_t height)
         frameBufferCI.height = height;
         frameBufferCI.layers = 1;
         cout << "Before creating Framebuffer: " << framebuffers[i] << endl;
-        // Logger::Log("Creating framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
+        LogPointer("Before creating Framebuffer: ", framebuffers[i]);
+        // Log("Creating framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
         // Create the framebuffer
-        check_vk_result(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
+        VK_CHECK_RESULT(vkCreateFramebuffer(g_Device, &frameBufferCI, nullptr, &framebuffers[i]));
         if (framebuffers[i] != VK_NULL_HANDLE) {
-            cout << "Framebuffer: " << framebuffers[i] << endl;
-            // Logger::Log("Created framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
+            LogPointer("Framebuffer: ", framebuffers[i], LogLevel::SUCCESS);
+            // Log("Created framebuffer: " + to_string(reinterpret_cast<uintptr_t>(framebuffers[i])), LogLevel::SUCCESS);
         }
     }
 }
 
-// Parent Step2 for pipeline
+#pragma region Setup Graphic pipelines
 void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const string& fragShaderPath) {
     vector<char> vertShaderCode = readFile(vertShaderPath);
     vector<char> fragShaderCode = readFile(fragShaderPath);
-    // Logger::Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
-    // Logger::Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
+    // Log("Vertshader size: " + convertUintVariabletoString(vertShaderCode.capacity()));
+    // Log("fragshader size: " + convertUintVariabletoString(fragShaderCode.capacity()));
     // cout << "Vertshader code: " << vertShaderCode.capacity() << endl;
     // cout << "fragshader code: " << fragShaderCode.capacity() << endl;
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-    // Logger::Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
-    // Logger::Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
+    // Log("Vertshader module: " + convertUintVariabletoString(vertShaderModule));
+    // Log("fragshader module: " + convertUintVariabletoString(fragShaderModule));
     // cout << "Vertshader module: " << vertShaderModule << endl;
     // cout << "fragshader module: " << fragShaderModule << endl;
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -853,9 +857,9 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     bindingDescription[0].stride = sizeof(Vertex); // 3 for pos + 3 for color + 3 for normal
     bindingDescription[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    // bindingDescription[1].binding = 1;
-    // bindingDescription[1].stride = sizeof(TextureBase::Vertex);
-    // bindingDescription[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    // bindingDescription[0].binding = 0;
+    // bindingDescription[0].stride = sizeof(TextureBase::Vertex);
+    // bindingDescription[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     vector<VkVertexInputAttributeDescription> attributeDescriptions(2);
     
@@ -889,8 +893,8 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
     // attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
     // attributeDescriptions[2].offset = offsetof(TextureBase::Vertex, normal);
 
-    Logger::Log("Input binding description size: "+ to_string(static_cast<uint32_t>(bindingDescription.size())), LogLevel::SUCCESS);
-    Logger::Log("Input attribute description: " + to_string(static_cast<uint32_t>(attributeDescriptions.size())), LogLevel::SUCCESS );
+    Log("Input binding description size: %d", LogLevel::SUCCESS, bindingDescription.size());
+    Log("Input attribute description: %d", LogLevel::SUCCESS, attributeDescriptions.size());
 
     VkPipelineDepthStencilStateCreateInfo depthStencilStateCI{};
     depthStencilStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -971,27 +975,28 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
     VkGraphicsPipelineCreateInfo pipelineInfo = createPipeLineInfo(shaderStages.data(), vertexInputInfo, inputAssembly, viewportState, rasterizer, multisampling, colorBlending, depthStencilStateCI, dynamicStateInfo, sizeShaderStages);
 
-    Logger::Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
+    Log("Renderpass: " + to_string(reinterpret_cast<uintptr_t>(renderPass)));
     cout << "Pipeline info - Stages count: " << pipelineInfo.stageCount 
          << ", Layout: " << reinterpret_cast<void*>(pipelineInfo.layout) 
          << "\nRender Pass: " << pipelineInfo.renderPass << endl;
-    Logger::Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
+    Log("Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(pipelineInfo.pStages)));
     cout << "Renderpass: " << renderPass << endl;
     cout << "Pipeline info: " << pipelineInfo.pStages << endl;
 
 	VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
     vkCreatePipelineCache(g_Device, &pipelineCacheCreateInfo, nullptr, &g_PipelineCache);
-    // check_vk_result(vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
+    // VK_CHECK_RESULT(vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
     if (vkCreateGraphicsPipelines(g_Device, g_PipelineCache, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
         throw runtime_error("Failed to create graphics pipeline!");
     }
     else {
-        Logger::Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
+        Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
         // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
     }
     vkDestroyShaderModule(g_Device, fragShaderModule, nullptr);
     vkDestroyShaderModule(g_Device, vertShaderModule, nullptr);
 }
+#pragma endregion
 
 void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, bool fullscreen) {
     // Store the current swap chain handle so we can use it later on to ease up recreation
@@ -1000,7 +1005,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 
 	// Get physical device surface properties and formats
 	VkSurfaceCapabilitiesKHR surfCaps;
-	check_vk_result(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_PhysicalDevice, surface, &surfCaps));
+	VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_PhysicalDevice, surface, &surfCaps));
 
 	VkExtent2D swapchainExtent = {};
 	// If width (and height) equals the special value 0xFFFFFFFF, the size of the surface will be set by the swapchain
@@ -1021,11 +1026,11 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 
 	// Select a present mode for the swapchain
 	uint32_t presentModeCount;
-	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, NULL));
+	VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, NULL));
 	assert(presentModeCount > 0);
 
 	vector<VkPresentModeKHR> presentModes(presentModeCount);
-	check_vk_result(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, presentModes.data()));
+	VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(g_PhysicalDevice, surface, &presentModeCount, presentModes.data()));
 
 	// The VK_PRESENT_MODE_FIFO_KHR mode must always be present as per spec
 	// This mode waits for the vertical blank ("v-sync")
@@ -1113,7 +1118,7 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 		swapchainCI.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	}
 
-	check_vk_result(vkCreateSwapchainKHR(g_Device, &swapchainCI, nullptr, &swapChain));
+	VK_CHECK_RESULT(vkCreateSwapchainKHR(g_Device, &swapchainCI, nullptr, &swapChain));
 	cout << "Created swap chain with " << desiredNumberOfSwapchainImages << " images\n"
 	"swap chain details: " << swapChain << endl;
 	// If an existing swap chain is re-created, destroy the old swap chain and the ressources owned by the application (image views, images are owned by the swap chain)
@@ -1123,12 +1128,12 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 		}
 		vkDestroySwapchainKHR(g_Device, oldSwapchain, nullptr);
 	}
-	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, nullptr));
+	VK_CHECK_RESULT(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, nullptr));
 
 	// Get the swap chain images
     cout << "Image count: " << imageCount << endl;
     images.resize(imageCount);
-	check_vk_result(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, images.data()));
+	VK_CHECK_RESULT(vkGetSwapchainImagesKHR(g_Device, swapChain, &imageCount, images.data()));
 	cout << "Image data: " << images.data() << endl;
 
 	// Get the swap chain buffers containing the image and imageview
@@ -1154,16 +1159,16 @@ void Viewport3D::createSwapChain(uint32_t& width, uint32_t& height, bool vsync, 
 		colorAttachmentView.flags = 0;
 		colorAttachmentView.image = images[i];
         cout << "Image: " << images[i] << endl;
-		check_vk_result(vkCreateImageView(g_Device, &colorAttachmentView, nullptr, &imageViews[i]));
+		VK_CHECK_RESULT(vkCreateImageView(g_Device, &colorAttachmentView, nullptr, &imageViews[i]));
 	}
 }
 
 void Viewport3D::CreateOffscreenPipeline() {
-    Logger::Log("Create Offscreen pipeline !!!");
+    Log("Create Offscreen pipeline !!!");
     // RenderPass minimal
     VkAttachmentDescription colorAttachment = createColorAttachment();
     
-    Logger::Log("Color attachment format: " + to_string(colorAttachment.format));
+    Log("Color attachment format: " + to_string(colorAttachment.format));
     // cout << "Color attachment format: " << colorAttachment.format << endl;
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
@@ -1187,8 +1192,8 @@ void Viewport3D::CreateOffscreenPipeline() {
     VkImageView attachments[] = { offscreenImageView };
     VkFramebufferCreateInfo fbInfo = createFrameBuffer(offscreenRenderPass, attachments, viewportWidth, viewportHeight);
 
-    Logger::Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
-    // Logger::Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
+    Log("Framebuffer width: " + to_string(fbInfo.width) + ", height: " + to_string(fbInfo.height));
+    // Log("Framebuffer render pass: " + to_string(fbInfo.renderPass));
     // cout << "Framebuffer width: " << fbInfo.width << ", height: " << fbInfo.height << endl;
     // cout << "Framebuffer render pass: " << offscreenRenderPass << endl;
     vkCreateFramebuffer(g_Device, &fbInfo, nullptr, &offscreenFramebuffer);
@@ -1205,14 +1210,14 @@ void Viewport3D::createSynchronizationPrimitives()
 			// Create the fences in signaled state (so we don't wait on first render of each command buffer)
 			fenceCI.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 			// Fence used to ensure that command buffer has completed exection before using it again
-			check_vk_result(vkCreateFence(g_Device, &fenceCI, nullptr, &waitFences[i]));
+			VK_CHECK_RESULT(vkCreateFence(g_Device, &fenceCI, nullptr, &waitFences[i]));
 		}
 		// Semaphores are used for correct command ordering within a queue
 		// Used to ensure that image presentation is complete before starting to submit again
 		presentCompleteSemaphores.resize(MAX_CONCURRENT_FRAMES);
 		for (auto& semaphore : presentCompleteSemaphores) {
 			VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-			check_vk_result(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
+			VK_CHECK_RESULT(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
 		}
 		// Render completion
 		// Semaphore used to ensure that all commands submitted have been finished before submitting the image to the queue
@@ -1220,7 +1225,7 @@ void Viewport3D::createSynchronizationPrimitives()
 		renderCompleteSemaphores.resize(images.size());
 		for (auto& semaphore : renderCompleteSemaphores) {
 			VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-			check_vk_result(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
+			VK_CHECK_RESULT(vkCreateSemaphore(g_Device, &semaphoreCI, nullptr, &semaphore));
 		}
 }
 
@@ -1265,29 +1270,29 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         allocInfo.commandBufferCount = 1;
 
         if (vkAllocateCommandBuffers(g_Device, &allocInfo, &offscreenCmdBuffer) != VK_SUCCESS) {
-            Logger::Log("Failed to allocate command buffer!", LogLevel::CRASH);
+            Log("Failed to allocate command buffer!", LogLevel::CRASH);
             return;
         }
     }
 
     if (uniformBuffers[currentFrame].buffer == VK_NULL_HANDLE) {
-        Logger::Log("Error: Uniform buffer not created!", LogLevel::CRASH);
+        Log("Error: Uniform buffer not created!", LogLevel::CRASH);
         return;
     }
 
     uint32_t imageIndex;
     
     if (framebuffers.empty()) {
-        Logger::Log("Error: Framebuffers not created!", LogLevel::CRASH);
+        Log("Error: Framebuffers not created!", LogLevel::CRASH);
         return;
     }
     
     try {
         vkWaitForFences(g_Device, 1, &waitFences[currentFrame], VK_TRUE, UINT64_MAX);
-        check_vk_result(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
+        VK_CHECK_RESULT(vkResetFences(g_Device, 1, &waitFences[currentFrame]));
         // Text("Wait fences: %i", waitFences[currentFrame]);
         // cout << "Wait Fences: " << waitFences[currentFrame] << endl;
-		check_vk_result(vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
+		VK_CHECK_RESULT(vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
 
         // Update uniform buffer dengan camera matrices
         ShaderData shaderData{};
@@ -1307,11 +1312,11 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
         TextureBase::UniformData uniformData{};
         // uniformData. = glm::mat4(1.0f); // Identity matrix
-        uniformData.modelView = camera.matrices.view;
+        uniformData.modelView = glm::mat4(1.0f);
         uniformData.projection = camera.matrices.perspective;
         uniformData.viewPos = camera.viewPos;
         // Copy UBO ke uniform buffer
-        uniformData.projection[1][1] *= -1;
+        // uniformData.projection[1][1] *= -1;
         // void* data;
         // vkMapMemory(g_Device, uniformBufferMemory, 0, sizeof(ShaderData), 0, &data);
         // cout << "Current Frame : " << currentFrame << endl; 
@@ -1326,7 +1331,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         memcpy(uniformBuffers[currentFrame].mapped, &shaderData, sizeof(ShaderData));
         // vkUnmapMemory(g_Device, uniformBufferMemory);
 
-		// vkResetCommandBuffer(textureHandler.drawCmdBuffers[textureHandler.currentFrame], 0);
+		// vkResetCommandBuffer(textureHandler.drawCmdBuffers[currentFrame], 0);
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         
         VkCommandBufferBeginInfo beginInfo{};
@@ -1334,11 +1339,11 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         
         VkClearValue clearValues[2]{};
-        clearValues[0].color = imageHandler.defaultClearColor;
+        clearValues[0].color = imageHandler.blueClearColor;
         clearValues[1].depthStencil = { 1.0f, 0 };
 
         // if (vkBeginCommandBuffer(offscreenCmdBuffer, &beginInfo) != VK_SUCCESS) {
-        //     Logger::Log("Failed to begin recording command buffer!", LogLevel::CRASH);
+        //     Log("Failed to begin recording command buffer!", LogLevel::CRASH);
         //     return;
         // }
         
@@ -1357,8 +1362,8 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         const VkCommandBuffer cmdTexture = textureHandler.drawCmdBuffers[currentFrame];
         // cout << "CMD Texture: " << cmdTexture <<  endl;
 		const VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
-		check_vk_result(vkBeginCommandBuffer(commandBuffer, &beginInfo));
-		// check_vk_result(vkBeginCommandBuffer(cmdTexture, &beginInfo));
+		VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+		// VK_CHECK_RESULT(vkBeginCommandBuffer(cmdTexture, &beginInfo));
 
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         // vkCmdBeginRenderPass(cmdTexture, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -1382,7 +1387,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
         // Bind descriptor set
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &uniformBuffers[currentFrame].descriptorSet, 0, nullptr);
-        // vkCmdBindDescriptorSets(cmdTexture, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &textureHandler.descriptorSets[currentFrame], 0, nullptr);
+        // vkCmdBindDescriptorSets(cmdTexture, VK_PIPELINE_BIND_POINT_GRAPHICS, textureHandler.pipelineLayout, 0, 1, &textureHandler.descriptorSets[currentFrame], 0, nullptr);
         // cout << "Texture handler descriptorsets " << textureHandler.descriptorSets[currentFrame] << endl;
 
         // Bind pipeline
@@ -1409,11 +1414,11 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		// vkCmdEndRenderPass(cmdTexture);
         
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            Logger::Log("Failed to record command buffer!", LogLevel::CRASH);
+            Log("Failed to record command buffer!", LogLevel::CRASH);
         }
 
         // if (vkEndCommandBuffer(cmdTexture) != VK_SUCCESS){
-        //     Logger::Log("Failed to record command buffer from texture!", LogLevel::CRASH);
+        //     Log("Failed to record command buffer from texture!", LogLevel::CRASH);
         // }
 
 		VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1434,7 +1439,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 
         VkResult result = vkQueueSubmit(g_Queue, 1, &submitInfo, waitFences[currentFrame]);
         if (result != VK_SUCCESS) {
-            Logger::Log("Failed to submit command buffer!", LogLevel::CRASH);
+            Log("Failed to submit command buffer!", LogLevel::CRASH);
             return;
         }
 
@@ -1448,7 +1453,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 		result = vkQueuePresentKHR(g_Queue, &presentInfo);
 
         // Wait for rendering to complete
-        check_vk_result(vkQueueWaitIdle(g_Queue));
+        VK_CHECK_RESULT(vkQueueWaitIdle(g_Queue));
 
         currentFrame = (currentFrame + 1) % MAX_CONCURRENT_FRAMES;
     } catch (const exception& e){
@@ -1497,105 +1502,9 @@ void Viewport3D::RenderOffscreen(uint32_t width, uint32_t height) {
     submit.pSignalSemaphores = &offscreenSignalSemaphore;
 
     VkResult res = vkQueueSubmit(g_Queue, 1, &submit, VK_NULL_HANDLE);
-    check_vk_result(res);
+    VK_CHECK_RESULT(res);
 
     vkFreeCommandBuffers(g_Device, offscreenCommandPool, 1, &cmd);
-}
-
-void Viewport3D::DrawViewport3D() {
-    static bool isShowViewport = true;
-    static float currentPosition[3] = { 0.0f, 0.0f, -2.5f }, currentRotation[3] = { 0.0f, 0.0f, -180.0f };
-    static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
-
-    // Initialize viewport texture descriptor set
-    if (viewportTexture == VK_NULL_HANDLE) {
-        viewportTexture = ImGui_ImplVulkan_AddTexture(
-            offscreenSampler,
-            imageViews[1],
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-        );
-    }
-
-    Begin("3D Viewport");
-    Text("This is a 3D viewport using Vulkan and ImGui.");
-    Text("Camera Position: ");
-    SameLine();
-    DragFloat3("##Camera Position", currentPosition);
-    Text("Camera Rotation: ");
-    SameLine();
-    DragFloat3("##Camera Rotation", currentRotation);
-    position = glm::vec4(currentPosition[0], currentPosition[1], currentPosition[2], 0.0f);
-    rotation = glm::vec3(currentRotation[0], currentRotation[1], currentRotation[2]);
-    camera.setPosition(position);
-    camera.setRotation(rotation);
-    // showCurrentCameraPosition();
-    Text("Camera Rotation: (%.2f, %.2f, %.2f)", camera.rotation.x, camera.rotation.y, camera.rotation.z);
-   
-    Checkbox("Show Viewport", &isShowViewport);
-    if (isShowViewport) {
-        HandleRenderViewport(viewportWidth, viewportHeight);
-    }
-
-    ImVec2 viewportSize = ImGui::GetContentRegionAvail();
-
-    // Update viewport dimensions if window resized
-    if (viewportWidth != static_cast<int>(viewportSize.x) || viewportHeight != static_cast<int>(viewportSize.y)) {
-        viewportWidth = static_cast<int>(viewportSize.x);
-        viewportHeight = static_cast<int>(viewportSize.y);
-    }
-
-    Text("Viewport Size: %d x %d", viewportWidth, viewportHeight);
-
-    // Get cursor position and viewport position
-    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-    ImVec2 mousePos = ImGui::GetMousePos();
-
-    Text("Mouse Position: (%.2f, %.2f)", mousePos.x, mousePos.y);
-    Text("Viewport Position: (%.2f, %.2f)", cursorPos.x, cursorPos.y);
-    // Check if mouse is inside the viewport
-    bool isMouseInsideViewport = mousePos.x >= cursorPos.x &&
-                                 mousePos.y >= cursorPos.y &&
-                                 mousePos.x <= cursorPos.x + viewportSize.x &&
-                                 mousePos.y <= cursorPos.y + viewportSize.y;
-
-    // Render the viewport image
-    Image((ImTextureID)viewportTexture, viewportSize);
-
-    // Handle WASD input if mouse is inside the viewport
-    if (isMouseInsideViewport) {
-        HandleCameraMovement();
-    }
-
-    End();
-}
-
-void Viewport3D::HandleCameraMovement() {
-    const float deltaTime = 0.016f; // Simulasi waktu frame (60 FPS)
-    const float moveSpeed = camera.movementSpeed * deltaTime;
-
-    // Check ImGui IO for key presses
-    ImGuiIO& io = ImGui::GetIO();
-
-    const Uint8* state = reinterpret_cast<const Uint8*>(SDL_GetKeyboardState(NULL));
-    if (state[SDL_SCANCODE_W]) {
-        Logger::Log("W pressed", LogLevel::INFO);
-        camera.keys.up;
-    }
-    if (state[SDL_SCANCODE_S]) {
-        Logger::Log("S pressed", LogLevel::INFO);
-        camera.keys.down;
-    }
-    if (state[SDL_SCANCODE_A]) {
-        Logger::Log("A pressed", LogLevel::INFO);
-        camera.keys.left;
-    }
-    if (state[SDL_SCANCODE_D]) {
-        Logger::Log("D pressed", LogLevel::INFO);
-        camera.keys.right;
-    }
-
-    // Update camera based on movement keys
-    camera.update(deltaTime);
 }
 
 void Viewport3D::recreateOffscreenResources(uint32_t width, uint32_t height) {
@@ -1620,80 +1529,6 @@ void Viewport3D::recreateOffscreenResources(uint32_t width, uint32_t height) {
     CreateDepthStencil(width, height);
     CreateFrameBuffer(width, height);
     
-}
-
-void Viewport3D::videoPlayerUI(){
-    static char videoPath[5000] = "";
-    static bool loopVideo = true;
-    static bool paused = false;
-    // enum RenderMode currentMode;
-    static bool isOnlyRender = imageHandler.isOnlyRenderImage;
-    static bool isOnlyAd = imageHandler.isOnlyAudio;
-
-    Begin("Video Player");
-    InputText("Video File", videoPath, IM_ARRAYSIZE(videoPath));
-    SameLine();
-    if (Button("Open")) {
-        if (strlen(videoPath) > 0) {
-            imageHandler.OpenFileVideo(videoPath);
-            paused = false;
-        }
-    }
-
-    Checkbox("Loop Video", &loopVideo);
-    SameLine();
-    Checkbox("Only Render Image", &isOnlyRender);
-    SameLine();
-    Checkbox("Only Audio", &isOnlyAd);
-
-    if (imageHandler.isPlaying) {  
-        if (!paused){
-            if (isOnlyRender == true && isOnlyAd == false) {
-                // updateVideoFrame();
-                Logger::Log("Only Render Image", LogLevel::WARNING);
-                imageHandler.updateVideoFrame();
-            }
-            else if (isOnlyRender == false && isOnlyAd == true) {
-                // Logger::Log("Only Render audio", LogLevel::WARNING);
-                imageHandler.updateAudio();
-            }
-            else {
-                if (imageHandler.fps <= 24) {
-                    imageHandler.updateBothVideoAndAudio24fps();
-                } else {
-                    imageHandler.updateBothVideoAndAudio();
-                }
-            }
-        }
-
-        renderVideoFrame();
-
-        Separator();
-        if (Button(paused ? "Play" : "Pause")) {
-                paused = !paused;
-            }
-            SameLine();
-            if (Button("Stop")) {
-                av_seek_frame(imageHandler.formatContext, imageHandler.videoStream, 0, AVSEEK_FLAG_BACKWARD);
-                imageHandler.currentTime = 0;
-                paused = true;
-            }
-
-            Text("Time: %.2f / %.2f", imageHandler.currentTime, imageHandler.duration);
-
-            // Informasi video
-            Text("Resolution: %dx%d | FPS: %.2f", 
-                        imageHandler.width, imageHandler.height, imageHandler.fps);
-            if (!isOnlyRender | isOnlyAd) {
-                Separator();
-                Text("Frequency: %d | Channels: %d", 
-                        imageHandler.audioCodecContext->sample_rate, imageHandler.audioCodecContext->ch_layout.nb_channels);
-            }
-    } else {
-        Text("No video loaded or playing.");
-    }
-
-    End();
 }
 
 void Viewport3D::renderVideoFrame(){
@@ -1725,38 +1560,6 @@ void Viewport3D::renderVideoFrame(){
     }
 }
 
-// Draw Image
-void Viewport3D::DrawImage()
-{
-    static VkDescriptorSet imguiTexture = VK_NULL_HANDLE;
-    if (imguiTexture == VK_NULL_HANDLE){
-        imguiTexture = imageHandler.LoadImage("assets/images/backgrounds/shiroko_bluearchive.jpg");
-    }
-    Begin("Image Test");
-    float aspectRatio = static_cast<float>(1280) / static_cast<float>(720);
-        
-    // Hitung dimensi tampilan
-    ImVec2 contentSize = GetContentRegionAvail();
-    float displayWidth = contentSize.x;
-    float displayHeight = displayWidth / aspectRatio;
-
-    if (displayHeight > contentSize.y) {
-        displayHeight = contentSize.y;
-        displayWidth = displayHeight * aspectRatio;
-    }
-
-    // Pusatkan video di ruang yang tersedia  
-    float posX = (contentSize.x - displayWidth) * 0.5f;
-    float posY = (contentSize.y - displayHeight) * 0.5f;
-    
-    SetCursorPos(ImVec2(posX, posY));
-    
-    float w = displayWidth, h = displayHeight;
-
-    Image((ImTextureID)imguiTexture, ImVec2(w, h));
-    End();
-}
-
 void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data)
 {
     // Early exit if no draw data
@@ -1779,7 +1582,7 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
             g_SwapChainRebuild = true;
             return;
         }
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         // Get frame data
         wd->FrameIndex = frame_idx;
@@ -1787,21 +1590,21 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
 
         // Wait for previous frame to complete
         err = vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
         
         err = vkResetFences(g_Device, 1, &fd->Fence);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         // Reset and begin command buffer
         err = vkResetCommandPool(g_Device, fd->CommandPool, 0);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         VkCommandBufferBeginInfo begin_info = {};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         
         err = vkBeginCommandBuffer(fd->CommandBuffer, &begin_info);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         // Begin render pass
         VkRenderPassBeginInfo rp_info = {};
@@ -1821,7 +1624,7 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
         // End render pass
         vkCmdEndRenderPass(fd->CommandBuffer);
         err = vkEndCommandBuffer(fd->CommandBuffer);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
         // Submit command buffer
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1836,14 +1639,14 @@ void Viewport3D::FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data
         submit_info.pSignalSemaphores = &render_complete_semaphore;
 
         err = vkQueueSubmit(g_Queue, 1, &submit_info, fd->Fence);
-        check_vk_result(err);
+        VK_CHECK_RESULT(err);
 
     } catch (const exception& e) {
         // Handle device lost error
         if (g_Device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(g_Device);
             g_SwapChainRebuild = true;
-            Logger::Log("Device lost error: " + string(e.what()), LogLevel::CRASH);
+            Log("Device lost error: " + string(e.what()), LogLevel::CRASH);
         }
     }
 }
@@ -1864,7 +1667,7 @@ uint32_t Viewport3D::FindMemoryType(VkMemoryRequirements memRequirements, VkPhys
         throw runtime_error("failed to find suitable memory type!");
     }
     else {
-        Logger::Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
+        Log("find suitable memory type: " + to_string(memTypeIndex), LogLevel::SUCCESS);
     }
 
     return memTypeIndex;
@@ -1888,7 +1691,7 @@ VkBuffer Viewport3D::CreateBuffer(
         throw runtime_error("failed to create buffer!");
     }
     else {
-        Logger::Log("Buffer created successfully. Size: " + to_string(size) + " bytes", LogLevel::SUCCESS);
+        Log("Buffer created successfully. Size: " + to_string(size) + " bytes", LogLevel::SUCCESS);
     }
 
     // Get memory requirements
@@ -1896,11 +1699,11 @@ VkBuffer Viewport3D::CreateBuffer(
     vkGetBufferMemoryRequirements(g_Device, buffer, &memRequirements);
 
     // Get memory properties BEFORE the loop
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    // VkPhysicalDeviceMemoryProperties memoryProperties;
+    // vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memoryProperties);
 
     // Find suitable memory type
-    uint32_t memTypeIndex = FindMemoryType(memRequirements, memProperties, properties);
+    uint32_t memTypeIndex = FindMemoryType(memRequirements, memoryProperties, properties);
 
     // Allocate memory
     VkMemoryAllocateInfo allocInfo{};
@@ -1912,7 +1715,7 @@ VkBuffer Viewport3D::CreateBuffer(
         throw runtime_error("failed to allocate buffer memory!");
     }
     else {
-        Logger::Log("Allocate memory successfully. Size: " + to_string(allocInfo.allocationSize) + " bytes", LogLevel::SUCCESS);
+        Log("Allocate memory successfully. Size: " + to_string(allocInfo.allocationSize) + " bytes", LogLevel::SUCCESS);
     }
 
     // Bind buffer with allocated memory
@@ -1941,11 +1744,11 @@ void Viewport3D::createUniformBuffers() {
 	// This buffer will be used as a uniform buffer
 	bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memProperties);
+    // VkPhysicalDeviceMemoryProperties memoryProperties;
+    // vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memoryProperties);
     
     for (uint32_t i = 0; i < MAX_CONCURRENT_FRAMES; i++) {
-        check_vk_result(vkCreateBuffer(g_Device, &bufferInfo, nullptr, &uniformBuffers[i].buffer));
+        VK_CHECK_RESULT(vkCreateBuffer(g_Device, &bufferInfo, nullptr, &uniformBuffers[i].buffer));
         // Get memory requirements including size, alignment and memory type
         vkGetBufferMemoryRequirements(g_Device, uniformBuffers[i].buffer, &memReqs);
         allocInfo.allocationSize = memReqs.size;
@@ -1953,14 +1756,13 @@ void Viewport3D::createUniformBuffers() {
         // Most implementations offer multiple memory types and selecting the correct one to allocate memory from is crucial
         // We also want the buffer to be host coherent so we don't have to flush (or sync after every update.
         // Note: This may affect performance so you might not want to do this in a real world application that updates buffers on a regular base
-        allocInfo.memoryTypeIndex = FindMemoryType(memReqs, memProperties, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        allocInfo.memoryTypeIndex = FindMemoryType(memReqs, memoryProperties, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         // Allocate memory for the uniform buffer
-        check_vk_result(vkAllocateMemory(g_Device, &allocInfo, nullptr, &(uniformBuffers[i].memory)));
+        VK_CHECK_RESULT(vkAllocateMemory(g_Device, &allocInfo, nullptr, &(uniformBuffers[i].memory)));
         // Bind memory to buffer
-        check_vk_result(vkBindBufferMemory(g_Device, uniformBuffers[i].buffer, uniformBuffers[i].memory, 0));
+        VK_CHECK_RESULT(vkBindBufferMemory(g_Device, uniformBuffers[i].buffer, uniformBuffers[i].memory, 0));
         // We map the buffer once, so we can update it without having to map it again
-        check_vk_result(vkMapMemory(g_Device, uniformBuffers[i].memory, 0, sizeof(ShaderData), 0, (void**)&uniformBuffers[i].mapped));
-        cout << "Map Memory: " << uniformBuffers[i].mapped << endl;
+        VK_CHECK_RESULT(vkMapMemory(g_Device, uniformBuffers[i].memory, 0, sizeof(ShaderData), 0, (void**)&uniformBuffers[i].mapped));
     }
 
     CreateBuffer(
@@ -1979,11 +1781,11 @@ void Viewport3D::createCommandBuffers()
 		commandPoolCI.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		commandPoolCI.queueFamilyIndex = g_QueueFamily;
 		commandPoolCI.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-		check_vk_result(vkCreateCommandPool(g_Device, &commandPoolCI, nullptr, &commandPool));
+		VK_CHECK_RESULT(vkCreateCommandPool(g_Device, &commandPoolCI, nullptr, &commandPool));
 
 		// Allocate one command buffer per max. concurrent frame from above pool
 		VkCommandBufferAllocateInfo cmdBufAllocateInfo = commandBufferAllocateInfo(commandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, MAX_CONCURRENT_FRAMES);
-		check_vk_result(vkAllocateCommandBuffers(g_Device, &cmdBufAllocateInfo, commandBuffers.data()));
+		VK_CHECK_RESULT(vkAllocateCommandBuffers(g_Device, &cmdBufAllocateInfo, commandBuffers.data()));
 	}
 
 
@@ -2014,7 +1816,7 @@ void Viewport3D::createUniformDescriptorSets() {
         allocInfo.descriptorSetCount = 1;
         allocInfo.pSetLayouts = &uniformDescriptorSetLayout;
 
-        check_vk_result(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
+        VK_CHECK_RESULT(vkAllocateDescriptorSets(g_Device, &allocInfo, &uniformBuffers[i].descriptorSet));
 
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = uniformBuffers[i].buffer;
@@ -2113,7 +1915,7 @@ void Viewport3D::createVertexBuffer() {
     VkBufferCopy indexCopy{};
     indexCopy.size = indexBufferSize;
     vkCmdCopyBuffer(commandBuffer, indexStagingBuffer, indices.buffer, 1, &indexCopy);
-    Logger::Log("Indices count from createVertexBuffer: " + to_string(indices.count), LogLevel::WARNING);
+    Log("Indices count from createVertexBuffer: " + to_string(indices.count), LogLevel::WARNING);
     EndSingleTimeCommands(commandBuffer);
 
     // Cleanup staging buffers
@@ -2159,12 +1961,10 @@ int main(int argc, char* argv[]){
 		viewport.camera.setRotation(glm::vec3(0.0f));
 		viewport.camera.setPerspective(60.0f, (float)1280 / (float)720, 1.0f, 256.0f);
 
-        // Langkah 1: Initialize Vulkan
-        Logger::Log("Initializing Vulkan...");
+        Log("Initializing Vulkan...");
         viewport.initVulkan(extensions, mainWindow);
         
-        // Langkah 2: Create render pass PERTAMA
-        Logger::Log("Creating render pass...");
+        Log("Creating render pass...");
         viewport.createSwapChain(viewport.viewportWidth, viewport.viewportHeight, false, false);
         viewport.createSynchronizationPrimitives();
         viewport.createRenderPass();
@@ -2174,52 +1974,53 @@ int main(int argc, char* argv[]){
 
         viewport.createCommandBuffers();
         
-        // Langkah 3: Create offscreen resources
-        Logger::Log("Creating offscreen resources...");
+        Log("Creating offscreen resources...");
         viewport.CreateOffscreenCommandResources();
         
-        // Langkah 6: Create buffers
-        Logger::Log("Creating vertex buffer...");
+        Log("Creating vertex buffer...");
         viewport.createVertexBuffer();
 
-        Logger::Log("Creating uniform buffers...");
+        Log("Creating uniform buffers...");
         viewport.createUniformBuffers();
 
-        // Langkah 4: Create descriptor set layout
-        Logger::Log("Creating uniform descriptor set layout...");
+        Log("Creating uniform descriptor set layout...");
         viewport.createUniformDescriptorSetLayout();
 
         // init vulkan handler needed variabel
         viewport.helperInitImage();
         viewport.CreateOffscreenResources(1280, 720);
 
+        viewport.textureHandler.setupRenderPassTexture();
         viewport.textureHandler.loadTexture("assets/texture/metalplate01_rgba.ktx");
-        viewport.textureHandler.generateQuad();
-        viewport.textureHandler.setupDescriptors();
-        viewport.textureHandler.prepareUniformBuffers();
+        // viewport.textureHandler.generateQuad();
+        // viewport.textureHandler.setupDescriptors();
+        // viewport.textureHandler.prepareUniformBuffers();
         // Create offscreen pipeline
         viewport.CreateOffscreenPipeline();
     
-        Logger::Log("Creating uniform descriptor sets...");
+        Log("Creating uniform descriptor sets...");
         viewport.createUniformDescriptorSets();
         
-        Logger::Log("Creating graphics pipeline...");
+        Log("Creating graphics pipeline...");
         try {
             viewport.createGraphicsPipeline("assets/shaders/vulkan/triangle.vert.spv", "assets/shaders/vulkan/triangle.frag.spv");
+            // viewport.textureHandler.preparePipelines();
         } catch (const exception e){
-            Logger::Log("PipeLine error: " + string(e.what()), LogLevel::CRASH);
+            Log("PipeLine error: %s", LogLevel::CRASH, e.what());
             throw e;
+        } catch (...) {
+            Log("PipeLine error: %s", LogLevel::CRASH, "Unknown error");
+            throw;
         }
         
-        // Langkah 8: Update dan render
-        Logger::Log("Starting update loop...");
+        Log("Starting update loop...");
         viewport.Update(viewport.currentIo);
         
         // Cleanup
         viewport.CleanupVulkan();
     }
     catch (const exception& e) {
-        Logger::Log("Exception caught: " + string(e.what()), LogLevel::CRASH);
+        Log("Exception caught: " + string(e.what()), LogLevel::CRASH);
         return -1;
     }
 

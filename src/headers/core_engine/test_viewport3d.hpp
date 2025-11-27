@@ -77,6 +77,9 @@ class Viewport3D {
         VkRenderPass renderPass;
         VkSwapchainKHR swapChain {VK_NULL_HANDLE};
 
+        // Render Texture
+        void DrawKtxTexture();
+
         // Viewport
         void createSwapChain(uint32_t& width, uint32_t& height, bool vsync, bool fullscreen);
         void createRenderPass();
@@ -223,21 +226,21 @@ class Viewport3D {
         }
 
         static void check_vk_result(VkResult err) {
-            // Logger::Log("[vulkan] Info: VkResult = " + to_string(err), LogLevel::INFO);
+            // Log("[vulkan] Info: VkResult = " + to_string(err), LogLevel::INFO);
 
             if (err == VK_SUCCESS){ 
                 return;
             }
 
-            // Logger::Log("[vulkan] Error: VkResult = " + to_string(err), LogLevel::CRASH);
+            // Log("[vulkan] Error: VkResult = " + to_string(err), LogLevel::CRASH);
             
             switch (err) {
                 case VK_ERROR_DEVICE_LOST:
-                    Logger::Log("Device lost - attempting recovery...", LogLevel::WARNING);
+                    Log("Device lost - attempting recovery...", LogLevel::WARNING);
                     break;
                 case VK_ERROR_OUT_OF_DATE_KHR:
                 case VK_SUBOPTIMAL_KHR:
-                    // Logger::Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
+                    // Log("Swap chain out of date or suboptimal - rebuilding...", LogLevel::WARNING);
                     // g_SwapChainRebuild = true;
                     break;
                 default:
@@ -272,11 +275,12 @@ class Viewport3D {
         void renderVideoFrame();
         void createCommandBuffers();
         void helperInitImage(){
-            cout << "Device: " << g_Device << "\n"
-            "Physical Device" << g_PhysicalDevice << "\n"
-            "Queue: " << g_Queue << endl; 
+            LogPointer("Device: ", g_Device);
+            LogPointer("Physical Device: ", g_PhysicalDevice);
+            LogPointer("Queue: ", g_Queue);
+            LogPointer("Descriptor pool", g_DescriptorPool);
             imageHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool, memoryProperties);
-            textureHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, g_QueueFamily, offscreenCommandPool, memoryProperties);
+            textureHandler.setCurrentDeviceAndPhysic(g_Device, g_PhysicalDevice, g_Queue, offscreenCommandPool, memoryProperties, renderPass, deviceProps, deviceFeatures, g_DescriptorPool);
         }
 
         array<VkCommandBuffer, MAX_CONCURRENT_FRAMES> commandBuffers{};
@@ -285,8 +289,9 @@ class Viewport3D {
 
     private:
 
+        VkPhysicalDeviceProperties deviceProps;
+        VkPhysicalDeviceFeatures deviceFeatures;
         VkPhysicalDeviceMemoryProperties memoryProperties{};
-
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
         uint32_t currentFrame = 0;

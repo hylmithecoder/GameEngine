@@ -22,7 +22,7 @@ namespace vkhandler
 struct VulkanDevice
 {
 	/** @brief Physical device representation */
-	VkPhysicalDevice physicalDevice{ VK_NULL_HANDLE };
+	VkPhysicalDevice physicalDevice{ VK_NULL_HANDLE };;
 	/** @brief Logical device representation (application's view of the device) */
 	VkDevice logicalDevice{ VK_NULL_HANDLE };
 	/** @brief Properties of the physical device including limits that the application can check against */

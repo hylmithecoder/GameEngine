@@ -186,9 +186,9 @@ set(GLAD_VULKAN
 
 set(TESTVIEWPORT_3D
     src/scripts/main_viewport3d.cpp 
+    src/scripts/handlewindow_viewport3d.cpp 
     src/scripts/vulkan/vulkanhandler.cpp
     src/scripts/vulkan/texture.cpp
-    src/scripts/vulkan/vkerrorhandler.cpp
     src/scripts/vulkan/VkBuffer.cpp
     src/scripts/vulkan/VkDevice.cpp
     src/scripts/vulkan/VkTools.cpp

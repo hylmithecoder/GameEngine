@@ -7,6 +7,8 @@
  */
 
 #include "VkTools.hpp"
+#include <Debugger.hpp>
+using namespace Debug;
 
 #if !(defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK) || defined(VK_USE_PLATFORM_METAL_EXT))
 // iOS & macOS: getAssetPath() and getShaderBasePath() implemented externally for access to Obj-C++ path utilities
@@ -45,6 +47,7 @@ namespace vkhandler
 	{
 		bool errorModeSilent = false;
 		std::string resourcePath = "";
+		std::vector<bool> allFeature;
 
 		std::string errorString(VkResult errorCode)
 		{
@@ -397,6 +400,7 @@ namespace vkhandler
 #else
 		VkShaderModule loadShader(const char *fileName, VkDevice device)
 		{
+			LogPointer("Current use device: ", device);
 			std::ifstream is(fileName, std::ios::binary | std::ios::in | std::ios::ate);
 
 			if (is.is_open())
@@ -451,5 +455,78 @@ namespace vkhandler
 			return (value + alignment - 1) & ~(alignment - 1);
 		}
 
+		void setRedIfNotSupport(const VkBool32 supported, const std::string& featureName) {
+			bool isSupported = static_cast<bool>(supported);
+			if (!supported) {
+				Log("Feature not supported: %s", LogLevel::WARNING, featureName.c_str());
+				isSupported = false;
+			} else {
+				Log("Feature supported: %s", featureName.c_str());
+				isSupported = true;
+			}
+			allFeature.push_back(isSupported);
+		}
+
+		void checkAllFeatures(const VkPhysicalDeviceFeatures& features) {
+			Log("Checking all device features:");
+			setRedIfNotSupport(features.robustBufferAccess, "robustBufferAccess");
+			setRedIfNotSupport(features.fullDrawIndexUint32, "fullDrawIndexUint32");
+			setRedIfNotSupport(features.imageCubeArray, "imageCubeArray");
+			setRedIfNotSupport(features.independentBlend, "independentBlend");
+			setRedIfNotSupport(features.geometryShader, "geometryShader");
+			setRedIfNotSupport(features.tessellationShader, "tessellationShader");
+			setRedIfNotSupport(features.sampleRateShading, "sampleRateShading");
+			setRedIfNotSupport(features.dualSrcBlend, "dualSrcBlend");
+			setRedIfNotSupport(features.logicOp, "logicOp");
+			setRedIfNotSupport(features.multiDrawIndirect, "multiDrawIndirect");
+			setRedIfNotSupport(features.drawIndirectFirstInstance, "drawIndirectFirstInstance");
+			setRedIfNotSupport(features.depthClamp, "depthClamp");
+			setRedIfNotSupport(features.depthBiasClamp, "depthBiasClamp");
+			setRedIfNotSupport(features.fillModeNonSolid, "fillModeNonSolid");
+			setRedIfNotSupport(features.wideLines, "wideLines");
+			setRedIfNotSupport(features.largePoints, "largePoints");
+			setRedIfNotSupport(features.alphaToOne, "alphaToOne");
+			setRedIfNotSupport(features.multiViewport, "multiViewport");
+			setRedIfNotSupport(features.samplerAnisotropy, "samplerAnisotropy");
+			setRedIfNotSupport(features.textureCompressionETC2, "textureCompressionETC2");
+			setRedIfNotSupport(features.textureCompressionASTC_LDR, "textureCompressionASTC_LDR");
+			setRedIfNotSupport(features.textureCompressionBC, "textureCompressionBC");
+			setRedIfNotSupport(features.occlusionQueryPrecise, "occlusionQueryPrecise");
+			setRedIfNotSupport(features.pipelineStatisticsQuery, "pipelineStatisticsQuery");
+			setRedIfNotSupport(features.vertexPipelineStoresAndAtomics, "vertexPipelineStoresAndAtomics");
+			setRedIfNotSupport(features.fragmentStoresAndAtomics, "fragmentStoresAndAtomics");
+			setRedIfNotSupport(features.shaderTessellationAndGeometryPointSize, "shaderTessellationAndGeometryPointSize");
+			setRedIfNotSupport(features.shaderImageGatherExtended, "shaderImageGatherExtended");
+			setRedIfNotSupport(features.shaderStorageImageExtendedFormats, "shaderStorageImageExtendedFormats");
+			setRedIfNotSupport(features.shaderStorageImageMultisample, "shaderStorageImageMultisample");
+			setRedIfNotSupport(features.shaderStorageImageReadWithoutFormat, "shaderStorageImageReadWithoutFormat");
+			setRedIfNotSupport(features.shaderStorageImageWriteWithoutFormat, "shaderStorageImageWriteWithoutFormat");
+			setRedIfNotSupport(features.shaderUniformBufferArrayDynamicIndexing, "shaderUniformBufferArrayDynamicIndexing");
+			setRedIfNotSupport(features.shaderSampledImageArrayDynamicIndexing, "shaderSampledImageArrayDynamicIndexing");
+			setRedIfNotSupport(features.shaderStorageBufferArrayDynamicIndexing, "shaderStorageBufferArrayDynamicIndexing");
+			setRedIfNotSupport(features.shaderStorageImageArrayDynamicIndexing, "shaderStorageImageArrayDynamicIndexing");
+			setRedIfNotSupport(features.shaderClipDistance, "shaderClipDistance");
+			setRedIfNotSupport(features.shaderCullDistance, "shaderCullDistance");
+			setRedIfNotSupport(features.shaderFloat64, "shaderFloat64");
+			setRedIfNotSupport(features.shaderInt64, "shaderInt64");
+			setRedIfNotSupport(features.shaderInt16, "shaderInt16");
+			setRedIfNotSupport(features.shaderResourceResidency, "shaderResourceResidency");
+			setRedIfNotSupport(features.shaderResourceMinLod, "shaderResourceMinLod");
+			setRedIfNotSupport(features.sparseBinding, "sparseBinding");
+			setRedIfNotSupport(features.sparseResidencyBuffer, "sparseResidencyBuffer");
+			setRedIfNotSupport(features.sparseResidencyImage2D, "sparseResidencyImage2D");
+			setRedIfNotSupport(features.sparseResidencyImage3D, "sparseResidencyImage3D");
+			setRedIfNotSupport(features.sparseResidency2Samples, "sparseResidency2Samples");
+			setRedIfNotSupport(features.sparseResidency4Samples, "sparseResidency4Samples");
+			setRedIfNotSupport(features.sparseResidency8Samples, "sparseResidency8Samples");
+			setRedIfNotSupport(features.sparseResidency16Samples, "sparseResidency16Samples");
+			setRedIfNotSupport(features.sparseResidencyAliased, "sparseResidencyAliased");
+			setRedIfNotSupport(features.variableMultisampleRate, "variableMultisampleRate");
+			setRedIfNotSupport(features.inheritedQueries, "inheritedQueries");
+			Log("All features: %i", allFeature.size());
+			Log("Total supported features: %i", LogLevel::SUCCESS, std::count(allFeature.begin(), allFeature.end(), true));
+			Log("Total not supported features: %i", LogLevel::WARNING, std::count(allFeature.begin(), allFeature.end(), false));
+			Log("---------------------------------------------------");
+		}
 	}
 }

@@ -137,5 +137,11 @@ namespace vkhandler
 
 		uint32_t alignedSize(uint32_t value, uint32_t alignment);
 		VkDeviceSize alignedVkSize(VkDeviceSize value, VkDeviceSize alignment);
+		void setRedIfNotSupport(const VkBool32 supported, const std::string& featureName);
+		void checkAllFeatures(const VkPhysicalDeviceFeatures& features);
+
+		// struct HandleSaveFeatures {
+			extern std::vector<bool> allFeature;
+		// } handleSaveFeatures;
 	}
 }
