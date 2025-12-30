@@ -49,3 +49,5 @@ Makefile
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+/.cache

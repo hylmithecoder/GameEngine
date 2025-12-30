@@ -8,6 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # Set output directories specifically for library targets
 
+add_subdirectory(src)
+add_subdirectory(include)
+add_subdirectory(vendor)
+message(STATUS "SOURCES_CPP: ${SOURCES}")
+message(STATUS "SOURCE_CORE_ENGINE: ${SOURCES_CORE_ENGINE}")
+message(STATUS "SOURCE_UI: ${SOURCES_UI}")
+message(STATUS "SOURCE_VULKAN: ${SOURCES_VULKAN}")
 # Compiler-specific options
 # if(MSVC)
 #     add_compile_options(/W4)
@@ -16,115 +23,14 @@ option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 #     add_compile_options(-Wall -Wextra -pedantic)
 # endif()
 
-# Add SDL2 and SDL2_ttf paths
-# set(SDL2_DIR "C:/SDL2")
-# set(SDL2_TTF_DIR "C:/SDL2_ttf") 
-# set(STB "E:/stb")
-# set(GLFW "C:/glfw3.4")
-# set(FFMPEG_DIR "E:/FFmpeg")
-# set(LIBRARY "C:/msys64/mingw64/bin")
-# set(GLES2 ${GLFW}/)
-set(NFD "/home/hylmi/Hylmi/Pemrograman_Berorientasi_Objek/C++/nativefiledialog-extended")
-# set(GLM "E:/glm")
-# set(VULKAN_SDK "C:/msys64/mingw64")
-# set(VULKAN_DIR "C:/vulkan")
-# set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
-# set(DLFCN "E:/dlfcn-win32")
-# set(GLEW "C:/glew-2.1.0")
-
-# Add source files
-set(SOURCES 
-    src/main.cpp
-    src/resources.rc
-    src/scripts/ui/MainWindow.cpp
-    # src/RocketInterfaces.cpp
-    # src/SimpleRenderer.cpp
-    src/scripts/ApplicationManager.cpp
-    src/scripts/ui/SecondaryWindow.cpp
-    src/scripts/ui/VideoPlayer.cpp
-    src/scripts/ui/assets.cpp
-    src/scripts/ui/HandlerProject.cpp
-    src/scripts/ui/HandlerChildWindow.cpp
-    src/scripts/core_engine/SceneSerializer.cpp
-    src/scripts/core_engine/SceneRenderer2D.cpp
-    src/scripts/core_engine/TextureManager.cpp
-    src/scripts/core_engine/Check_Environment.cpp
-)
-
-set(SOURCE_TEST_VULKAN
-    src/scripts/test_vulkan.cpp
-)
-
-set(SOURCE_CORE
-    src/scripts/core_engine/core/GameEngine.cpp
-    src/scripts/core_engine/core/CoreDebugger.cpp
-)
-
-# Add headers files
-set(HEADERS
-    src/headers/ui/MainWindow.hpp
-    # src/headers/RocketInterfaces.hpp
-    src/headers/ui/SimpleRenderer.hpp
-    src/headers/ui/SecondaryWindow.hpp
-    src/headers/ui/VideoPlayer.hpp
-    src/headers/ui/assets.hpp
-    src/headers/ui/HandlerProject.hpp
-    src/headers/core_engine/Scene.hpp
-    src/headers/core_engine/SceneSerializer.hpp
-    src/headers/core_engine/SceneRenderer2D.hpp
-    src/headers/core_engine/TextureManager.hpp
-    src/headers/core_engine/GLHeader.hpp
-    src/headers/core_engine/Debugger.hpp
-    src/headers/core_engine/NetworkManager.hpp
-    src/headers/core_engine/Check_Environment.hpp
-    src/headers/ui/Application.hpp
-)
-
-set(HEADERS_GLSL
-    src/headers/core_engine/test_glsl.hpp
-)
-
-set(HEADERS_VULKAN
-    src/headers/core_engine/test_vulkan.hpp
-)
-
-set(HEADERS_CORE
-    # src/headers/core_engine/core/Component.hpp
-    # src/headers/core_engine/core/Scene.hpp
-    src/headers/core_engine/core/GameEngine.h
-    src/headers/core_engine/core/CoreDebugger.h
-    # src/headers/core_engine/core/EngineCore.hpp
-    # src/headers/core_engine/core/LifeCycleManager.hpp
-)
-
-set(HEADERS_CORE_EDITOR
-    src/headers/core_engine/core_editor/IlmeeeEditor.h
-    src/headers/core_engine/core_editor/TCPConnection.hpp
-)
-
 set(SOURCE_TEST
-    src/scripts/ui/assets.cpp
-    src/headers/ui/assets.hpp
-    src/scripts/ui/test_main.cpp
-)
-
-# This Source Not Glew but glad
-set(SOURCE_TEST_GLEW
-    src/scripts/test_glew.cpp
-)
-
-set(SOURCE_TEST_GLM
-    src/scripts/test_glm.cpp
+    src/cpp/ui/assets.cpp
+    include/ui/assets.hpp
+    src/cpp/ui/test_main.cpp
 )
 
 set(SOURCE_TEST_GLSL
-    src/scripts/test_glsl.cpp
-)
-
-set(SOURCE_HANDLER
-    src/scripts/core_engine/core/Launcher.cpp 
-    src/scripts/core_engine/core/HandlerLauncher.cpp
-    src/headers/core_engine/Debugger.hpp
+    src/cpp/test_glsl.cpp
 )
 
 # Add ImGui source files
@@ -135,20 +41,19 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
 )
 
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
 
-set(NFD_SOURCES
-    ${NFD}/src/nfd_gtk.cpp
-    # ${NFD}/src/nfd_portal.cpp
-    # ${NFD}/src/nfd_win.cpp
+set(SOURCE_HANDLER
+    src/cpp/core_engine/core/Launcher.cpp 
+    src/cpp/core_engine/core/HandlerLauncher.cpp
 )
 
 set(IMGUI_TEST
@@ -169,29 +74,9 @@ set(JSON
     ${JSON_DIR}/json.hpp
 )
 
-set(GLAD_DIR ${CMAKE_SOURCE_DIR}/vendor/glad/)
-set(GLAD
-    ${GLAD_DIR}/src/glad.c
-)
-
 set(GLAD_4_DIR ${CMAKE_SOURCE_DIR}/vendor/glad4.4)
 set(GLAD_4
     ${GLAD_4_DIR}/src/glad.c
-)
-
-set(GLAD_VULKAN_DIR ${CMAKE_SOURCE_DIR}/vendor/glad_vulkan)
-set(GLAD_VULKAN
-    ${GLAD_VULKAN_DIR}/src/vulkan.c
-)
-
-set(TESTVIEWPORT_3D
-    src/scripts/main_viewport3d.cpp 
-    src/scripts/handlewindow_viewport3d.cpp 
-    src/scripts/vulkan/vulkanhandler.cpp
-    src/scripts/vulkan/texture.cpp
-    src/scripts/vulkan/VkBuffer.cpp
-    src/scripts/vulkan/VkDevice.cpp
-    src/scripts/vulkan/VkTools.cpp
 )
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
@@ -206,20 +91,15 @@ pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
-add_executable(${PROJECT_NAME} ${NFD_SOURCES} ${HEADERS} ${SOURCES} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+add_executable(${PROJECT_NAME} ${HEADERS_MAIN_PROJECT} ${SOURCES} ${GLAD_4} ${IMGUI_SOURCES} ${NFD_LIB})
 # target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
-add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES} ${GLAD_4})
+add_executable(TestBackground ${SOURCE_TEST})
 target_link_options(TestBackground PRIVATE -mconsole)
-add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
-target_link_options(TestGLEW PRIVATE -mconsole)
-add_executable(TestGLM ${SOURCE_TEST_GLM})
-# target_link_options(TestGLM PRIVATE -mconsole)
-add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADERS_GLSL} ${ICON_SOURCE})
-# target_link_options(TestGLSL PRIVATE -mconsole)
-add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADERS_VULKAN} ${ICON_SOURCE})
-# target_link_options(TestVulkan PRIVATE -mconsole)
 
-add_library(IlmeeeEngine SHARED src/IlmeeeEngine.rc ${SOURCE_CORE} ${HEADERS_CORE})
+add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES})
+# target_link_options(TestGLSL PRIVATE -mconsole)
+
+add_library(IlmeeeEngine SHARED res/IlmeeeEngine.rc ${SOURCES_CORE})
 # target_link_options(IlmeeeEngine PRIVATE -mconsole)
 add_definitions(-DILMEEEENGINE_EXPORTS)
 set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -229,7 +109,7 @@ target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 add_executable(HandlerIlmeeeEngine ${SOURCE_HANDLER})
 # target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
-add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${NFD_SOURCES} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+add_executable(IlmeeeHub src/cpp/Hub.cpp res/resources.rc ${NFD_LIB} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
 # target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
 set_target_properties(IlmeeeEngine PROPERTIES
@@ -240,8 +120,13 @@ set_target_properties(IlmeeeEngine PROPERTIES
     SOVERSION 1
     OUTPUT_NAME "IlmeeeEngine"
 )
-include_directories(${GTK3_INCLUDE_DIRS})
-add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${headers_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
+
+include_directories(
+    ${GTK3_INCLUDE_DIRS}
+    include/
+)
+
+add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/cpp/core_engine/core_editor/IlmeeeEditor.cpp res/IlmeeeEditor.rc ${SOURCES_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
 # target_link_options(IlmeeeEditor PRIVATE -mconsole)
 # Define macro untuk export symbols
 add_definitions(-DILMEEEDITOR_EXPORTS)
@@ -249,7 +134,8 @@ set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
-add_executable(ViewPort3D ${TESTVIEWPORT_3D} ${IMGUI_SOURCES})
+message(STATUS "Vieport Source : ${VIEWPORT_SOURCES}")
+add_executable(ViewPort3D ${VIEWPORT_SOURCES} ${IMGUI_SOURCES})
 
 set_target_properties(IlmeeeEditor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -280,16 +166,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     # /usr/include/GLFW
     ${GTK3_INCLUDE_DIRS}
     # Project directories
-    ${CMAKE_SOURCE_DIR}/src/headers
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
     ${CMAKE_SOURCE_DIR}/vendor/icons
     # Custom/third-party libraries
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${NFD}/src/include
+    include/nfd/include
     ${JSON_DIR}
     # ${STB}
+    ${NFD_INCLUDE_DIR}
     ${GLAD_4_DIR}/include
     
     # Vulkan
@@ -315,33 +199,6 @@ target_include_directories(TestBackground PRIVATE
     # GLES2
     # GLEW
     
-)
-
-target_include_directories(TestGLEW PRIVATE
-    # ${SDL2_DIR}/include
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    # ${FFMPEG_DIR}
-    # ${STB}
-    ${GLFW}/include
-    ${GLES2}
-    opengl32
-    gdi32
-    ${GLAD_4_DIR}/include
-    # ${VULKAN_DIR}
-    Vulkan
-    # GLES2
-    # GLEW
-)
-
-target_include_directories(TestGLM PRIVATE
-    # ${GLM}
-    # ${VULKAN_DIR}
-    Vulkan
-    # GLES2
-    GLM
-    # GLEW
 )
 
 target_include_directories(TestGLSL PRIVATE
@@ -371,32 +228,6 @@ target_include_directories(TestGLSL PRIVATE
     # ${VULKAN_DIR}
     Vulkan
 )
-
-target_include_directories(TestVulkan PRIVATE
-    # ${SDL2_DIR}/include
-    /usr/include/SDL2
-    /usr/include/vulkan
-    ${ICON_DIR}
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
-    # ${FFMPEG_DIR}
-    ${NFD}/src/include
-    ${JSON_DIR}
-    # ${STB}
-    # ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    /usr/include/GLFW
-    # ${GLES2}
-    opengl32
-    gdi32
-    # ${GLAD_VULKAN_DIR}/include
-    # ${VULKAN_SDK}/include
-    # ${VULKAN_DIR}
-    Vulkan
-) 
 
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     # ${DLFCN}/src
@@ -453,9 +284,9 @@ target_include_directories(IlmeeeHub PRIVATE
 target_include_directories(ViewPort3D PRIVATE
     /usr/include/stb
     Vulkan
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
-    ${CMAKE_SOURCE_DIR}/src/headers/vulkan
-    ${CMAKE_SOURCE_DIR}/src/headers/audio
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${CMAKE_SOURCE_DIR}/include/audio
     /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -623,19 +454,6 @@ target_link_libraries(TestBackground PRIVATE
     OpenGL::GL
 )
 
-target_link_libraries(TestGLEW PRIVATE
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # GLEW::GLEW
-)
-
 target_link_libraries(TestGLSL PRIVATE
     # ${SDL2_DIR}/lib/x64/SDL2.lib
     # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
@@ -650,13 +468,6 @@ target_link_libraries(TestGLSL PRIVATE
     glfw
     # ${GLEW}/lib/Release/x64/glew32.lib
     # GLEW::GLEW
-)
-
-target_link_libraries(TestVulkan PRIVATE
-    SDL2
-    SDL2_ttf
-    glfw
-    Vulkan::Vulkan
 )
 
 target_link_libraries(ViewPort3D PRIVATE

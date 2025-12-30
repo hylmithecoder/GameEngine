@@ -1,0 +1,10 @@
+if(WIN32)
+    set(NFD_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/nfd_win.cpp")
+elseif(APPLE)
+    set(NFD_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/nfd_cocoa.m")
+elseif(UNIX)
+    set(NFD_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/nfd_gtk.cpp")
+endif()
+
+set(NFD_SOURCE ${NFD_SOURCES} PARENT_SCOPE)
+set(NFD_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" PARENT_SCOPE)

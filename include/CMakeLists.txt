@@ -1,0 +1,19 @@
+set(HEADERS_MAIN_PROJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/MainWindow.hpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/RocketInterfaces.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/SimpleRenderer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/SecondaryWindow.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/VideoPlayer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/assets.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerProject.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Scene.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer2D.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GLHeader.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Debugger.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NetworkManager.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/Application.hpp
+    PARENT_SCOPE
+)
