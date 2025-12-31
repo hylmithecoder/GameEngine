@@ -207,9 +207,9 @@ void Viewport3D::videoPlayerUI(){
             }
             else {
                 // if (imageHandler.fps <= 24) {
-                    // imageHandler.updateBothVideoAndAudio24fps();
+                    imageHandler.updateBothVideoAndAudio24fps();
                 // } else {
-                    imageHandler.updateBothVideoAndAudio();
+                    // imageHandler.updateBothVideoAndAudio();
                 // }
             }
         }

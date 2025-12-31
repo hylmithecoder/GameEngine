@@ -5,6 +5,7 @@
 #include <camera.hpp>
 #include <map>
 #include "../vulkan/vulkanhandler.hpp"
+#include "Debugger.hpp"
 #include <fstream>
 #include <texture.hpp>
 using namespace Debug;
@@ -143,6 +144,7 @@ class Viewport3D {
             // helperInitImage();
             // SetupImgui();
             DEBUG_LOGF("Surface %p", LogLevel::INFO, surface);
+            // DEBUG_MSGBOX(nullptr, "Surface %p", surface);
             SetupVulkanWindow(&g_MainWindowData, surface, 1280, 720);
             SetupImgui();
             pickPhysicalDevice();

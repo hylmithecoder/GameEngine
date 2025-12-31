@@ -281,36 +281,17 @@ void Viewport3D::SetupImgui(){
     init_info.Allocator = g_Allocator;
     init_info.CheckVkResultFn = check_vk_result;
 
-    // ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-
-    // platform_io.Platform_CreateVkSurface =
-    //     [](ImGuiViewport* viewport,
-    //     ImU64 vk_instance,
-    //     const void* allocator,
-    //     ImU64* out_surface) -> int
-    // {
-    //     SDL_Window* window = (SDL_Window*)viewport->PlatformHandle;
-    //     VkSurfaceKHR surface = VK_NULL_HANDLE;
-
-    //     if (!SDL_Vulkan_CreateSurface(
-    //             window,
-    //             (VkInstance)vk_instance,
-    //             (const VkAllocationCallbacks*)allocator,
-    //             &surface))
-    //     {
-    //         return 1; // Error
-    //     }
-
-    //     *out_surface = (ImU64)surface;
-    //     return 0; // Success
-    // };
-
     // init_info.Platform_CreateVkSurface = &SDL_Vulkan_CreateSurface;
     // init_info.
     LogPointer("Init Info: ", init_info.CheckVkResultFn);
     LogPointer("Surface ", surface);
     ImGui_ImplVulkan_Init(&init_info);
     ImGui_ImplVulkan_CreateFontsTexture();
+
+    if (!gtk_init_check(0, nullptr)) {
+        DEBUG_LOGF("Failed to initialize GTK", LogLevel::CRASH, 0);
+    }
+
 }
 #pragma endregion
 
@@ -326,6 +307,8 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     DEBUG_LOG("Vendor ID: %i", deviceProps.vendorID);
     DEBUG_LOG("Driver Version: %i", deviceProps.driverVersion);
 
+    string fullInfo = "Device Name: " + string(deviceProps.deviceName) + "\n" + "Device Type: " + to_string(deviceProps.deviceType) + "\n" + "Device ID: " + to_string(deviceProps.deviceID) + "\n" + "Vendor ID: " + to_string(deviceProps.vendorID) + "\n" + "Driver Version: " + to_string(deviceProps.driverVersion);
+    DEBUG_MSGBOX(nullptr, "Full spec %s", fullInfo.c_str());
     tools::checkAllFeatures(deviceFeatures);
 
     int score = 0;
@@ -519,9 +502,11 @@ void Viewport3D::Update(ImGuiIO& io){
             ImDrawData* main_draw_data = GetDrawData();
             const bool main_is_minimized = (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
             if (!main_is_minimized)
+            {
                 // HandleRenderViewport(viewportWidth, viewportHeight);
                 FrameRender(wd, main_draw_data);
                 FramePresent(wd);
+            }
 
             // Update and Render additional Platform Windows
             if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
@@ -2125,6 +2110,7 @@ int main(int argc, char* argv[]){
         try {
             viewport.createGraphicsPipeline("assets/shaders/vulkan/triangle.vert.spv", "assets/shaders/vulkan/triangle.frag.spv");
             // viewport.textureHandler.preparePipelines();
+            DEBUG_MSGBOX_ERROR(nullptr, "PipeLine info: %p", viewport.graphicsPipeline);
         } catch (const exception e){
             Log("PipeLine error: %s", LogLevel::CRASH, e.what());
             throw e;

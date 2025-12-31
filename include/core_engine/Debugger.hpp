@@ -3,8 +3,13 @@
 #include <string>
 #include <cstdio>
 #include <cstdarg>
+
+#ifdef __linux__
+#include <gtk/gtk.h>
+#endif
 using namespace std;
 
+#define TITLE "Ilmeee Engine"
 namespace Debug {
     enum class LogLevel {
         INFO,
@@ -168,4 +173,141 @@ namespace Debug {
             } \
         } while(0)
 
+    // Show a GTK message box for debugging
+    // Usage: Debug::ShowBox(GTK_WINDOW(parent_widget), "Your message");
+    //        Debug::ShowBox(nullptr, "Message without parent");
+    static void ShowBox(GtkWindow *parent, const char* message, GtkMessageType type = GTK_MESSAGE_INFO) {
+        GtkWidget *dialog = gtk_message_dialog_new(
+            parent,
+            GTK_DIALOG_DESTROY_WITH_PARENT,
+            type,
+            GTK_BUTTONS_CLOSE,
+            "%s",
+            message
+        );
+        gtk_window_set_title(GTK_WINDOW(dialog), TITLE);
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+    }
+
+    // Overload for std::string
+    static void ShowBox(GtkWindow *parent, const string& message, GtkMessageType type = GTK_MESSAGE_INFO) {
+        ShowBox(parent, message.c_str(), type);
+    }
+
+    // Macro for debug message box with printf-style variadic arguments
+    // Usage: DEBUG_MSGBOX(nullptr, "Value: %d, Ptr: %p", myValue, myPtr);
+    #define DEBUG_MSGBOX(parent, format, ...) \
+        do { \
+            char _debug_msg_buf[1024]; \
+            char _debug_msgbox_buf[2048]; \
+            snprintf(_debug_msg_buf, sizeof(_debug_msg_buf), format, ##__VA_ARGS__); \
+            snprintf(_debug_msgbox_buf, sizeof(_debug_msgbox_buf), "%s\n\nFile: %s\nLine: %d", _debug_msg_buf, __FILE__, __LINE__); \
+            GtkWidget *_dialog = gtk_message_dialog_new( \
+                (parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                GTK_MESSAGE_INFO, \
+                GTK_BUTTONS_CLOSE, \
+                "%s", \
+                _debug_msgbox_buf \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(_dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(_dialog)); \
+            gtk_widget_destroy(_dialog); \
+        } while(0)
+
+    #define DEBUG_MSGBOX_ERROR(parent, format, ...) \
+        do { \
+            char _debug_msg_buf[1024]; \
+            char _debug_msgbox_buf[2048]; \
+            snprintf(_debug_msg_buf, sizeof(_debug_msg_buf), format, ##__VA_ARGS__); \
+            snprintf(_debug_msgbox_buf, sizeof(_debug_msgbox_buf), "%s\n\nFile: %s\nLine: %d", _debug_msg_buf, __FILE__, __LINE__); \
+            GtkWidget *_dialog = gtk_message_dialog_new( \
+                (parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                GTK_MESSAGE_ERROR, \
+                GTK_BUTTONS_CLOSE, \
+                "%s", \
+                _debug_msgbox_buf \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(_dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(_dialog)); \
+            gtk_widget_destroy(_dialog); \
+        } while(0)
+
+    #define DEBUG_MSGBOX_WARNING(parent, format, ...) \
+        do { \
+            char _debug_msg_buf[1024]; \
+            char _debug_msgbox_buf[2048]; \
+            snprintf(_debug_msg_buf, sizeof(_debug_msg_buf), format, ##__VA_ARGS__); \
+            snprintf(_debug_msgbox_buf, sizeof(_debug_msgbox_buf), "%s\n\nFile: %s\nLine: %d", _debug_msg_buf, __FILE__, __LINE__); \
+            GtkWidget *_dialog = gtk_message_dialog_new( \
+                (parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                GTK_MESSAGE_WARNING, \
+                GTK_BUTTONS_CLOSE, \
+                "%s", \
+                _debug_msgbox_buf \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(_dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(_dialog)); \
+            gtk_widget_destroy(_dialog); \
+        } while(0)
+    
+    
+    #ifdef __linux__
+    // Helper macros for stringification
+    #define _MSGBOX_STRINGIFY(x) #x
+    #define _MSGBOX_TOSTRING(x) _MSGBOX_STRINGIFY(x)
+
+    #define MSGBOX_INFO(parent, type, message) \
+        do { \
+            GtkWidget *dialog; \
+            char _msgbox_buf[2048]; \
+            snprintf(_msgbox_buf, sizeof(_msgbox_buf), "%s (%s:%s)", (message), __FILE__, _MSGBOX_TOSTRING(__LINE__)); \
+            dialog = gtk_message_dialog_new( \
+                GTK_WINDOW(parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                type,                           \
+                GTK_BUTTONS_CLOSE,              \
+                "%s",                           \
+                _msgbox_buf                     \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(dialog)); \
+            gtk_widget_destroy(dialog); \
+        } while(0)
+    
+    #define MSGBOX_ERROR(parent, message) \
+        do { \
+            GtkWidget *dialog; \
+            dialog = gtk_message_dialog_new( \
+                GTK_WINDOW(parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                GTK_MESSAGE_ERROR, \
+                GTK_BUTTONS_CLOSE, \
+                "%s", \
+                (message) \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(dialog)); \
+            gtk_widget_destroy(dialog); \
+        } while(0)
+    
+    #define MSGBOX_WARNING(parent, message) \
+        do { \
+            GtkWidget *dialog; \
+            dialog = gtk_message_dialog_new( \
+                GTK_WINDOW(parent), \
+                GTK_DIALOG_DESTROY_WITH_PARENT, \
+                GTK_MESSAGE_WARNING, \
+                GTK_BUTTONS_CLOSE, \
+                "%s", \
+                (message) \
+            ); \
+            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+            gtk_dialog_run(GTK_DIALOG(dialog)); \
+            gtk_widget_destroy(dialog); \
+        } while(0)
+    #endif
 }

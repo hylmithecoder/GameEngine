@@ -41,12 +41,12 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
+    # ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
 )
 
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
@@ -290,6 +290,7 @@ target_include_directories(ViewPort3D PRIVATE
     /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${GTK3_INCLUDE_DIRS}
     # vendor/ktx/include
 )
 
@@ -479,6 +480,7 @@ target_link_libraries(ViewPort3D PRIVATE
     swresample
     swscale
     ktx
+    ${GTK3_LIBRARIES}
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE

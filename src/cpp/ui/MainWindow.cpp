@@ -44,7 +44,7 @@ bool MainWindow::showConfirmDialog(const char* message, const char* title) {
 
     // Initialize GTK if not already done
     if (!gtk_init_check(0, nullptr)) {
-        ::Log("Failed to initialize GTK", Debug::LogLevel::CRASH);
+        Log("Failed to initialize GTK", Debug::LogLevel::CRASH);
         return false;
     }
 
