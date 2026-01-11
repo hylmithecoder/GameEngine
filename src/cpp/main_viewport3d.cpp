@@ -225,73 +225,68 @@ void Viewport3D::SetupVulkanWindow(ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR su
 
 #pragma region Setup ImGui
 void Viewport3D::SetupImgui(){
-    IMGUI_CHECKVERSION();
-    DEBUG_LOG("IM Gui Version %s", IMGUI_VERSION);
-    CreateContext();
-    ImGuiIO& io = GetIO();
-    (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
-    
-    string fontPath = "assets/fonts/MiSans-Medium.ttf";
-    fontSize = 24.0f;
-    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), fontSize);
-    currentIo = getImGuiIO(io);
-    // currentIo = io;
-
-    // Setup scaling
-    ImGuiStyle& style = ImGui::GetStyle();
-    // style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    // style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
-    // io.ConfigDpiScaleFonts = true;          // [Experimental] Automatically overwrite style.FontScaleDpi in Begin() when Monitor DPI changes. This will scale fonts but _NOT_ scale sizes/padding for now.
-    // io.ConfigDpiScaleViewports = true;      // [Experimental] Scale Dear ImGui and Platform Windows when Monitor DPI changes.
-
-    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
-    
-    ImGui_ImplSDL3_InitForVulkan(mainWindow);
-    
-    // Safety check: SDL backend might refuse to enable viewports on some platforms (e.g. Wayland without proper config).
-    // If backend didn't set PlatformHasViewports, we MUST disable ViewportsEnable to avoid the crash in Vulkan Init.
-    // if ((io.BackendFlags & ImGuiBackendFlags_PlatformHasViewports) == 0 && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
-    // {
-    //     DEBUG_LOGF("Warning: SDL Backend indicates no support for Multi-Viewports (PlatformHasViewports missing). Automatically disabling ImGuiConfigFlags_ViewportsEnable to prevent crash.", LogLevel::CRASH, 0);
-    //     io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
-    // }
-    LogPointer("Surface", wd->Surface);
-    // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
-    init_info.Instance = g_Instance;
-    init_info.PhysicalDevice = g_PhysicalDevice;
-    init_info.Device = g_Device;
-    init_info.QueueFamily = g_QueueFamily;
-    init_info.Queue = g_Queue;
-    init_info.PipelineCache = g_PipelineCache;
-    init_info.DescriptorPool = g_DescriptorPool;
-    init_info.RenderPass = wd->RenderPass;
-    init_info.Subpass = 0;
-    init_info.MinImageCount = g_MinImageCount;
-    init_info.ImageCount = wd->ImageCount;
-    init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.Allocator = g_Allocator;
-    init_info.CheckVkResultFn = check_vk_result;
-
-    // init_info.Platform_CreateVkSurface = &SDL_Vulkan_CreateSurface;
-    // init_info.
-    LogPointer("Init Info: ", init_info.CheckVkResultFn);
-    LogPointer("Surface ", surface);
-    ImGui_ImplVulkan_Init(&init_info);
-    ImGui_ImplVulkan_CreateFontsTexture();
 
     if (!gtk_init_check(0, nullptr)) {
         DEBUG_LOGF("Failed to initialize GTK", LogLevel::CRASH, 0);
     }
 
+    try {
+        IMGUI_CHECKVERSION();
+        DEBUG_LOG("IM Gui Version %s", IMGUI_VERSION);
+        CreateContext();
+        ImGuiIO& io = GetIO();
+        (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
+        
+        string fontPath = "assets/fonts/MiSans-Medium.ttf";
+        fontSize = 24.0f;
+        io.Fonts->AddFontFromFileTTF(fontPath.c_str(), fontSize);
+        currentIo = getImGuiIO(io);
+        // currentIo = io;
+
+        ImGui_ImplSDL3_InitForVulkan(mainWindow);
+        
+        // On Wayland, SDL doesn't support the functions needed for multi-viewport (SDL_GetGlobalMouseState, SDL_CaptureMouse).
+        // We check if the platform supports viewports and disable it if not to prevent crashes.
+        // NOTE: To enable multi-viewport on Wayland, run with: SDL_VIDEODRIVER=x11 ./ViewPort3D
+        // Rendering textures/triangles works fine without ViewportsEnable - it only affects ImGui windows being able to be dragged outside the main window.
+        if ((io.BackendFlags & ImGuiBackendFlags_PlatformHasViewports) == 0 && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
+        {
+            DEBUG_LOG("Platform doesn't support multi-viewport (likely Wayland). Disabling ViewportsEnable.");
+            DEBUG_LOG("TIP: Run with SDL_VIDEODRIVER=x11 ./ViewPort3D to enable multi-viewport on Wayland.");
+            io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
+        }
+        LogPointer("Surface", wd->Surface);
+        // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
+        init_info.Instance = g_Instance;
+        init_info.PhysicalDevice = g_PhysicalDevice;
+        init_info.Device = g_Device;
+        init_info.QueueFamily = g_QueueFamily;
+        init_info.Queue = g_Queue;
+        init_info.PipelineCache = g_PipelineCache;
+        init_info.DescriptorPool = g_DescriptorPool;
+        init_info.RenderPass = wd->RenderPass;
+        init_info.Subpass = 0;
+        init_info.MinImageCount = g_MinImageCount;
+        init_info.ImageCount = wd->ImageCount;
+        init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        init_info.Allocator = g_Allocator;
+        init_info.CheckVkResultFn = check_vk_result;
+
+        // init_info.Platform_CreateVkSurface = &SDL_Vulkan_CreateSurface;
+        // init_info.
+        LogPointer("Init Info: ", init_info.CheckVkResultFn);
+        LogPointer("Surface ", surface);
+        ImGui_ImplVulkan_Init(&init_info);
+        ImGui_ImplVulkan_CreateFontsTexture();
+    } catch (const exception& e) {
+        DEBUG_LOGF("Failed to initialize GTK", LogLevel::CRASH, e.what());
+        MSGBOX_ERRORF(nullptr, "Failed to initialize GTK %s", e.what());
+    }
+    
 }
 #pragma endregion
 
@@ -308,7 +303,7 @@ int Viewport3D::ratePhysicalDevice(VkPhysicalDevice device) {
     DEBUG_LOG("Driver Version: %i", deviceProps.driverVersion);
 
     string fullInfo = "Device Name: " + string(deviceProps.deviceName) + "\n" + "Device Type: " + to_string(deviceProps.deviceType) + "\n" + "Device ID: " + to_string(deviceProps.deviceID) + "\n" + "Vendor ID: " + to_string(deviceProps.vendorID) + "\n" + "Driver Version: " + to_string(deviceProps.driverVersion);
-    DEBUG_MSGBOX(nullptr, "Full spec %s", fullInfo.c_str());
+    MSGBOX_INFOF(nullptr, "Full spec %s", fullInfo.c_str());
     tools::checkAllFeatures(deviceFeatures);
 
     int score = 0;
@@ -619,7 +614,7 @@ void Viewport3D::CreateOffscreenResources(int width, int height) {
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    // imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (vkCreateImage(g_Device, &imageInfo, nullptr, &offscreenImage) != VK_SUCCESS) {
         throw runtime_error("Failed to create offscreen image!");
@@ -795,7 +790,7 @@ void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
     VK_CHECK_RESULT(vkCreateImage(g_Device, &imageCI, nullptr, &depthStencil.image));
 
     // VkPhysicalDeviceMemoryProperties memoryProperties;
-    // vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memoryProperties);
+    vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &memoryProperties);
     // Allocate memory for the image (device local) and bind it to our image
     VkMemoryAllocateInfo memAlloc{};
     memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -829,11 +824,13 @@ void Viewport3D::CreateDepthStencil(uint32_t width, uint32_t height)
 
 void Viewport3D::CreateFrameBuffer(uint32_t width, uint32_t height)
 {
+    MSGBOX_INFOF(NULL, "CreateFrameBuffer %d x %d", width, height);
     // Create a frame buffer for every image in the swapchain
     framebuffers.resize(images.size());
     Log("Framebuffer count: " + to_string(framebuffers.size()), LogLevel::WARNING);
     for (size_t i = 0; i < framebuffers.size(); i++)
     {
+        DEBUG_LOG("Creating frame buffer %d", static_cast<int>(i));
         array<VkImageView, 2> attachments{};
         // Color attachment is the view of the swapchain image
         attachments[0] = imageViews[i];
@@ -1037,14 +1034,14 @@ void Viewport3D::createGraphicsPipeline(const string& vertShaderPath, const stri
 
 	VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
     vkCreatePipelineCache(g_Device, &pipelineCacheCreateInfo, nullptr, &g_PipelineCache);
-    // VK_CHECK_RESULT(vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
-    if (vkCreateGraphicsPipelines(g_Device, g_PipelineCache, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        throw runtime_error("Failed to create graphics pipeline!");
-    }
-    else {
-        Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
-        // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
-    }
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(g_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
+    // if (vkCreateGraphicsPipelines(g_Device, g_PipelineCache, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
+    //     throw runtime_error("Failed to create graphics pipeline!");
+    // }
+    // else {
+    //     Log("Graphic Pipeline info: " + to_string(reinterpret_cast<uintptr_t>(graphicsPipeline)));
+    //     // cout << "Graphic Pipeline: " << graphicsPipeline << endl;
+    // }
     vkDestroyShaderModule(g_Device, fragShaderModule, nullptr);
     vkDestroyShaderModule(g_Device, vertShaderModule, nullptr);
 }
@@ -2071,10 +2068,18 @@ int main(int argc, char* argv[]){
         // called inside viewport.initVulkan / SetupVulkanWindow. Do not recreate the swapchain
         // here to avoid ERROR_NATIVE_WINDOW_IN_USE_KHR.
         // If you need to recreate, destroy the existing one first or use the ImGui window data.
-        viewport.createSynchronizationPrimitives();
         viewport.createRenderPass();
 
         viewport.CreateDepthStencil(1280, 720);
+        
+        // Create swapchain and image views (needed for framebuffers and viewport rendering)
+        // Must be called before createSynchronizationPrimitives since it depends on images.size()
+        uint32_t swapWidth = 1280, swapHeight = 720;
+        viewport.createSwapChain(swapWidth, swapHeight, true, false);
+        
+        // Create synchronization primitives after swapchain (needs images.size())
+        viewport.createSynchronizationPrimitives();
+        
         viewport.CreateFrameBuffer(1280, 720);
 
         viewport.createCommandBuffers();
@@ -2099,7 +2104,7 @@ int main(int argc, char* argv[]){
         viewport.textureHandler.loadTexture("assets/texture/metalplate01_rgba.ktx");
         viewport.textureHandler.generateQuad();
         viewport.textureHandler.prepareUniformBuffers();
-        // viewport.textureHandler.setupDescriptors();
+        viewport.textureHandler.setupDescriptors();
         // Create offscreen pipeline
         viewport.CreateOffscreenPipeline();
     
@@ -2109,8 +2114,8 @@ int main(int argc, char* argv[]){
         Log("Creating graphics pipeline...");
         try {
             viewport.createGraphicsPipeline("assets/shaders/vulkan/triangle.vert.spv", "assets/shaders/vulkan/triangle.frag.spv");
-            // viewport.textureHandler.preparePipelines();
-            DEBUG_MSGBOX_ERROR(nullptr, "PipeLine info: %p", viewport.graphicsPipeline);
+            viewport.textureHandler.preparePipelines();
+            MSGBOX_INFOF(nullptr, "PipeLine info: %p", viewport.graphicsPipeline);
         } catch (const exception e){
             Log("PipeLine error: %s", LogLevel::CRASH, e.what());
             throw e;

@@ -404,6 +404,6 @@ class Viewport3D {
         void HandleRenderTexture();
         void helperRender(){
             DrawViewport3D();
-            // DrawKtxTexture();
+            DrawKtxTexture();
         };
 };

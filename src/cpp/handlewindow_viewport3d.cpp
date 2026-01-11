@@ -1,79 +1,64 @@
 #include <test_viewport3d.hpp>
 
 void Viewport3D::DrawKtxTexture(){
-    static bool isShowViewport = true;
-    static float currentPosition[3] = { 0.0f, 0.0f, -2.5f }, currentRotation[3] = { 0.0f, 0.0f, -180.0f };
-    static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;
+    static VkDescriptorSet ktxTexture = VK_NULL_HANDLE;
+    
+    // Initialize KTX texture descriptor set once when texture is loaded
+    if (ktxTexture == VK_NULL_HANDLE && textureHandler.isTextureLoaded()) {
+        ktxTexture = ImGui_ImplVulkan_AddTexture(
+            textureHandler.getTextureSampler(),
+            textureHandler.getTextureView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+        DEBUG_LOG("KTX Texture registered with ImGui: %p", ktxTexture);
+    }
 
-    // Initialize viewport texture descriptor set
-    // if (viewportTexture == VK_NULL_HANDLE) {
-    //     viewportTexture = ImGui_ImplVulkan_AddTexture(
-    //         offscreenSampler,
-    //         imageViews[1],
-    //         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    //     );
-    // }
+    Begin("KTX Texture Viewer");
+    
+    if (ktxTexture != VK_NULL_HANDLE) {
+        // Get texture dimensions
+        uint32_t texWidth = textureHandler.getTextureWidth();
+        uint32_t texHeight = textureHandler.getTextureHeight();
+        
+        Text("Texture Size: %u x %u", texWidth, texHeight);
+        Separator();
+        
+        // Calculate aspect ratio
+        float aspectRatio = static_cast<float>(texWidth) / static_cast<float>(texHeight);
+        
+        // Get available content region
+        ImVec2 contentSize = GetContentRegionAvail();
+        float displayWidth = contentSize.x;
+        float displayHeight = displayWidth / aspectRatio;
 
-    Begin("Render Ktx Texture");
+        // Ensure it fits within available height
+        if (displayHeight > contentSize.y) {
+            displayHeight = contentSize.y;
+            displayWidth = displayHeight * aspectRatio;
+        }
 
-    HandleRenderTexture();
-    // Text("This is a 3D viewport using Vulkan and ImGui.");
-    // Text("Camera Position: ");
-    // SameLine();
-    // DragFloat3("##Camera Position", currentPosition);
-    // Text("Camera Rotation: ");
-    // SameLine();
-    // DragFloat3("##Camera Rotation", currentRotation);
-    // position = glm::vec4(currentPosition[0], currentPosition[1], currentPosition[2], 0.0f);
-    // rotation = glm::vec3(currentRotation[0], currentRotation[1], currentRotation[2]);
-    // camera.setPosition(position);
-    // camera.setRotation(rotation);
-    // // showCurrentCameraPosition();
-    // Text("Camera Rotation: (%.2f, %.2f, %.2f)", camera.rotation.x, camera.rotation.y, camera.rotation.z);
-   
-    // Checkbox("Show Viewport", &isShowViewport);
-    // if (isShowViewport) {
-    //     HandleRenderViewport(viewportWidth, viewportHeight);
-    // }
-
-    // ImVec2 viewportSize = ImGui::GetContentRegionAvail();
-
-    // // Update viewport dimensions if window resized
-    // if (viewportWidth != static_cast<int>(viewportSize.x) || viewportHeight != static_cast<int>(viewportSize.y)) {
-    //     viewportWidth = static_cast<int>(viewportSize.x);
-    //     viewportHeight = static_cast<int>(viewportSize.y);
-    // }
-
-    // Text("Viewport Size: %d x %d", viewportWidth, viewportHeight);
-
-    // // Get cursor position and viewport position
-    // ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-    // ImVec2 mousePos = ImGui::GetMousePos();
-
-    // Text("Mouse Position: (%.2f, %.2f)", mousePos.x, mousePos.y);
-    // Text("Viewport Position: (%.2f, %.2f)", cursorPos.x, cursorPos.y);
-    // // Check if mouse is inside the viewport
-    // bool isMouseInsideViewport = mousePos.x >= cursorPos.x &&
-    //                              mousePos.y >= cursorPos.y &&
-    //                              mousePos.x <= cursorPos.x + viewportSize.x &&
-    //                              mousePos.y <= cursorPos.y + viewportSize.y;
-
-    // // Render the viewport image
-    // Image((ImTextureID)viewportTexture, viewportSize);
-
-    // // Handle WASD input if mouse is inside the viewport
-    // if (isMouseInsideViewport) {
-    //     HandleCameraMovement();
-    // }
+        // Center the image
+        float posX = (contentSize.x - displayWidth) * 0.5f;
+        if (posX > 0) {
+            SetCursorPosX(GetCursorPosX() + posX);
+        }
+        
+        // Render the texture
+        Image((ImTextureID)ktxTexture, ImVec2(displayWidth, displayHeight));
+        
+        // Update uniform buffers for animation/camera if needed
+        textureHandler.updateUniformBuffers(currentFrame);
+    } else {
+        Text("Loading KTX texture...");
+        if (!textureHandler.isTextureLoaded()) {
+            Text("Texture not loaded yet.");
+        }
+    }
 
     End();
 }
 
 void Viewport3D::DrawViewport3D() {
-    if (imageViews.empty()) {
-        Log("No image views available for viewport rendering.", LogLevel::ERROR);
-        return;
-    }
     static bool isShowViewport = true;
     static float currentPosition[3] = { 0.0f, 0.0f, -2.5f }, currentRotation[3] = { 0.0f, 0.0f, -180.0f };
     static VkDescriptorSet viewportTexture = VK_NULL_HANDLE;

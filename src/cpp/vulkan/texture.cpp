@@ -76,30 +76,23 @@ void TextureBase::setupDescriptors()
     // Sets per frame, just like the buffers themselves
     VkDescriptorSetAllocateInfo allocInfo = vkhandler::initializers::descriptorSetAllocateInfo(currentDescriptorPool, &descriptorSetLayout, 1);
     DEBUG_LOG("Uniformbuffer size: %i", uniformBuffers.size());
-    DEBUG_LOGF("Success to write descriptor texture ! %p", LogLevel::SUCCESS, textureDescriptor.imageView);
+    DEBUG_LOGF("Texture view for descriptor: %p", LogLevel::SUCCESS, textureDescriptor.imageView);
     for (uint32_t i = 0; i < uniformBuffers.size(); i++) {
-        // Log("Before bind descriptorSets");
         VK_CHECK_RESULT(vkAllocateDescriptorSets(currentDevice, &allocInfo, &descriptorSets[i]));
-        // Log("After bind descriptorSets");
 
-        // Log("Before write descriptor sets");
         vector<VkWriteDescriptorSet> writeDescriptorSets = {
             // Binding 0 : Vertex shader uniform buffer
-            vkhandler::initializers::writeDescriptorSet(descriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, &uniformBuffers[i].descriptor),
+            vkhandler::initializers::writeDescriptorSet(descriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers[i].descriptor),
             // Binding 1 : Fragment shader texture sampler
-            //  Note that unlike the uniform buffer, which is written by the CPU and the GPU, the image (texture) is a static resource
-            //  As such we can use the same image for every frame in flight
-            //	Fragment shader: layout (binding = 1) uniform sampler2D samplerColor;
             vkhandler::initializers::writeDescriptorSet(descriptorSets[i],
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,		// The descriptor set will use a combined image sampler (as opposed to splitting image and sampler)
-                1,												// Shader binding point 1
-                &textureDescriptor)								// Pointer to the descriptor image for our texture
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                1,
+                &textureDescriptor)
         };
-        // Log("After write descriptor sets");
 
-        DEBUG_LOG("Write Descriptor sets: %i", static_cast<uint32_t>(writeDescriptorSets[i].descriptorCount));
+        DEBUG_LOG("Writing descriptor set %u with %zu writes", i, writeDescriptorSets.size());
         vkUpdateDescriptorSets(currentDevice, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
-        DEBUG_LOGF("Success to write uniform buffer descriptor texture ! %p", LogLevel::SUCCESS, uniformBuffers[i].descriptor.buffer);
+        DEBUG_LOGF("Success to write descriptor set %u", LogLevel::SUCCESS, i);
     }
 }
 

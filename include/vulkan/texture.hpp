@@ -85,6 +85,13 @@ class TextureBase : public VulkanHandler {
         // Global for render current texture
         void buildCommandBuffer();
         void setupRenderPassTexture();
+
+        // Getters for ImGui integration - allows rendering KTX texture in ImGui
+        VkImageView getTextureView() const { return texture.view; }
+        VkSampler getTextureSampler() const { return texture.sampler; }
+        uint32_t getTextureWidth() const { return texture.width; }
+        uint32_t getTextureHeight() const { return texture.height; }
+        bool isTextureLoaded() const { return texture.view != VK_NULL_HANDLE && texture.sampler != VK_NULL_HANDLE; }
         void prepareFrame();
 
         struct UniformData {
