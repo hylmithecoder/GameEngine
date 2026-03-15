@@ -3,9 +3,14 @@
 #include <string>
 #include <cstdio>
 #include <cstdarg>
+#include <unistd.h>
 
 #ifdef __linux__
+#include <libnotify/notify.h>
 #include <gtk/gtk.h>
+#ifdef __WIN32__
+#include <windows.h>
+#endif
 #endif
 using namespace std;
 
@@ -289,7 +294,7 @@ namespace Debug {
     #define _MSGBOX_STRINGIFY(x) #x
     #define _MSGBOX_TOSTRING(x) _MSGBOX_STRINGIFY(x)
 
-        // Show a GTK message box for debugging
+    // Show a GTK message box for debugging
     // Usage: Debug::ShowBox(GTK_WINDOW(parent_widget), "Your message");
     //        Debug::ShowBox(nullptr, "Message without parent");
     static void ShowBox(GtkWindow *parent, const char* message, GtkMessageType type = GTK_MESSAGE_INFO) {
@@ -322,86 +327,203 @@ namespace Debug {
     // Auto-close timeout in milliseconds (2 seconds)
     #define MSGBOX_AUTO_CLOSE_MS 5000
 
+    static void _msgbox_pump_events() {
+        while (gtk_events_pending()) {
+            gtk_main_iteration();
+        }
+    }
+
     #define MSGBOX_INFO(parent, message) \
         do { \
+            if (!gtk_init_check(NULL, NULL)) break; \
             GtkWidget *dialog; \
             char _msgbox_buf[2048]; \
             snprintf(_msgbox_buf, sizeof(_msgbox_buf), "%s\n\n[%s:%d]", (message), __FILE__, __LINE__); \
             dialog = gtk_message_dialog_new( \
-                GTK_WINDOW(parent), \
+                (parent ? GTK_WINDOW(parent) : NULL), \
                 GTK_DIALOG_DESTROY_WITH_PARENT, \
                 GTK_MESSAGE_INFO, \
                 GTK_BUTTONS_CLOSE, \
                 "%s", \
                 _msgbox_buf \
             ); \
-            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
-            g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
-            gtk_dialog_run(GTK_DIALOG(dialog)); \
-            gtk_widget_destroy(dialog); \
+            if (dialog) { \
+                gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+                guint timeout_id = g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
+                gtk_dialog_run(GTK_DIALOG(dialog)); \
+                g_source_remove(timeout_id); \
+                gtk_widget_destroy(dialog); \
+                Debug::_msgbox_pump_events(); \
+            } \
         } while(0)
 
     #define MSGBOX_INFOF(parent, format, ...) \
         do { \
+            if (!gtk_init_check(NULL, NULL)) break; \
             GtkWidget *dialog; \
             char _msgbox_msg[1024]; \
             char _msgbox_buf[2048]; \
             snprintf(_msgbox_msg, sizeof(_msgbox_msg), format, ##__VA_ARGS__); \
             snprintf(_msgbox_buf, sizeof(_msgbox_buf), "%s\n\n[%s:%d]", _msgbox_msg, __FILE__, __LINE__); \
             dialog = gtk_message_dialog_new( \
-                GTK_WINDOW(parent), \
+                (parent ? GTK_WINDOW(parent) : NULL), \
                 GTK_DIALOG_DESTROY_WITH_PARENT, \
                 GTK_MESSAGE_INFO, \
                 GTK_BUTTONS_CLOSE, \
                 "%s", \
                 _msgbox_buf \
             ); \
-            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
-            g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
-            gtk_dialog_run(GTK_DIALOG(dialog)); \
-            gtk_widget_destroy(dialog); \
+            if (dialog) { \
+                gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+                guint timeout_id = g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
+                gtk_dialog_run(GTK_DIALOG(dialog)); \
+                g_source_remove(timeout_id); \
+                gtk_widget_destroy(dialog); \
+                Debug::_msgbox_pump_events(); \
+            } \
         } while(0)
     
     #define MSGBOX_ERRORF(parent, format, ...) \
         do { \
+            if (!gtk_init_check(NULL, NULL)) break; \
             GtkWidget *dialog; \
             char _msgbox_msg[1024]; \
             char _msgbox_buf[2048]; \
             snprintf(_msgbox_msg, sizeof(_msgbox_msg), format, ##__VA_ARGS__); \
             snprintf(_msgbox_buf, sizeof(_msgbox_buf), "%s\n\n[%s:%d]", _msgbox_msg, __FILE__, __LINE__); \
             dialog = gtk_message_dialog_new( \
-                GTK_WINDOW(parent), \
+                (parent ? GTK_WINDOW(parent) : NULL), \
                 GTK_DIALOG_DESTROY_WITH_PARENT, \
                 GTK_MESSAGE_ERROR, \
                 GTK_BUTTONS_CLOSE, \
                 "%s", \
                 _msgbox_buf \
             ); \
-            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
-            g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
-            gtk_dialog_run(GTK_DIALOG(dialog)); \
-            gtk_widget_destroy(dialog); \
+            if (dialog) {\
+                gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+                guint timeout_id = g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
+                gtk_dialog_run(GTK_DIALOG(dialog)); \
+                g_source_remove(timeout_id); \
+                gtk_widget_destroy(dialog); \
+                Debug::_msgbox_pump_events(); \
+            } \
         } while(0)
     
     #define MSGBOX_WARNINGF(parent, format, ...) \
         do { \
+            if (!gtk_init_check(NULL, NULL)) break; \
             GtkWidget *dialog; \
             char _msgbox_msg[1024]; \
             char _msgbox_buf[2048]; \
             snprintf(_msgbox_msg, sizeof(_msgbox_msg), format, ##__VA_ARGS__); \
             snprintf(_msgbox_buf, sizeof(_msgbox_buf), "%s\n\n[%s:%d]", _msgbox_msg, __FILE__, __LINE__); \
             dialog = gtk_message_dialog_new( \
-                GTK_WINDOW(parent), \
+                (parent ? GTK_WINDOW(parent) : NULL), \
                 GTK_DIALOG_DESTROY_WITH_PARENT, \
                 GTK_MESSAGE_WARNING, \
                 GTK_BUTTONS_CLOSE, \
                 "%s", \
                 _msgbox_buf \
             ); \
-            gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
-            g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
-            gtk_dialog_run(GTK_DIALOG(dialog)); \
-            gtk_widget_destroy(dialog); \
+            if (dialog) { \
+                gtk_window_set_title(GTK_WINDOW(dialog), TITLE); \
+                guint timeout_id = g_timeout_add(MSGBOX_AUTO_CLOSE_MS, Debug::_msgbox_auto_close, dialog); \
+                gtk_dialog_run(GTK_DIALOG(dialog)); \
+                g_source_remove(timeout_id); \
+                gtk_widget_destroy(dialog); \
+                Debug::_msgbox_pump_events(); \
+            } \
         } while(0)
     #endif
+
+    // With Native Notification
+    #define NOTIF_INFO(title, message) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            NotifyNotification *notif = notify_notification_new(title, message, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_WARNING(title, message) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            NotifyNotification *notif = notify_notification_new(title, message, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_ERROR(title, message) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            NotifyNotification *notif = notify_notification_new(title, message, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_SUCCESS(title, message) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            NotifyNotification *notif = notify_notification_new(title, message, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG(title, message) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            NotifyNotification *notif = notify_notification_new(title, message, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOGF(title, format, ...) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[1024]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), format, ##__VA_ARGS__); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG_POINTER(title, handle, level) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[256]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), "%s | Type: %s | Address: %p | Decimal: %lu", title, typeid(handle).name(), (void*)handle, (unsigned long)handle); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG_WITH_LOCATION(title, format, level, file, line) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[1024]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), format, ##__VA_ARGS__); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG_WITH_LOCATIONF(title, format, level, file, line, ...) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[1024]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), format, ##__VA_ARGS__); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG_WITH_LOCATIONF_WITH_ARGS(title, format, level, file, line, ...) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[1024]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), format, ##__VA_ARGS__); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
+    #define NOTIF_LOG_WITH_LOCATIONF_WITH_ARGS_WITH_LOCATION(title, format, level, file, line, ...) \
+        do { \
+            if (!notify_init("Ilmeee Engine")) break; \
+            char _notif_msg[1024]; \
+            snprintf(_notif_msg, sizeof(_notif_msg), format, ##__VA_ARGS__); \
+            NotifyNotification *notif = notify_notification_new(title, _notif_msg, NULL); \
+            notify_notification_show(notif, NULL); \
+            g_object_unref(notif); \
+        } while(0)
 }

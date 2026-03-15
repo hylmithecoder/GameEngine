@@ -1383,7 +1383,7 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
         // cout << "Wait Fences: " << waitFences[currentFrame] << endl;
 		VK_CHECK_RESULT(vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
         // DEBUG_LOG("Index count: %i", imageCount);
-        DEBUG_LOG("Image index: %i", imageIndex);
+        // DEBUG_LOG("Image index: %i", imageIndex);
         // Update uniform buffer dengan camera matrices
         ShaderData shaderData{};
         shaderData.modelMatrix = glm::mat4(1.0f); // Identity matrix
@@ -1554,9 +1554,71 @@ void Viewport3D::HandleRenderViewport(uint32_t width, uint32_t height) {
 #pragma endregion
 #pragma region Render Texture
 void Viewport3D::HandleRenderTexture(){
-    DEBUG_LOG("Current frame buffer: %i", static_cast<int>(currentFrame));
-    textureHandler.updateUniformBuffers(currentFrame);
-    textureHandler.buildCommandBuffer();
+    uint32_t imageIndex;
+
+    try {
+        // vkWaitForFences(g_Device, 1, &textureHandler.waitFences[textureHandler.currentFrame], VK_TRUE, UINT64_MAX);
+        // VK_CHECK_RESULT(vkResetFences(g_Device, 1, &textureHandler.waitFences[textureHandler.currentFrame]));
+        
+        // VK_CHECK_RESULT(vkAcquireNextImageKHR(g_Device, swapChain, UINT64_MAX, textureHandler.presentCompleteSemaphores[textureHandler.currentFrame], VK_NULL_HANDLE, &imageIndex));
+        
+        // Update uniform buffers with current camera/view settings
+        textureHandler.updateUniformBuffers(textureHandler.currentFrame);
+        
+        // Build the command buffer for texture rendering
+        textureHandler.buildCommandBuffer();
+        
+        // Submit the command buffer
+        // VkCommandBuffer cmdBuffer = textureHandler.drawCmdBuffers[textureHandler.currentFrame];
+        
+		// VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        
+        // VkSubmitInfo submitInfo{};
+        // submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        // submitInfo.commandBufferCount = 1;
+		// submitInfo.pWaitDstStageMask = &waitStageMask;
+        // submitInfo.pCommandBuffers = &cmdBuffer;
+
+		// submitInfo.pWaitSemaphores = &textureHandler.presentCompleteSemaphores[textureHandler.currentFrame];
+		// submitInfo.waitSemaphoreCount = 1;
+		// submitInfo.pSignalSemaphores = &textureHandler.renderCompleteSemaphores[0];
+		// submitInfo.signalSemaphoreCount = 1;
+
+        // VkResult result = vkQueueSubmit(g_Queue, 1, &submitInfo, textureHandler.waitFences[textureHandler.currentFrame]);
+        // if (result != VK_SUCCESS){
+        //     Log("Failed to submit command buffer!", LogLevel::CRASH);
+        //     return;
+        // }
+        
+        // VkPresentInfoKHR presentInfo{};
+		// presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+		// presentInfo.waitSemaphoreCount = 1;
+		// presentInfo.pWaitSemaphores = &textureHandler.renderCompleteSemaphores[0];
+		// presentInfo.swapchainCount = 1;
+		// presentInfo.pSwapchains = &swapChain;
+		// presentInfo.pImageIndices = &imageIndex;
+		// result = vkQueuePresentKHR(g_Queue, &presentInfo);
+        
+        // VK_CHECK_RESULT(vkQueueWaitIdle(g_Queue));
+        // Create a fence for this submission if needed
+        // VkFenceCreateInfo fenceInfo{};
+        // fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        // VkFence renderFence;
+        // vkCreateFence(g_Device, &fenceInfo, nullptr, &renderFence);
+        
+        // // Submit and wait
+        // VK_CHECK_RESULT(vkQueueSubmit(g_Queue, 1, &submitInfo, renderFence));
+        // VK_CHECK_RESULT(vkWaitForFences(g_Device, 1, &renderFence, VK_TRUE, UINT64_MAX));
+        
+        // // Cleanup fence
+        // vkDestroyFence(g_Device, renderFence, nullptr);
+        
+        // Advance frame for next render
+        currentFrame = (currentFrame + 1) % MAX_CONCURRENT_FRAMES;
+        // DEBUG_LOGF("Rendered texture to frame %u", LogLevel::INFO, currentFrame);
+    } catch (const exception& e) {
+        DEBUG_LOGF("HandleRenderTexture error: %s", LogLevel::CRASH, e.what());
+    }
 }
 #pragma endregion
 
@@ -2053,7 +2115,8 @@ int main(int argc, char* argv[]){
 
     try {
         Viewport3D viewport;
-        viewport.textureHandler.convertToKtx("assets/images/backgrounds/Hanako_Swimsuit.png");
+        viewport.textureHandler.convertToKtx("assets/images/backgrounds/shiroko_bluearchive.jpg");
+        NOTIF_INFO("Texture converted to KTX", "Test Notification");
 		// Setup a default look-at camera
 		viewport.camera.type = Camera::CameraType::lookat;
 		viewport.camera.setPosition(glm::vec3(0.0f, 0.0f, -2.5f));
@@ -2064,20 +2127,14 @@ int main(int argc, char* argv[]){
         viewport.initVulkan(extensions, mainWindow);
         
         Log("Creating render pass...");
-        // Swapchain and related resources are created by ImGui_ImplVulkanH_CreateOrResizeWindow
-        // called inside viewport.initVulkan / SetupVulkanWindow. Do not recreate the swapchain
-        // here to avoid ERROR_NATIVE_WINDOW_IN_USE_KHR.
-        // If you need to recreate, destroy the existing one first or use the ImGui window data.
+
         viewport.createRenderPass();
 
         viewport.CreateDepthStencil(1280, 720);
         
-        // Create swapchain and image views (needed for framebuffers and viewport rendering)
-        // Must be called before createSynchronizationPrimitives since it depends on images.size()
         uint32_t swapWidth = 1280, swapHeight = 720;
-        viewport.createSwapChain(swapWidth, swapHeight, true, false);
+        viewport.createSwapChain(swapWidth, swapHeight, false, false);
         
-        // Create synchronization primitives after swapchain (needs images.size())
         viewport.createSynchronizationPrimitives();
         
         viewport.CreateFrameBuffer(1280, 720);
@@ -2096,16 +2153,17 @@ int main(int argc, char* argv[]){
         Log("Creating uniform descriptor set layout...");
         viewport.createUniformDescriptorSetLayout();
 
-        // init vulkan handler needed variabel
         viewport.helperInitImage();
         viewport.CreateOffscreenResources(1280, 720);
 
         viewport.textureHandler.setupRenderPassTexture();
-        viewport.textureHandler.loadTexture("assets/texture/metalplate01_rgba.ktx");
+        viewport.textureHandler.loadTexture("assets/images/backgrounds/shiroko_bluearchive.ktx");
         viewport.textureHandler.generateQuad();
         viewport.textureHandler.prepareUniformBuffers();
         viewport.textureHandler.setupDescriptors();
-        // Create offscreen pipeline
+        viewport.textureHandler.createCommandBuffers();
+        viewport.textureHandler.createSynchronization();
+        
         viewport.CreateOffscreenPipeline();
     
         Log("Creating uniform descriptor sets...");

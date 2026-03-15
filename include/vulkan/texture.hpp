@@ -5,11 +5,12 @@
 #include <memory>
 #include <typeinfo>
 #include <camera.hpp>
+using namespace vkhandler;
 
 class TextureBase : public VulkanHandler {
     public :
         Camera camera;
-        vkhandler::VulkanDevice vulkanDevice;
+        VulkanDevice vulkanDevice;
         struct Vertex {
             float pos[3];
             float uv[2];
@@ -48,7 +49,7 @@ class TextureBase : public VulkanHandler {
                 currentMemoryProperties = memoryProperties;
                 currentDescriptorPool = descriptorPool;
                 currentFrameBuffers = frameBuffers;
-                DEBUG_LOG("Size current framebuffers: %i", currentFrameBuffers.size());
+                DEBUG_LOG("Size current framebuffers: %i", static_cast<int>(currentFrameBuffers.size()));
                 // currentRenderPass = renderPass;
 
                 LogPointer("Get Device: ", currentDevice);
@@ -85,6 +86,7 @@ class TextureBase : public VulkanHandler {
         // Global for render current texture
         void buildCommandBuffer();
         void setupRenderPassTexture();
+        void createCommandBuffers(); // Allocate command buffers for texture rendering
 
         // Getters for ImGui integration - allows rendering KTX texture in ImGui
         VkImageView getTextureView() const { return texture.view; }
@@ -105,6 +107,7 @@ class TextureBase : public VulkanHandler {
         array<vkhandler::Buffer, MAX_CONCURRENT_FRAMES> uniformBuffers;
         array<VkCommandBuffer, MAX_CONCURRENT_FRAMES> drawCmdBuffers;
         array<VkDescriptorSet, MAX_CONCURRENT_FRAMES> descriptorSets{};
+        array<VkFence, MAX_CONCURRENT_FRAMES> waitFences{};
         vkhandler::Buffer vertexBuffer;
         vkhandler::Buffer indexBuffer;
         uint32_t indexCount{ 0 };

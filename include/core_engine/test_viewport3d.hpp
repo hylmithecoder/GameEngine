@@ -7,9 +7,11 @@
 #include "../vulkan/vulkanhandler.hpp"
 #include "Debugger.hpp"
 #include <fstream>
-#include <texture.hpp>
+#include "../ui/utils.hpp"
+#include "../vulkan/texture.hpp"
 using namespace Debug;
 using namespace vkhandler;
+using namespace UI;
 
 // constexpr auto MAX_CONCURRENT_FRAMES = 2;
 
@@ -17,6 +19,7 @@ class Viewport3D {
     public:
         VulkanHandler imageHandler;
         TextureBase textureHandler;
+        Utils utilities;
 
         struct ShaderData {
             glm::mat4 projectionMatrix;
@@ -299,8 +302,8 @@ class Viewport3D {
         VkPhysicalDeviceMemoryProperties memoryProperties{};
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
-        uint32_t currentFrame = 0;
-        uint32_t vertexCount = 0;
+        uint32_t currentFrame {0};
+        uint32_t vertexCount {0};
 
         ImGuiIO getImGuiIO(ImGuiIO& io){
             // cout << io << endl;

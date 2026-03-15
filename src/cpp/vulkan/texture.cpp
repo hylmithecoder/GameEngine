@@ -1,3 +1,4 @@
+#include "Debugger.hpp"
 #include <texture.hpp>
 #include <stb_image.h>
 #include <ktx.h>
@@ -8,7 +9,7 @@ void TextureBase::generateQuad() {
 // Setup vertices for a single uv-mapped quad made from two triangles
     vector<Vertex> vertices =
     {
-        { {  3.0f,  3.0f, 0.0f }, { 3.0f, 3.0f },{ 0.0f, 0.0f, 3.0f } },
+        { {  1.0f,  1.0f, 0.0f }, { 1.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
         { { -1.0f,  1.0f, 0.0f }, { 0.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
         { { -1.0f, -1.0f, 0.0f }, { 0.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } },
         { {  1.0f, -1.0f, 0.0f }, { 1.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } }
@@ -17,14 +18,14 @@ void TextureBase::generateQuad() {
     // Setup indices
     vector<uint32_t> indices = { 0,1,2, 2,3,0 };
     indexCount = static_cast<uint32_t>(indices.size());
-    Log("Index count: " + to_string(reinterpret_cast<uint32_t>(indexCount)));
+    Log("Index count: " + to_string(static_cast<int>(indexCount)));
 
     // Create buffers and upload data to the GPU
     struct StagingBuffers {
-        vkhandler::Buffer vertices;
-        vkhandler::Buffer indices;
+        Buffer vertices;
+        Buffer indices;
     } stagingBuffers;
-    
+
     // Host visible source buffers (staging)
     VK_CHECK_RESULT(vulkanDevice.createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &stagingBuffers.vertices, vertices.size() * sizeof(Vertex), vertices.data()));
     VK_CHECK_RESULT(vulkanDevice.createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &stagingBuffers.indices, indices.size() * sizeof(uint32_t), indices.data()));
@@ -45,23 +46,23 @@ void TextureBase::generateQuad() {
 void TextureBase::setupDescriptors()
 {
     // Pool
-    // vector<VkDescriptorPoolSize> poolSizes = {
-    //     vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_CONCURRENT_FRAMES),
-    //     // The sample uses a combined image + sampler descriptor to sample the texture in the fragment shader
-    //     // We need multiple descriptors (NOT images) due to how we set up the descriptor bindings in this sample
-    //     vkhandler::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_CONCURRENT_FRAMES)
-    // };
-    // VkDescriptorPoolCreateInfo descriptorPoolInfo = vkhandler::initializers::descriptorPoolCreateInfo(poolSizes, 2);
-    // VK_CHECK_RESULT(vkCreateDescriptorPool(currentDevice, &descriptorPoolInfo, nullptr, &currentDescriptorPool));
+    vector<VkDescriptorPoolSize> poolSizes = {
+        initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_CONCURRENT_FRAMES),
+        // The sample uses a combined image + sampler descriptor to sample the texture in the fragment shader
+        // We need multiple descriptors (NOT images) due to how we set up the descriptor bindings in this sample
+        initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_CONCURRENT_FRAMES)
+    };
+    VkDescriptorPoolCreateInfo descriptorPoolInfo = initializers::descriptorPoolCreateInfo(poolSizes, 2);
+    VK_CHECK_RESULT(vkCreateDescriptorPool(currentDevice, &descriptorPoolInfo, nullptr, &currentDescriptorPool));
 
     // Layout
     vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
         // Binding 0 : Vertex shader uniform buffer
-        vkhandler::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
+        initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
         // Binding 1 : Fragment shader image sampler
-        vkhandler::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1)
+        initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1)
     };
-    VkDescriptorSetLayoutCreateInfo descriptorLayout = vkhandler::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+    VkDescriptorSetLayoutCreateInfo descriptorLayout = initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
     VK_CHECK_RESULT(vkCreateDescriptorSetLayout(currentDevice, &descriptorLayout, nullptr, &descriptorSetLayout));
 
     // Setup a descriptor image info for the current texture to be used as a descriptor for a combined image sampler
@@ -74,7 +75,7 @@ void TextureBase::setupDescriptors()
     textureDescriptor.imageLayout = texture.imageLayout;
 
     // Sets per frame, just like the buffers themselves
-    VkDescriptorSetAllocateInfo allocInfo = vkhandler::initializers::descriptorSetAllocateInfo(currentDescriptorPool, &descriptorSetLayout, 1);
+    VkDescriptorSetAllocateInfo allocInfo = initializers::descriptorSetAllocateInfo(currentDescriptorPool, &descriptorSetLayout, 1);
     DEBUG_LOG("Uniformbuffer size: %i", uniformBuffers.size());
     DEBUG_LOGF("Texture view for descriptor: %p", LogLevel::SUCCESS, textureDescriptor.imageView);
     for (uint32_t i = 0; i < uniformBuffers.size(); i++) {
@@ -82,9 +83,9 @@ void TextureBase::setupDescriptors()
 
         vector<VkWriteDescriptorSet> writeDescriptorSets = {
             // Binding 0 : Vertex shader uniform buffer
-            vkhandler::initializers::writeDescriptorSet(descriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers[i].descriptor),
+            initializers::writeDescriptorSet(descriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers[i].descriptor),
             // Binding 1 : Fragment shader texture sampler
-            vkhandler::initializers::writeDescriptorSet(descriptorSets[i],
+            initializers::writeDescriptorSet(descriptorSets[i],
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 1,
                 &textureDescriptor)
@@ -117,12 +118,40 @@ void TextureBase::preparePipelines() {
                 cout << "Descriptor set layout: " << descriptorSetLayout << endl;
             }
             VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = 
-                vkhandler::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
+                initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
             
             VK_CHECK_RESULT(vkCreatePipelineLayout(currentDevice, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
             Log("Pipeline layout created successfully", LogLevel::SUCCESS);
         }
 
+        // Setup pipeline states
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = initializers::pipelineInputAssemblyStateCreateInfo(
+                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
+
+        VkPipelineRasterizationStateCreateInfo rasterizationState = initializers::pipelineRasterizationStateCreateInfo(
+                VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+
+        VkPipelineColorBlendAttachmentState blendAttachmentState = initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
+
+        VkPipelineColorBlendStateCreateInfo colorBlendState = initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilState = initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+
+        VkPipelineViewportStateCreateInfo viewportState = initializers::pipelineViewportStateCreateInfo(1, 1, 0);
+
+        VkPipelineMultisampleStateCreateInfo multisampleState = initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
+
+        vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+
+        VkPipelineDynamicStateCreateInfo dynamicState = initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
+
+        // Create graphics pipeline
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo = initializers::pipelineCreateInfo(pipelineLayout, currentRenderPass, 0);
+
+        assert(pipelineLayout != VK_NULL_HANDLE);
+        
+        VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+        VK_CHECK_RESULT(vkCreatePipelineCache(currentDevice, &pipelineCacheCreateInfo, nullptr, &pipelineCache));
         // Load shader stages
         array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
         try {
@@ -141,67 +170,21 @@ void TextureBase::preparePipelines() {
 
         // Setup vertex input state
         vector<VkVertexInputBindingDescription> vertexInputBindings = {
-            vkhandler::initializers::vertexInputBindingDescription(
-                0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX)
+            initializers::vertexInputBindingDescription(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX)
         };
 
         vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
-            vkhandler::initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)),
-            vkhandler::initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)),
-            vkhandler::initializers::vertexInputAttributeDescription(0, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)),
+            initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)),
+            initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)),
+            initializers::vertexInputAttributeDescription(0, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)),
         };
 
-        VkPipelineVertexInputStateCreateInfo vertexInputState = 
-            vkhandler::initializers::pipelineVertexInputStateCreateInfo();
+        VkPipelineVertexInputStateCreateInfo vertexInputState = initializers::pipelineVertexInputStateCreateInfo();
         vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
         vertexInputState.pVertexBindingDescriptions = vertexInputBindings.data();
         vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
         vertexInputState.pVertexAttributeDescriptions = vertexInputAttributes.data();
 
-        // Setup pipeline states
-        VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = 
-            vkhandler::initializers::pipelineInputAssemblyStateCreateInfo(
-                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
-
-        VkPipelineRasterizationStateCreateInfo rasterizationState = 
-            vkhandler::initializers::pipelineRasterizationStateCreateInfo(
-                VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
-
-        VkPipelineColorBlendAttachmentState blendAttachmentState = 
-            vkhandler::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
-
-        VkPipelineColorBlendStateCreateInfo colorBlendState = 
-            vkhandler::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
-
-        VkPipelineDepthStencilStateCreateInfo depthStencilState = 
-            vkhandler::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
-
-        VkPipelineViewportStateCreateInfo viewportState{};
-            viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-            viewportState.viewportCount = 0;
-            viewportState.pViewports = nullptr;
-            viewportState.scissorCount = 0;
-            viewportState.pScissors = nullptr;
-            // vkhandler::initializers::pipelineViewportStateCreateInfo(0, 0, 0);
-
-        VkPipelineMultisampleStateCreateInfo multisampleState = 
-            vkhandler::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
-
-        vector<VkDynamicState> dynamicStateEnables = { 
-            VK_DYNAMIC_STATE_VIEWPORT, 
-            VK_DYNAMIC_STATE_SCISSOR 
-        };
-        VkPipelineDynamicStateCreateInfo dynamicState = 
-            vkhandler::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
-
-        // Create graphics pipeline
-        VkGraphicsPipelineCreateInfo pipelineCreateInfo = 
-            vkhandler::initializers::pipelineCreateInfo(pipelineLayout, currentRenderPass, 0);
-
-        assert(pipelineLayout != VK_NULL_HANDLE);
-        
-        VkPipelineCacheCreateInfo pipelineCacheCreateInfo { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
-        vkCreatePipelineCache(currentDevice, &pipelineCacheCreateInfo, nullptr, &pipelineCache);
         // LogPointer("Vertex input attributes: ", vertexInputAttributes.data());
         // LogPointer("Vertex input bindings: ", vertexInputBindings.data());
         // LogPointer("Input assembly state: ", inputAssemblyState);
@@ -262,7 +245,9 @@ void TextureBase::prepareUniformBuffers()
     for (auto& buffer : uniformBuffers) {
         VK_CHECK_RESULT(vulkanDevice.createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &buffer, sizeof(UniformData), &uniformData));
         VK_CHECK_RESULT(buffer.map());
-        cout << "Buffer map address: " << buffer.map() << endl;
+        for (int i = 0; i < buffer.size; i++) {
+            DEBUG_LOGF("Buffer map: %i", LogLevel::SUCCESS, static_cast<int>(buffer[i]));
+        }
     }
     Log("Success to prepare uniform buffers texture !", LogLevel::SUCCESS);
 }
@@ -339,7 +324,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
     // So they need to be loaded via the asset manager
     AAsset* asset = AAssetManager_open(androidApp->activity->assetManager, filename.c_str(), AASSET_MODE_STREAMING);
     if (!asset) {
-        vkhandler::tools::exitFatal("Could not load texture from " + filename + "\n\nMake sure the assets submodule has been checked out and is up-to-date.", -1);
+        tools::exitFatal("Could not load texture from " + filename + "\n\nMake sure the assets submodule has been checked out and is up-to-date.", -1);
     }
     size_t size = AAsset_getLength(asset);
     assert(size > 0);
@@ -350,8 +335,8 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
     result = ktxTexture_CreateFromMemory(textureData, size, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktxTexture);
     delete[] textureData;
 #else
-    if (!vkhandler::tools::fileExists(filename)) {
-        vkhandler::tools::exitFatal("Could not load texture from " + filename + "\n\nMake sure the assets submodule has been checked out and is up-to-date.", -1);
+    if (!tools::fileExists(filename)) {
+        tools::exitFatal("Could not load texture from " + filename + "\n\nMake sure the assets submodule has been checked out and is up-to-date.", -1);
     }
     result = ktxTexture_CreateFromNamedFile(filename.c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktxTexture);
 #endif
@@ -377,7 +362,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         useStaging = !(formatProperties.linearTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
     }
 
-    VkMemoryAllocateInfo memAllocInfo = vkhandler::initializers::memoryAllocateInfo();
+    VkMemoryAllocateInfo memAllocInfo = initializers::memoryAllocateInfo();
     VkMemoryRequirements memReqs = {};
 
     if (useStaging) {
@@ -389,7 +374,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
 
-        VkBufferCreateInfo bufferCreateInfo = vkhandler::initializers::bufferCreateInfo();
+        VkBufferCreateInfo bufferCreateInfo = initializers::bufferCreateInfo();
         bufferCreateInfo.size = ktxTextureSize;
         // This buffer is used as a transfer source for the buffer copy
         bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -433,7 +418,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         }
 
         // Create optimal tiled target image on the device
-        VkImageCreateInfo imageCreateInfo = vkhandler::initializers::imageCreateInfo();
+        VkImageCreateInfo imageCreateInfo = initializers::imageCreateInfo();
         imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
         imageCreateInfo.format = format;
         imageCreateInfo.mipLevels = texture.mipLevels;
@@ -469,7 +454,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         subresourceRange.layerCount = 1;
 
         // Transition the texture image layout to transfer target, so we can safely copy our buffer data to it.
-        VkImageMemoryBarrier imageMemoryBarrier = vkhandler::initializers::imageMemoryBarrier();;
+        VkImageMemoryBarrier imageMemoryBarrier = initializers::imageMemoryBarrier();;
         imageMemoryBarrier.image = texture.image;
         imageMemoryBarrier.subresourceRange = subresourceRange;
         imageMemoryBarrier.srcAccessMask = 0;
@@ -531,7 +516,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         VkDeviceMemory mappableMemory;
 
         // Load mip map level 0 to linear tiling image
-        VkImageCreateInfo imageCreateInfo = vkhandler::initializers::imageCreateInfo();
+        VkImageCreateInfo imageCreateInfo = initializers::imageCreateInfo();
         imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
         imageCreateInfo.format = format;
         imageCreateInfo.mipLevels = 1;
@@ -576,7 +561,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
         subresourceRange.layerCount = 1;
 
         // Transition the texture image layout to shader read, so it can be sampled from
-        VkImageMemoryBarrier imageMemoryBarrier = vkhandler::initializers::imageMemoryBarrier();;
+        VkImageMemoryBarrier imageMemoryBarrier = initializers::imageMemoryBarrier();;
         imageMemoryBarrier.image = texture.image;
         imageMemoryBarrier.subresourceRange = subresourceRange;
         imageMemoryBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -605,7 +590,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
     // In Vulkan textures are accessed by samplers
     // This separates all the sampling information from the texture data. This means you could have multiple sampler objects for the same texture with different settings
     // Note: Similar to the samplers available with OpenGL 3.3
-    VkSamplerCreateInfo sampler = vkhandler::initializers::samplerCreateInfo();
+    VkSamplerCreateInfo sampler = initializers::samplerCreateInfo();
     sampler.magFilter = VK_FILTER_LINEAR;
     sampler.minFilter = VK_FILTER_LINEAR;
     sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
@@ -635,7 +620,7 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
     // Textures are not directly accessed by the shaders and
     // are abstracted by image views containing additional
     // information and sub resource ranges
-    VkImageViewCreateInfo view = vkhandler::initializers::imageViewCreateInfo();
+    VkImageViewCreateInfo view = initializers::imageViewCreateInfo();
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
     view.format = format;
     // The subresource range describes the set of mip levels (and array layers) that can be accessed through this image view
@@ -659,20 +644,34 @@ void TextureBase::loadTexture(const string& ktxTexturePath)
 //     uniformData.viewPos = camera.viewPos;
 //     memcpy(uniformBuffers[currentBuffer].mapped, &uniformData, sizeof(uniformData));
 // }
+
+void TextureBase::createCommandBuffers()
+{
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = currentOffscreenCommandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = static_cast<uint32_t>(drawCmdBuffers.size());
+    
+    VK_CHECK_RESULT(vkAllocateCommandBuffers(currentDevice, &allocInfo, drawCmdBuffers.data()));
+    DEBUG_LOG("Allocated %zu command buffers for texture rendering", drawCmdBuffers.size());
+}
+
 void TextureBase::buildCommandBuffer()
 {
-    DEBUG_LOG("Current Frame: %i", static_cast<int>(currentFrame));
-    DEBUG_LOG("Size current command buffers: %i", drawCmdBuffers.size());
-    DEBUG_LOG("Index count: %i", indexCount);
+    // DEBUG_LOGF("Building command buffer %d", LogLevel::INFO, currentFrame);
     VkCommandBuffer cmdBuffer = drawCmdBuffers[currentFrame];
     
-    VkCommandBufferBeginInfo cmdBufInfo = vkhandler::initializers::commandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    // Reset command buffer before recording new commands
+    VK_CHECK_RESULT(vkResetCommandBuffer(cmdBuffer, 0));
+    
+    VkCommandBufferBeginInfo cmdBufInfo = initializers::commandBufferBeginInfo(0);
 
     VkClearValue clearValues[2]{};
     clearValues[0].color = defaultClearColor;
     clearValues[1].depthStencil = { 1.0f, 0 };
 
-    VkRenderPassBeginInfo renderPassBeginInfo = vkhandler::initializers::renderPassBeginInfo();
+    VkRenderPassBeginInfo renderPassBeginInfo = initializers::renderPassBeginInfo();
     renderPassBeginInfo.pNext = nullptr;
     renderPassBeginInfo.renderPass = currentRenderPass;
     renderPassBeginInfo.renderArea.offset.x = 0;
@@ -680,33 +679,34 @@ void TextureBase::buildCommandBuffer()
     renderPassBeginInfo.renderArea.extent = {width, height};
     renderPassBeginInfo.clearValueCount = 2;
     renderPassBeginInfo.pClearValues = clearValues;
-    renderPassBeginInfo.framebuffer = currentFrameBuffers[currentFrame];
+    renderPassBeginInfo.framebuffer = currentFrameBuffers[0];
 
-    VK_CHECK_RESULT(vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo));
+    const VkCommandBuffer commandBuffer = drawCmdBuffers[currentFrame];
+    VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &cmdBufInfo));
 
-    vkCmdBeginRenderPass(cmdBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    VkViewport viewport = vkhandler::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
-    vkCmdSetViewport(cmdBuffer, 0, 1, &viewport);
+    VkViewport viewport = initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-    VkRect2D scissor = vkhandler::initializers::rect2D(width, height, 0, 0);
-    vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
+    VkRect2D scissor = initializers::rect2D(width, height, 0, 0);
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     // This will bind the descriptor set that contains our image (texture), so it can be accessed in the fragment shader
-    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
-    vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     VkDeviceSize offsets[1] = { 0 };
-    vkCmdBindVertexBuffers(cmdBuffer, 0, 1, &vertexBuffer.buffer, offsets);
-    vkCmdBindIndexBuffer(cmdBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-    vkCmdDrawIndexed(cmdBuffer, indexCount, 1, 0, 0, 0);
+    vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
 
     // drawUI(cmdBuffer);
 
-    vkCmdEndRenderPass(cmdBuffer);
+    vkCmdEndRenderPass(commandBuffer);
 
-    VK_CHECK_RESULT(vkEndCommandBuffer(cmdBuffer));
+    VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
 }
 
 void TextureBase::setupRenderPassTexture(){
@@ -778,6 +778,7 @@ void TextureBase::setupRenderPassTexture(){
 }
 
 void TextureBase::updateUniformBuffers(uint32_t& currentBuffer){    
+    // DEBUG_LOGF("Update uniform buffer %d", LogLevel::INFO, currentBuffer);
     currentFrame = currentBuffer;
     uniformData.projection = camera.matrices.perspective;
     uniformData.modelView = camera.matrices.view;
@@ -809,11 +810,11 @@ void TextureBase::createSynchronization(){
         VK_CHECK_RESULT(vkCreateSemaphore(currentDevice, &semaphoreCI, nullptr, &semaphore));
     }
     // Render completion
-    // Semaphore used to ensure that all commands submitted have been finished before submitting the image to the queue
-    cout << "Count Image size: " <<  images.size() << endl;
-    renderCompleteSemaphores.resize(images.size());
+    // Use MAX_CONCURRENT_FRAMES since TextureBase uses parent's swapchain
+    renderCompleteSemaphores.resize(MAX_CONCURRENT_FRAMES);
     for (auto& semaphore : renderCompleteSemaphores) {
         VkSemaphoreCreateInfo semaphoreCI{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         VK_CHECK_RESULT(vkCreateSemaphore(currentDevice, &semaphoreCI, nullptr, &semaphore));
     }
+    Log("TextureBase synchronization objects created", LogLevel::SUCCESS);
 }

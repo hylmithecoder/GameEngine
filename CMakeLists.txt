@@ -87,6 +87,7 @@ find_package(SDL2_ttf REQUIRED)
 find_package(PkgConfig REQUIRED)
 # find_package(Vulkan REQUIRED)
 pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+pkg_check_modules(LIBNOTIFY REQUIRED libnotify)
 # find_package(FFMPEG REQUIRED)
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -135,7 +136,7 @@ set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
 message(STATUS "Vieport Source : ${VIEWPORT_SOURCES}")
-add_executable(ViewPort3D ${VIEWPORT_SOURCES} ${IMGUI_SOURCES})
+add_executable(ViewPort3D vendor/nfd/src/nfd_gtk.cpp ${VIEWPORT_SOURCES} ${IMGUI_SOURCES})
 
 set_target_properties(IlmeeeEditor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -290,7 +291,13 @@ target_include_directories(ViewPort3D PRIVATE
     /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${NFD_INCLUDE_DIR}
+    # if(UNIX)
+        # message("Target system is Unix-like.")
     ${GTK3_INCLUDE_DIRS}
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    # endif()
     # vendor/ktx/include
 )
 
@@ -480,7 +487,10 @@ target_link_libraries(ViewPort3D PRIVATE
     swresample
     swscale
     ktx
+    # if (UNIX)
     ${GTK3_LIBRARIES}
+    ${LIBNOTIFY_LIBRARIES}
+    # endif()
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
@@ -503,7 +513,7 @@ target_link_libraries(IlmeeeHub PRIVATE
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE
-    ${NFD}/build/src/libnfd.so.1.2.1
+    ${CMAKE_CURRENT_SOURCE_DIR}/build/libnfd.so.1.2.1
     OpenGL::GL
     ${GTK3_LIBRARIES}
 )

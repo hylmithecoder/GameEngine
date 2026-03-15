@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 VkDescriptorSet VulkanHandler::LoadImage(const char* filename){
+    currentFile = filename;
     // Load PNG pakai stb_image
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(filename, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);

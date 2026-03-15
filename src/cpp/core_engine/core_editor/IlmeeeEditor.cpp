@@ -9,7 +9,7 @@
 #include <iomanip>
 // #include <windows.h>
 #include <fstream>
-#include <nfd.hpp>
+#include "../../../../vendor/nfd/include/nfd.hpp"
 #include <json.hpp>
 // #include <gtk/gtk.h>
 #ifdef _WIN32

@@ -1,8 +1,10 @@
 #pragma once
 #include "../core_engine/Debugger.hpp"
 #include <vulkan/vulkan.h>
+#ifdef __linux__
 #include <xcb/xcb.h>
 #include <vulkan/vulkan_xcb.h>
+#endif
 #include <SDL_audio.h>
 #include <SDL_vulkan.h>
 #include <SDL.h>
@@ -38,7 +40,10 @@ constexpr auto MAX_CONCURRENT_FRAMES = 2;
 class VulkanHandler {
     public: 
         VkDescriptorSet LoadImage(const char* filename);
-        array<VkFence, 2UL> waitFences;
+
+        string currentFile;
+
+        array<VkFence, MAX_CONCURRENT_FRAMES> waitFences;
         vector<VkSemaphore> presentCompleteSemaphores;
         vector<VkSemaphore> renderCompleteSemaphores;
         vector<VkImage> images;

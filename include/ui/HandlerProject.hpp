@@ -55,8 +55,7 @@ private:
     
 
 public:
-    HandlerProject()
-    {}
+    HandlerProject(){}
     // Class
     Scene currentScene;    
     SceneSerializer serializer;

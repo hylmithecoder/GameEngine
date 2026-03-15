@@ -18,6 +18,7 @@ set(VIEWPORT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/utils.cpp
     PARENT_SCOPE
 )
 
