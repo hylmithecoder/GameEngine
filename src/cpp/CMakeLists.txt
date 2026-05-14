@@ -10,18 +10,6 @@ set(SOURCE_CORE_ENGINE ${SOURCES_CORE_ENGINE} PARENT_SCOPE)
 set(SOURCE_UI ${SOURCES_UI} PARENT_SCOPE)
 set(SOURCE_VULKAN ${SOURCES_VULKAN} PARENT_SCOPE)
 
-set(VIEWPORT_SOURCE
-    ${CMAKE_CURRENT_SOURCE_DIR}/main_viewport3d.cpp 
-    ${CMAKE_CURRENT_SOURCE_DIR}/handlewindow_viewport3d.cpp 
-    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/vulkanhandler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/texture.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkBuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkDevice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VkTools.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ui/utils.cpp
-    PARENT_SCOPE
-)
-
 set(HANDLER_ENGINE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core/Launcher.cpp 
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core/HandlerLauncher.cpp
@@ -43,6 +31,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer2D.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.cpp
+    ${SOURCES_VULKAN}
     PARENT_SCOPE
 )
 

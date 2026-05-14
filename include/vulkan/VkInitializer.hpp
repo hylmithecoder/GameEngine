@@ -653,5 +653,15 @@ namespace vkhandler
 			return writeDescriptorSetAccelerationStructureKHR;
 		}
 
+		inline VkPipelineShaderStageCreateInfo pipelineShaderStageCreateInfo(VkShaderModule shaderModule, VkShaderStageFlagBits stage)
+		{
+			VkPipelineShaderStageCreateInfo pipelineShaderStageCreateInfo {};
+			pipelineShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+			pipelineShaderStageCreateInfo.stage = stage;
+			pipelineShaderStageCreateInfo.module = shaderModule;
+			pipelineShaderStageCreateInfo.pName = "main";
+			return pipelineShaderStageCreateInfo;
+		}
+
 	}
 }

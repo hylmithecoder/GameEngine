@@ -9,6 +9,7 @@
 #include "../core_engine/NetworkManager.hpp"
 #include "../core_engine/Check_Environment.hpp"
 #include "../core_engine/Debugger.hpp"
+#include "../core_engine/Discordrich.hpp"
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -24,6 +25,7 @@ private:
     MainWindow* window;
     string lastMessageFrom27015;
     std::unique_ptr<Environment> environment;
+    std::unique_ptr<DiscordRichPresence> discordRich;
     pid_t engineProcessId = -1;
     std::atomic<bool> isRunning{false};
     std::atomic<bool> shouldExit{false};

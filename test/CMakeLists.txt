@@ -1,0 +1,11 @@
+set(VIEWPORT_SOURCE
+    ${CMAKE_CURRENT_SOURCE_DIR}/viewport3d/test_viewport3d.cpp 
+    ${CMAKE_CURRENT_SOURCE_DIR}/viewport3d/handlewindow_viewport3d.cpp 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/vulkan/vulkanhandler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/vulkan/texture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/vulkan/VkBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/vulkan/VkDevice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/vulkan/VkTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cpp/ui/utils.cpp
+    PARENT_SCOPE
+)

@@ -42,7 +42,7 @@
 #define VK_CHECK_RESULT(f)																				\
 {																										\
 	VkResult res = (f);																					\
-	if (res != VK_SUCCESS)																				\
+	if (res < 0)																				\
 	{																									\
 		LOGE("Fatal : VkResult is \" %s \" in %s at line %d", vkhandler::tools::errorString(res).c_str(), __FILE__, __LINE__); \
 		assert(res == VK_SUCCESS);																		\
@@ -52,7 +52,7 @@
 #define VK_CHECK_RESULT(f)																				\
 {																										\
 	VkResult res = (f);																					\
-	if (res != VK_SUCCESS)																				\
+	if (res < 0)																				\
 	{																									\
 		std::cout << "Fatal : VkResult is \"" << vkhandler::tools::errorString(res) << "\" in " << __FILE__ << " at line " << __LINE__ << "\n"; \
 		assert(res == VK_SUCCESS);																		\

@@ -1,349 +1,192 @@
 #include "../../include/ui/Application.hpp"
+#include <SDL3/SDL.h>
 
 ApplicationManager::ApplicationManager() {
-    networkManager = std::make_unique<NetworkManager>();
-    environment = std::make_unique<Environment>();
-        
-    // Register cleanup tasks in reverse order of initialization
-    RegisterCleanupTask([this]() { CleanupWindow(); });
-    RegisterCleanupTask([this]() { CleanupNetwork(); });
-    RegisterCleanupTask([this]() { CleanupEngine(); });
-    RegisterCleanupTask([this]() { CleanupSDL(); });
+  networkManager = std::make_unique<NetworkManager>();
+  environment = std::make_unique<Environment>();
+  discordRich = std::make_unique<DiscordRichPresence>();
+
+  // Register cleanup tasks in reverse order of initialization
+  RegisterCleanupTask([this]() { CleanupWindow(); });
+  RegisterCleanupTask([this]() { 
+    if (discordRich) discordRich->Shutdown(); 
+  });
+  RegisterCleanupTask([this]() { CleanupNetwork(); });
+  RegisterCleanupTask([this]() { CleanupEngine(); });
+  RegisterCleanupTask([this]() { CleanupSDL(); });
 }
-    
-ApplicationManager::~ApplicationManager() {
-    Shutdown();
-}
+
+ApplicationManager::~ApplicationManager() { Shutdown(); }
 
 bool ApplicationManager::Initialize() {
-    try {
-        ::Log("Initializing Application Manager...");
-            
-        // Initialize environment check
-        environment->detectDriveInfo();
-        environment->printEnvironment();
-        environment->printDriveInfo();
-            
-        // Set FFmpeg log level
-        av_log_set_level(AV_LOG_ERROR);
-            
-        // Initialize SDL
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-            ::Log("SDL initialization failed: " + std::string(SDL_GetError()), Debug::LogLevel::CRASH);
-            return false;
-        }
-            
-        // Initialize TTF
-        if (TTF_Init() == -1) {
-            ::Log("TTF initialization failed: " + std::string(TTF_GetError()), Debug::LogLevel::CRASH);
-            return false;
-        }
-            
-        // Create main window
-        window = new MainWindow("Ilmeee Editor", 1280, 720);
-        if (!window) {
-            ::Log("Failed to create main window", Debug::LogLevel::CRASH);
-            return false;
-        }
-            
-        // Print working directory
-        char cwd[512];
-        if (getcwd(cwd, sizeof(cwd))) {
-            ::Log("Working Directory: " + std::string(cwd));
-        }
-            
-        // isRunning = true;
-        ::Log("Application Manager initialized successfully");
-        return true;
-            
-    } catch (const std::exception& e) {
-        ::Log("Exception during initialization: " + std::string(e.what()), Debug::LogLevel::CRASH);
-        return false;
+  try {
+    ::Log("Initializing Application Manager...");
+
+    environment->detectDriveInfo();
+    environment->printEnvironment();
+    environment->printDriveInfo();
+
+    av_log_set_level(AV_LOG_ERROR);
+
+    // Create main window (powered by VulkanBase)
+    window = new MainWindow("Ilmeee Editor", 1280, 720);
+    if (!window || !window->Init("Ilmeee Editor", 1280, 720)) {
+      ::Log("Failed to initialize main window", Debug::LogLevel::CRASH);
+      return false;
     }
+
+    if (discordRich) {
+      discordRich->Init();
+    }
+
+    ::Log("Application Manager initialized successfully");
+    return true;
+
+  } catch (const std::exception &e) {
+    ::Log("Exception during initialization: " + std::string(e.what()),
+          Debug::LogLevel::CRASH);
+    return false;
+  }
 }
-    
+
 bool ApplicationManager::LaunchEngine() {
-    try {
-        ::Log("[IlmeeeEditor] Starting network server...");
-        isRunning = true;
-        if (!networkManager->startServer()) {
-            ::Log("Failed to start network server", Debug::LogLevel::CRASH);
-            return false;
-        }
-        
-        ::Log("[IlmeeeEditor] Launching engine process...");
-        
-        pid_t pid = fork();
-        if (pid == -1) {
-            // Fork failed
-            ::Log("Failed to fork process: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-            return false;
-        }
-        else if (pid == 0) {
-            // Child process
-            execl("./HandlerIlmeeeEngine", "HandlerIlmeeeEngine", "-project", "MyGameProject", nullptr);
-            ::Log("Call HandlerIlmeeeEngine", Debug::LogLevel::WARNING);
-            // If execl returns, it failed
-            exit(1);
-        }
-        else {
-            // Parent process
-            engineProcessId = pid;
-        }
-
-        // Wait for connection asynchronously
-        std::future<bool> connectionFuture = std::async(std::launch::async, 
-            [this]() { return WaitForServerConnection(30); });
-        
-        // Show connection status
-        while (connectionFuture.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
-            // Waiting for connection
-        }
-        
-        if (!connectionFuture.get()) {
-            ::Log("Failed to establish connection", Debug::LogLevel::CRASH);
-            return false;
-        }
-        
-        networkManager->sendMessage("init:MyGameProject");
-        ::Log("[IlmeeeEditor] Engine launched successfully");
-        
-        StartNetworkThread();
-        
-        return true;
-        
-    } catch (const std::exception& e) {
-        ::Log("Exception during engine launch: " + std::string(e.what()), Debug::LogLevel::CRASH);
-        return false;
+  try {
+    ::Log("[IlmeeeEditor] Starting network server...");
+    isRunning = true;
+    if (!networkManager->startServer()) {
+      ::Log("Failed to start network server", Debug::LogLevel::CRASH);
+      return false;
     }
+
+    ::Log("[IlmeeeEditor] Launching engine process...");
+
+    pid_t pid = fork();
+    if (pid == -1) {
+      ::Log("Failed to fork process: " + std::string(strerror(errno)),
+            Debug::LogLevel::CRASH);
+      return false;
+    } else if (pid == 0) {
+      execl("./HandlerIlmeeeEngine", "HandlerIlmeeeEngine", "-project",
+            "MyGameProject", nullptr);
+      exit(1);
+    } else {
+      engineProcessId = pid;
+    }
+
+    // Wait for connection asynchronously
+    std::future<bool> connectionFuture = std::async(
+        std::launch::async, [this]() { return WaitForServerConnection(30); });
+
+    while (connectionFuture.wait_for(std::chrono::milliseconds(100)) !=
+           std::future_status::ready) {
+      // Waiting
+    }
+
+    if (!connectionFuture.get()) {
+      ::Log("Failed to establish connection", Debug::LogLevel::CRASH);
+      return false;
+    }
+
+    networkManager->sendMessage("init:MyGameProject");
+    ::Log("[IlmeeeEditor] Engine launched successfully");
+
+    StartNetworkThread();
+    return true;
+
+  } catch (const std::exception &e) {
+    ::Log("Exception during engine launch: " + std::string(e.what()),
+          Debug::LogLevel::CRASH);
+    return false;
+  }
 }
-    
-    void ApplicationManager::StartNetworkThread() {
-        networkThreadRunning = true;
-        networkThread = std::thread([this]() {
-            ::Log("[IlmeeeEditor] Network thread started");
-            
-            while (networkThreadRunning && isRunning) {
-            try {
-                // ::Log("Wait for network message...");
-                std::string message = networkManager->receiveMessage();
-                if (!message.empty()) {
-                    // ::Log("Received: " + message, Debug::LogLevel::SUCCESS);
-                    ProcessNetworkMessage(message);
-                    messagesFrom27015.push(message);
-                    // ::Log("Count Message From 27015: " + to_string(messagesFrom27015.size()), Debug::LogLevel::SUCCESS);
-                    // ::Log("Message From 27015: " + messagesFrom27015.back(), Debug::LogLevel::WARNING);
-                    lastMessageFrom27015 = message;
-                    // Push message to UI with thread safety
-                    // std::lock_guard<std::mutex> lock(messagesMutex);
-                    // window->PushMessage(message);
-                    // window->currentMessageFrom27015 = message;
-                    // ::Log("Pushed message to UI: " + window->currentMessageFrom27015, Debug::LogLevel::SUCCESS);
-                }
-                
-                // Check engine process
-                if (engineProcessId > 0) {
-                    int status;
-                    pid_t result = waitpid(engineProcessId, &status, WNOHANG);
-                    
-                    if (result == engineProcessId) {
-                        // Process has terminated
-                        if (WIFEXITED(status)) {
-                            ::Log("Engine process has terminated with exit code: " + 
-                                std::to_string(WEXITSTATUS(status)), Debug::LogLevel::CRASH);
-                        } else if (WIFSIGNALED(status)) {
-                            ::Log("Engine process was terminated by signal: " + 
-                                std::to_string(WTERMSIG(status)), Debug::LogLevel::CRASH);
-                        }
-                        shouldExit = true;
-                        break;
-                    } else if (result == -1) {
-                        ::Log("Error checking engine process status: " + 
-                            std::string(strerror(errno)), Debug::LogLevel::CRASH);
-                        shouldExit = true;
-                        break;
-                    }
-                }
-                
-                // Heartbeat logic
-                static auto lastHeartbeat = std::chrono::steady_clock::now();
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
-                    // networkManager->sendMessage("heartbeat");
-                    lastHeartbeat = now;
-                }
-                
-                std::this_thread::sleep_for(std::chrono::milliseconds(16));
-            } catch (const std::exception& e) {
-                ::Log("Network thread exception: " + std::string(e.what()), Debug::LogLevel::WARNING);
-                break;
-            }
-        }
-            
-            ::Log("Network thread ended");
-        });
-    }
-    
-    void ApplicationManager::ProcessNetworkMessage(const std::string& message) {
-        if (message == "shutdown" || message == "exit") {
-            ::Log("Received shutdown command from engine");
-            shouldExit = true;
-        }
-        // Add more message processing as needed
-    }
-    
-    void ApplicationManager::Run() {
-        if (!isRunning || !window) {
-            ::Log("Cannot run - application not properly initialized", Debug::LogLevel::CRASH);
-            return;
-        }
 
-        string message = networkManager->receiveMessage();
+void ApplicationManager::StartNetworkThread() {
+  networkThreadRunning = true;
+  networkThread = std::thread([this]() {
+    ::Log("[IlmeeeEditor] Network thread started");
+    while (networkThreadRunning && isRunning) {
+      try {
+        std::string message = networkManager->receiveMessage();
         if (!message.empty()) {
-            ::Log("Received initial message: " + message);
-        } else {
-            ::Log("No initial message received from network");
-        }
-        
-        ::Log("Starting main application loop...", Debug::LogLevel::SUCCESS);
-        
-        // This is the main application loop
-        while (window->running() && isRunning && !shouldExit) {
-            try {
-                // Handle window events
-                window->handleEvents();
-                
-                // Check if window was closed
-                if (!window->running()) {
-                    ::Log("Window close requested");
-                    break;
-                }
-
-                if (!lastMessageFrom27015.empty())
-                {
-                    window->PushMessage(lastMessageFrom27015);
-                    lastMessageFrom27015.clear();
-                }
-                
-                // Update and render
-                window->update();
-                window->render();
-                
-                // Check engine process status
-                if (engineProcessId > 0) {
-                    int status;
-                    pid_t result = waitpid(engineProcessId, &status, WNOHANG);
-                    
-                    if (result == engineProcessId) {
-                        // Process has terminated
-                        ::Log("Engine process has terminated");
-                        shouldExit = true;
-                    } else if (result == -1) {
-                        // Error occurred
-                        ::Log("Error checking engine process status: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-                    }
-                }
-                
-            } catch (const std::exception& e) {
-                ::Log("Exception in main loop: " + std::string(e.what()), Debug::LogLevel::CRASH);
-                shouldExit = true;
-            }
-        }
-        
-        ::Log("Main application loop ended");
-    }
-    
-    void ApplicationManager::Shutdown() {
-        if (!isRunning) return;
-        
-        networkManager->sendMessage("Stop");
-        ::Log("Starting application shutdown...");
-        isRunning = false;
-        shouldExit = true;
-        
-        // Execute all cleanup tasks
-        for (auto& task : cleanupTasks) {
-            try {
-                task();
-            } catch (const std::exception& e) {
-                ::Log("Exception during cleanup: " + std::string(e.what()), Debug::LogLevel::WARNING);
-            }
+          ProcessNetworkMessage(message);
+          messagesFrom27015.push(message);
+          lastMessageFrom27015 = message;
         }
 
-        // Execute cleanup tasks in specific order
-        CleanupNetwork();
-        CleanupEngine();
-        CleanupWindow();
-        CleanupSDL();
-        ::Log("Application shutdown complete");
-    }
-
-    // Update CleanupNetwork method
-    void ApplicationManager::CleanupNetwork() {
-        ::Log("Cleaning up network...");
-        
-        // Stop network thread first
-        networkThreadRunning = false;
-        if (networkThread.joinable()) {
-            try {
-                networkThread.join();
-                ::Log("Network thread joined successfully", Debug::LogLevel::SUCCESS);
-            } catch (const std::exception& e) {
-                ::Log("Failed to join network thread: " + std::string(e.what()), Debug::LogLevel::WARNING);
-            }
+        if (engineProcessId > 0) {
+          int status;
+          pid_t result = waitpid(engineProcessId, &status, WNOHANG);
+          if (result == engineProcessId) {
+            shouldExit = true;
+            break;
+          }
         }
-        
-        // Then cleanup network manager
-        if (networkManager) {
-            try {
-                networkManager->stop();
-                networkManager.reset();
-                ::Log("Network manager cleaned up successfully");
-            } catch (const std::exception& e) {
-                ::Log("Failed to cleanup network manager: " + std::string(e.what()), Debug::LogLevel::WARNING);
-            }
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+      } catch (...) {
+        break;
+      }
     }
-
-    // Update CleanupEngine method
-void ApplicationManager::CleanupEngine() {
-    ::Log("Cleaning up engine process...");
-    
-    if (engineProcessId > 0) {
-        // First try graceful shutdown
-        kill(engineProcessId, SIGTERM);
-        
-        // Wait for process to end
-        int status;
-        pid_t result = waitpid(engineProcessId, &status, WNOHANG);
-        
-        if (result == 0) {
-            // Process still running, wait a bit then force kill
-            sleep(2);
-            kill(engineProcessId, SIGKILL);
-            waitpid(engineProcessId, nullptr, 0);
-        }
-        
-        engineProcessId = -1;
-        ::Log("Engine process cleaned up");
-    }
+  });
 }
 
-    // Update CleanupWindow method
-    void ApplicationManager::CleanupWindow() {
-        ::Log("Cleaning up window...");
-        if (window) {
-            window->clean(); // Add a cleanup method to MainWindow if not exists
-            window = nullptr;
-            ::Log("Window cleaned up");
-        }
-    }
+void ApplicationManager::ProcessNetworkMessage(const std::string &message) {
+  if (message == "shutdown" || message == "exit") {
+    shouldExit = true;
+  }
+}
 
-    // Update CleanupSDL method
-    void ApplicationManager::CleanupSDL() {
-        ::Log("Cleaning up SDL...");
-        TTF_Quit();
-        SDL_Quit();
-        // IMG_Quit(); // Add if using SDL_image
-        ::Log("SDL cleaned up");
-    }
+void ApplicationManager::Run() {
+  if (!window) {
+    ::Log("Cannot run - window not initialized", Debug::LogLevel::CRASH);
+    return;
+  }
+
+  ::Log("Starting main application via VulkanBase...",
+        Debug::LogLevel::SUCCESS);
+
+  // The main loop is now handled by VulkanBase::Run()
+  window->Run();
+
+  ::Log("Main application loop ended");
+}
+
+void ApplicationManager::Shutdown() {
+  if (!isRunning)
+    return;
+
+  networkManager->sendMessage("Stop");
+  ::Log("Starting application shutdown...");
+  isRunning = false;
+  shouldExit = true;
+
+  CleanupNetwork();
+  CleanupEngine();
+  CleanupWindow();
+  CleanupSDL();
+  ::Log("Application shutdown complete");
+}
+
+void ApplicationManager::CleanupNetwork() {
+  networkThreadRunning = false;
+  if (networkThread.joinable())
+    networkThread.join();
+  if (networkManager)
+    networkManager.reset();
+}
+
+void ApplicationManager::CleanupEngine() {
+  if (engineProcessId > 0) {
+    kill(engineProcessId, SIGTERM);
+    waitpid(engineProcessId, nullptr, 0);
+    engineProcessId = -1;
+  }
+}
+
+void ApplicationManager::CleanupWindow() {
+  // Window cleanup is handled by VulkanBase
+  window = nullptr;
+}
+
+void ApplicationManager::CleanupSDL() {
+  // SDL_Quit is handled by VulkanBase
+}

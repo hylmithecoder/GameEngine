@@ -3,530 +3,525 @@
  *
  * Copyright (C) 2016-2024 by Sascha Willems - www.saschawillems.de
  *
- * This code is licensed under the MIT license (MIT) (http://opensource.org/licenses/MIT)
+ * This code is licensed under the MIT license (MIT)
+ * (http://opensource.org/licenses/MIT)
  */
 
 #include "VkTools.hpp"
-#include <Debugger.hpp>
+#include "../../../include/core_engine/Debugger.hpp"
 using namespace Debug;
 
-#if !(defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK) || defined(VK_USE_PLATFORM_METAL_EXT))
-// iOS & macOS: getAssetPath() and getShaderBasePath() implemented externally for access to Obj-C++ path utilities
-const std::string getAssetPath()
-{
-if (vkhandler::tools::resourcePath != "") {
-	return vkhandler::tools::resourcePath + "/assets/";
-}
+#if !(defined(VK_USE_PLATFORM_IOS_MVK) ||                                      \
+      defined(VK_USE_PLATFORM_MACOS_MVK) ||                                    \
+      defined(VK_USE_PLATFORM_METAL_EXT))
+// iOS & macOS: getAssetPath() and getShaderBasePath() implemented externally
+// for access to Obj-C++ path utilities
+const std::string getAssetPath() {
+  if (vkhandler::tools::resourcePath != "") {
+    return vkhandler::tools::resourcePath + "/assets/";
+  }
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
-	return "";
+  return "";
 #elif defined(VK_EXAMPLE_ASSETS_DIR)
-	return VK_EXAMPLE_ASSETS_DIR;
+  return VK_EXAMPLE_ASSETS_DIR;
 #else
-	return "./../assets/";
+  return "./../assets/";
 #endif
 }
 
-const std::string getShaderBasePath()
-{
-if (vkhandler::tools::resourcePath != "") {
-	return vkhandler::tools::resourcePath + "/shaders/";
-}
+const std::string getShaderBasePath() {
+  if (vkhandler::tools::resourcePath != "") {
+    return vkhandler::tools::resourcePath + "/shaders/";
+  }
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
-	return "shaders/";
+  return "shaders/";
 #elif defined(VK_EXAMPLE_SHADERS_DIR)
-	return VK_EXAMPLE_SHADERS_DIR;
+  return VK_EXAMPLE_SHADERS_DIR;
 #else
-	return "./../shaders/";
+  return "./../shaders/";
 #endif
 }
 #endif
 
-namespace vkhandler
-{
-	namespace tools
-	{
-		bool errorModeSilent = false;
-		std::string resourcePath = "";
-		std::vector<bool> allFeature;
+namespace vkhandler {
+namespace tools {
+bool errorModeSilent = false;
+std::string resourcePath = "";
+std::vector<bool> allFeature;
 
-		std::string errorString(VkResult errorCode)
-		{
-			switch (errorCode)
-			{
-#define STR(r) case VK_ ##r: return #r
-				STR(NOT_READY);
-				STR(TIMEOUT);
-				STR(EVENT_SET);
-				STR(EVENT_RESET);
-				STR(INCOMPLETE);
-				STR(ERROR_OUT_OF_HOST_MEMORY);
-				STR(ERROR_OUT_OF_DEVICE_MEMORY);
-				STR(ERROR_INITIALIZATION_FAILED);
-				STR(ERROR_DEVICE_LOST);
-				STR(ERROR_MEMORY_MAP_FAILED);
-				STR(ERROR_LAYER_NOT_PRESENT);
-				STR(ERROR_EXTENSION_NOT_PRESENT);
-				STR(ERROR_FEATURE_NOT_PRESENT);
-				STR(ERROR_INCOMPATIBLE_DRIVER);
-				STR(ERROR_TOO_MANY_OBJECTS);
-				STR(ERROR_FORMAT_NOT_SUPPORTED);
-				STR(ERROR_SURFACE_LOST_KHR);
-				STR(ERROR_NATIVE_WINDOW_IN_USE_KHR);
-				STR(SUBOPTIMAL_KHR);
-				STR(ERROR_OUT_OF_DATE_KHR);
-				STR(ERROR_INCOMPATIBLE_DISPLAY_KHR);
-				STR(ERROR_VALIDATION_FAILED_EXT);
-				STR(ERROR_INVALID_SHADER_NV);
-				STR(ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+std::string errorString(VkResult errorCode) {
+  switch (errorCode) {
+#define STR(r)                                                                 \
+  case VK_##r:                                                                 \
+    return #r
+    STR(NOT_READY);
+    STR(TIMEOUT);
+    STR(EVENT_SET);
+    STR(EVENT_RESET);
+    STR(INCOMPLETE);
+    STR(ERROR_OUT_OF_HOST_MEMORY);
+    STR(ERROR_OUT_OF_DEVICE_MEMORY);
+    STR(ERROR_INITIALIZATION_FAILED);
+    STR(ERROR_DEVICE_LOST);
+    STR(ERROR_MEMORY_MAP_FAILED);
+    STR(ERROR_LAYER_NOT_PRESENT);
+    STR(ERROR_EXTENSION_NOT_PRESENT);
+    STR(ERROR_FEATURE_NOT_PRESENT);
+    STR(ERROR_INCOMPATIBLE_DRIVER);
+    STR(ERROR_TOO_MANY_OBJECTS);
+    STR(ERROR_FORMAT_NOT_SUPPORTED);
+    STR(ERROR_SURFACE_LOST_KHR);
+    STR(ERROR_NATIVE_WINDOW_IN_USE_KHR);
+    STR(SUBOPTIMAL_KHR);
+    STR(ERROR_OUT_OF_DATE_KHR);
+    STR(ERROR_INCOMPATIBLE_DISPLAY_KHR);
+    STR(ERROR_VALIDATION_FAILED_EXT);
+    STR(ERROR_INVALID_SHADER_NV);
+    STR(ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 #undef STR
-			default:
-				return "UNKNOWN_ERROR";
-			}
-		}
+  default:
+    return "UNKNOWN_ERROR";
+  }
+}
 
-		std::string physicalDeviceTypeString(VkPhysicalDeviceType type)
-		{
-			switch (type)
-			{
-#define STR(r) case VK_PHYSICAL_DEVICE_TYPE_ ##r: return #r
-				STR(OTHER);
-				STR(INTEGRATED_GPU);
-				STR(DISCRETE_GPU);
-				STR(VIRTUAL_GPU);
-				STR(CPU);
+std::string physicalDeviceTypeString(VkPhysicalDeviceType type) {
+  switch (type) {
+#define STR(r)                                                                 \
+  case VK_PHYSICAL_DEVICE_TYPE_##r:                                            \
+    return #r
+    STR(OTHER);
+    STR(INTEGRATED_GPU);
+    STR(DISCRETE_GPU);
+    STR(VIRTUAL_GPU);
+    STR(CPU);
 #undef STR
-			default: return "UNKNOWN_DEVICE_TYPE";
-			}
-		}
+  default:
+    return "UNKNOWN_DEVICE_TYPE";
+  }
+}
 
-		VkBool32 getSupportedDepthFormat(VkPhysicalDevice physicalDevice, VkFormat *depthFormat)
-		{
-			// Since all depth formats may be optional, we need to find a suitable depth format to use
-			// Start with the highest precision packed format
-			std::vector<VkFormat> formatList = {
-				VK_FORMAT_D32_SFLOAT_S8_UINT,
-				VK_FORMAT_D32_SFLOAT,
-				VK_FORMAT_D24_UNORM_S8_UINT,
-				VK_FORMAT_D16_UNORM_S8_UINT,
-				VK_FORMAT_D16_UNORM
-			};
+VkBool32 getSupportedDepthFormat(VkPhysicalDevice physicalDevice,
+                                 VkFormat *depthFormat) {
+  // Since all depth formats may be optional, we need to find a suitable depth
+  // format to use Start with the highest precision packed format
+  std::vector<VkFormat> formatList = {
+      VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT,
+      VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT,
+      VK_FORMAT_D16_UNORM};
 
-			for (auto& format : formatList)
-			{
-				VkFormatProperties formatProps;
-				vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
-				if (formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
-				{
-					*depthFormat = format;
-					return true;
-				}
-			}
+  for (auto &format : formatList) {
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
+    if (formatProps.optimalTilingFeatures &
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+      *depthFormat = format;
+      return true;
+    }
+  }
 
-			return false;
-		}
+  return false;
+}
 
-		VkBool32 getSupportedDepthStencilFormat(VkPhysicalDevice physicalDevice, VkFormat* depthStencilFormat)
-		{
-			std::vector<VkFormat> formatList = {
-				VK_FORMAT_D32_SFLOAT_S8_UINT,
-				VK_FORMAT_D24_UNORM_S8_UINT,
-				VK_FORMAT_D16_UNORM_S8_UINT,
-			};
+VkBool32 getSupportedDepthStencilFormat(VkPhysicalDevice physicalDevice,
+                                        VkFormat *depthStencilFormat) {
+  std::vector<VkFormat> formatList = {
+      VK_FORMAT_D32_SFLOAT_S8_UINT,
+      VK_FORMAT_D24_UNORM_S8_UINT,
+      VK_FORMAT_D16_UNORM_S8_UINT,
+  };
 
-			for (auto& format : formatList)
-			{
-				VkFormatProperties formatProps;
-				vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
-				if (formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
-				{
-					*depthStencilFormat = format;
-					return true;
-				}
-			}
+  for (auto &format : formatList) {
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
+    if (formatProps.optimalTilingFeatures &
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+      *depthStencilFormat = format;
+      return true;
+    }
+  }
 
-			return false;
-		}
+  return false;
+}
 
+VkBool32 formatHasStencil(VkFormat format) {
+  std::vector<VkFormat> stencilFormats = {
+      VK_FORMAT_S8_UINT,
+      VK_FORMAT_D16_UNORM_S8_UINT,
+      VK_FORMAT_D24_UNORM_S8_UINT,
+      VK_FORMAT_D32_SFLOAT_S8_UINT,
+  };
+  return std::find(stencilFormats.begin(), stencilFormats.end(), format) !=
+         std::end(stencilFormats);
+}
 
-		VkBool32 formatHasStencil(VkFormat format)
-		{
-			std::vector<VkFormat> stencilFormats = {
-				VK_FORMAT_S8_UINT,
-				VK_FORMAT_D16_UNORM_S8_UINT,
-				VK_FORMAT_D24_UNORM_S8_UINT,
-				VK_FORMAT_D32_SFLOAT_S8_UINT,
-			};
-			return std::find(stencilFormats.begin(), stencilFormats.end(), format) != std::end(stencilFormats);
-		}
+// Returns if a given format support LINEAR filtering
+VkBool32 formatIsFilterable(VkPhysicalDevice physicalDevice, VkFormat format,
+                            VkImageTiling tiling) {
+  VkFormatProperties formatProps;
+  vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
 
-		// Returns if a given format support LINEAR filtering
-		VkBool32 formatIsFilterable(VkPhysicalDevice physicalDevice, VkFormat format, VkImageTiling tiling)
-		{
-			VkFormatProperties formatProps;
-			vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProps);
+  if (tiling == VK_IMAGE_TILING_OPTIMAL)
+    return formatProps.optimalTilingFeatures &
+           VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 
-			if (tiling == VK_IMAGE_TILING_OPTIMAL)
-				return formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  if (tiling == VK_IMAGE_TILING_LINEAR)
+    return formatProps.linearTilingFeatures &
+           VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 
-			if (tiling == VK_IMAGE_TILING_LINEAR)
-				return formatProps.linearTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  return false;
+}
 
-			return false;
-		}
+// Create an image memory barrier for changing the layout of
+// an image and put it into an active command buffer
+// See chapter 11.4 "Image Layout" for details
 
-		// Create an image memory barrier for changing the layout of
-		// an image and put it into an active command buffer
-		// See chapter 11.4 "Image Layout" for details
+void setImageLayout(VkCommandBuffer cmdbuffer, VkImage image,
+                    VkImageLayout oldImageLayout, VkImageLayout newImageLayout,
+                    VkImageSubresourceRange subresourceRange,
+                    VkPipelineStageFlags srcStageMask,
+                    VkPipelineStageFlags dstStageMask) {
+  // Create an image barrier object
+  VkImageMemoryBarrier imageMemoryBarrier =
+      vkhandler::initializers::imageMemoryBarrier();
+  imageMemoryBarrier.oldLayout = oldImageLayout;
+  imageMemoryBarrier.newLayout = newImageLayout;
+  imageMemoryBarrier.image = image;
+  imageMemoryBarrier.subresourceRange = subresourceRange;
 
-		void setImageLayout(
-			VkCommandBuffer cmdbuffer,
-			VkImage image,
-			VkImageLayout oldImageLayout,
-			VkImageLayout newImageLayout,
-			VkImageSubresourceRange subresourceRange,
-			VkPipelineStageFlags srcStageMask,
-			VkPipelineStageFlags dstStageMask)
-		{
-			// Create an image barrier object
-			VkImageMemoryBarrier imageMemoryBarrier = vkhandler::initializers::imageMemoryBarrier();
-			imageMemoryBarrier.oldLayout = oldImageLayout;
-			imageMemoryBarrier.newLayout = newImageLayout;
-			imageMemoryBarrier.image = image;
-			imageMemoryBarrier.subresourceRange = subresourceRange;
+  // Source layouts (old)
+  // Source access mask controls actions that have to be finished on the old
+  // layout before it will be transitioned to the new layout
+  switch (oldImageLayout) {
+  case VK_IMAGE_LAYOUT_UNDEFINED:
+    // Image layout is undefined (or does not matter)
+    // Only valid as initial layout
+    // No flags required, listed only for completeness
+    imageMemoryBarrier.srcAccessMask = 0;
+    break;
 
-			// Source layouts (old)
-			// Source access mask controls actions that have to be finished on the old layout
-			// before it will be transitioned to the new layout
-			switch (oldImageLayout)
-			{
-			case VK_IMAGE_LAYOUT_UNDEFINED:
-				// Image layout is undefined (or does not matter)
-				// Only valid as initial layout
-				// No flags required, listed only for completeness
-				imageMemoryBarrier.srcAccessMask = 0;
-				break;
+  case VK_IMAGE_LAYOUT_PREINITIALIZED:
+    // Image is preinitialized
+    // Only valid as initial layout for linear images, preserves memory contents
+    // Make sure host writes have been finished
+    imageMemoryBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_PREINITIALIZED:
-				// Image is preinitialized
-				// Only valid as initial layout for linear images, preserves memory contents
-				// Make sure host writes have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+    // Image is a color attachment
+    // Make sure any writes to the color buffer have been finished
+    imageMemoryBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-				// Image is a color attachment
-				// Make sure any writes to the color buffer have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+    // Image is a depth/stencil attachment
+    // Make sure any writes to the depth/stencil buffer have been finished
+    imageMemoryBarrier.srcAccessMask =
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-				// Image is a depth/stencil attachment
-				// Make sure any writes to the depth/stencil buffer have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    // Image is a transfer source
+    // Make sure any reads from the image have been finished
+    imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-				// Image is a transfer source
-				// Make sure any reads from the image have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    // Image is a transfer destination
+    // Make sure any writes to the image have been finished
+    imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-				// Image is a transfer destination
-				// Make sure any writes to the image have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+    // Image is read by a shader
+    // Make sure any shader reads from the image have been finished
+    imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    break;
+  default:
+    // Other source layouts aren't handled (yet)
+    break;
+  }
 
-			case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-				// Image is read by a shader
-				// Make sure any shader reads from the image have been finished
-				imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-				break;
-			default:
-				// Other source layouts aren't handled (yet)
-				break;
-			}
+  // Target layouts (new)
+  // Destination access mask controls the dependency for the new image layout
+  switch (newImageLayout) {
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    // Image will be used as a transfer destination
+    // Make sure any writes to the image have been finished
+    imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    break;
 
-			// Target layouts (new)
-			// Destination access mask controls the dependency for the new image layout
-			switch (newImageLayout)
-			{
-			case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-				// Image will be used as a transfer destination
-				// Make sure any writes to the image have been finished
-				imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    // Image will be used as a transfer source
+    // Make sure any reads from the image have been finished
+    imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-				// Image will be used as a transfer source
-				// Make sure any reads from the image have been finished
-				imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+    // Image will be used as a color attachment
+    // Make sure any writes to the color buffer have been finished
+    imageMemoryBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-				// Image will be used as a color attachment
-				// Make sure any writes to the color buffer have been finished
-				imageMemoryBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+    // Image layout will be used as a depth/stencil attachment
+    // Make sure any writes to depth/stencil buffer have been finished
+    imageMemoryBarrier.dstAccessMask =
+        imageMemoryBarrier.dstAccessMask |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    break;
 
-			case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-				// Image layout will be used as a depth/stencil attachment
-				// Make sure any writes to depth/stencil buffer have been finished
-				imageMemoryBarrier.dstAccessMask = imageMemoryBarrier.dstAccessMask | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-				break;
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+    // Image will be read in a shader (sampler, input attachment)
+    // Make sure any writes to the image have been finished
+    if (imageMemoryBarrier.srcAccessMask == 0) {
+      imageMemoryBarrier.srcAccessMask =
+          VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+    imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    break;
+  default:
+    // Other source layouts aren't handled (yet)
+    break;
+  }
 
-			case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-				// Image will be read in a shader (sampler, input attachment)
-				// Make sure any writes to the image have been finished
-				if (imageMemoryBarrier.srcAccessMask == 0)
-				{
-					imageMemoryBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-				}
-				imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-				break;
-			default:
-				// Other source layouts aren't handled (yet)
-				break;
-			}
+  // Put barrier inside setup command buffer
+  vkCmdPipelineBarrier(cmdbuffer, srcStageMask, dstStageMask, 0, 0, nullptr, 0,
+                       nullptr, 1, &imageMemoryBarrier);
+}
 
-			// Put barrier inside setup command buffer
-			vkCmdPipelineBarrier(
-				cmdbuffer,
-				srcStageMask,
-				dstStageMask,
-				0,
-				0, nullptr,
-				0, nullptr,
-				1, &imageMemoryBarrier);
-		}
+// Fixed sub resource on first mip level and layer
+void setImageLayout(VkCommandBuffer cmdbuffer, VkImage image,
+                    VkImageAspectFlags aspectMask, VkImageLayout oldImageLayout,
+                    VkImageLayout newImageLayout,
+                    VkPipelineStageFlags srcStageMask,
+                    VkPipelineStageFlags dstStageMask) {
+  VkImageSubresourceRange subresourceRange = {};
+  subresourceRange.aspectMask = aspectMask;
+  subresourceRange.baseMipLevel = 0;
+  subresourceRange.levelCount = 1;
+  subresourceRange.layerCount = 1;
+  setImageLayout(cmdbuffer, image, oldImageLayout, newImageLayout,
+                 subresourceRange, srcStageMask, dstStageMask);
+}
 
-		// Fixed sub resource on first mip level and layer
-		void setImageLayout(
-			VkCommandBuffer cmdbuffer,
-			VkImage image,
-			VkImageAspectFlags aspectMask,
-			VkImageLayout oldImageLayout,
-			VkImageLayout newImageLayout,
-			VkPipelineStageFlags srcStageMask,
-			VkPipelineStageFlags dstStageMask)
-		{
-			VkImageSubresourceRange subresourceRange = {};
-			subresourceRange.aspectMask = aspectMask;
-			subresourceRange.baseMipLevel = 0;
-			subresourceRange.levelCount = 1;
-			subresourceRange.layerCount = 1;
-			setImageLayout(cmdbuffer, image, oldImageLayout, newImageLayout, subresourceRange, srcStageMask, dstStageMask);
-		}
+void insertImageMemoryBarrier(VkCommandBuffer cmdbuffer, VkImage image,
+                              VkAccessFlags srcAccessMask,
+                              VkAccessFlags dstAccessMask,
+                              VkImageLayout oldImageLayout,
+                              VkImageLayout newImageLayout,
+                              VkPipelineStageFlags srcStageMask,
+                              VkPipelineStageFlags dstStageMask,
+                              VkImageSubresourceRange subresourceRange) {
+  VkImageMemoryBarrier imageMemoryBarrier =
+      vkhandler::initializers::imageMemoryBarrier();
+  imageMemoryBarrier.srcAccessMask = srcAccessMask;
+  imageMemoryBarrier.dstAccessMask = dstAccessMask;
+  imageMemoryBarrier.oldLayout = oldImageLayout;
+  imageMemoryBarrier.newLayout = newImageLayout;
+  imageMemoryBarrier.image = image;
+  imageMemoryBarrier.subresourceRange = subresourceRange;
 
-		void insertImageMemoryBarrier(
-			VkCommandBuffer cmdbuffer,
-			VkImage image,
-			VkAccessFlags srcAccessMask,
-			VkAccessFlags dstAccessMask,
-			VkImageLayout oldImageLayout,
-			VkImageLayout newImageLayout,
-			VkPipelineStageFlags srcStageMask,
-			VkPipelineStageFlags dstStageMask,
-			VkImageSubresourceRange subresourceRange)
-		{
-			VkImageMemoryBarrier imageMemoryBarrier = vkhandler::initializers::imageMemoryBarrier();
-			imageMemoryBarrier.srcAccessMask = srcAccessMask;
-			imageMemoryBarrier.dstAccessMask = dstAccessMask;
-			imageMemoryBarrier.oldLayout = oldImageLayout;
-			imageMemoryBarrier.newLayout = newImageLayout;
-			imageMemoryBarrier.image = image;
-			imageMemoryBarrier.subresourceRange = subresourceRange;
+  vkCmdPipelineBarrier(cmdbuffer, srcStageMask, dstStageMask, 0, 0, nullptr, 0,
+                       nullptr, 1, &imageMemoryBarrier);
+}
 
-			vkCmdPipelineBarrier(
-				cmdbuffer,
-				srcStageMask,
-				dstStageMask,
-				0,
-				0, nullptr,
-				0, nullptr,
-				1, &imageMemoryBarrier);
-		}
-
-		void exitFatal(const std::string& message, int32_t exitCode)
-		{
+void exitFatal(const std::string &message, int32_t exitCode) {
 #if defined(_WIN32)
-			if (!errorModeSilent) {
-				MessageBox(NULL, message.c_str(), NULL, MB_OK | MB_ICONERROR);
-			}
+  if (!errorModeSilent) {
+    MessageBox(NULL, message.c_str(), NULL, MB_OK | MB_ICONERROR);
+  }
 #elif defined(__ANDROID__)
-            LOGE("Fatal error: %s", message.c_str());
-			vkhandler::android::showAlert(message.c_str());
+  LOGE("Fatal error: %s", message.c_str());
+  vkhandler::android::showAlert(message.c_str());
 #endif
-			std::cerr << message << "\n";
+  std::cerr << message << "\n";
 #if !defined(__ANDROID__)
-			exit(exitCode);
+  exit(exitCode);
 #endif
-		}
+}
 
-		void exitFatal(const std::string& message, VkResult resultCode)
-		{
-			exitFatal(message, (int32_t)resultCode);
-		}
+void exitFatal(const std::string &message, VkResult resultCode) {
+  exitFatal(message, (int32_t)resultCode);
+}
 
 #if defined(__ANDROID__)
-		// Android shaders are stored as assets in the apk
-		// So they need to be loaded via the asset manager
-		VkShaderModule loadShader(AAssetManager* assetManager, const char *fileName, VkDevice device)
-		{
-			// Load shader from compressed asset
-			AAsset* asset = AAssetManager_open(assetManager, fileName, AASSET_MODE_STREAMING);
-			assert(asset);
-			size_t size = AAsset_getLength(asset);
-			assert(size > 0);
+// Android shaders are stored as assets in the apk
+// So they need to be loaded via the asset manager
+VkShaderModule loadShader(AAssetManager *assetManager, const char *fileName,
+                          VkDevice device) {
+  // Load shader from compressed asset
+  AAsset *asset =
+      AAssetManager_open(assetManager, fileName, AASSET_MODE_STREAMING);
+  assert(asset);
+  size_t size = AAsset_getLength(asset);
+  assert(size > 0);
 
-			char *shaderCode = new char[size];
-			AAsset_read(asset, shaderCode, size);
-			AAsset_close(asset);
+  char *shaderCode = new char[size];
+  AAsset_read(asset, shaderCode, size);
+  AAsset_close(asset);
 
-			VkShaderModule shaderModule;
-			VkShaderModuleCreateInfo moduleCreateInfo;
-			moduleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-			moduleCreateInfo.pNext = NULL;
-			moduleCreateInfo.codeSize = size;
-			moduleCreateInfo.pCode = (uint32_t*)shaderCode;
-			moduleCreateInfo.flags = 0;
+  VkShaderModule shaderModule;
+  VkShaderModuleCreateInfo moduleCreateInfo;
+  moduleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  moduleCreateInfo.pNext = NULL;
+  moduleCreateInfo.codeSize = size;
+  moduleCreateInfo.pCode = (uint32_t *)shaderCode;
+  moduleCreateInfo.flags = 0;
 
-			VK_CHECK_RESULT(vkCreateShaderModule(device, &moduleCreateInfo, NULL, &shaderModule));
+  VK_CHECK_RESULT(
+      vkCreateShaderModule(device, &moduleCreateInfo, NULL, &shaderModule));
 
-			delete[] shaderCode;
+  delete[] shaderCode;
 
-			return shaderModule;
-		}
+  return shaderModule;
+}
 #else
-		VkShaderModule loadShader(const char *fileName, VkDevice device)
-		{
-			LogPointer("Current use device: ", device);
-			std::ifstream is(fileName, std::ios::binary | std::ios::in | std::ios::ate);
+VkShaderModule loadShader(const char *fileName, VkDevice device) {
+  LogPointer("Current use device: ", device);
+  std::ifstream is(fileName, std::ios::binary | std::ios::in | std::ios::ate);
 
-			if (is.is_open())
-			{
-				size_t size = is.tellg();
-				is.seekg(0, std::ios::beg);
-				char* shaderCode = new char[size];
-				is.read(shaderCode, size);
-				is.close();
+  if (is.is_open()) {
+    size_t size = is.tellg();
+    is.seekg(0, std::ios::beg);
+    char *shaderCode = new char[size];
+    is.read(shaderCode, size);
+    is.close();
 
-				assert(size > 0);
+    assert(size > 0);
 
-				VkShaderModule shaderModule;
-				VkShaderModuleCreateInfo moduleCreateInfo{};
-				moduleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-				moduleCreateInfo.codeSize = size;
-				moduleCreateInfo.pCode = (uint32_t*)shaderCode;
+    VkShaderModule shaderModule;
+    VkShaderModuleCreateInfo moduleCreateInfo{};
+    moduleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleCreateInfo.codeSize = size;
+    moduleCreateInfo.pCode = (uint32_t *)shaderCode;
 
-				VK_CHECK_RESULT(vkCreateShaderModule(device, &moduleCreateInfo, NULL, &shaderModule));
+    VK_CHECK_RESULT(
+        vkCreateShaderModule(device, &moduleCreateInfo, NULL, &shaderModule));
 
-				delete[] shaderCode;
+    delete[] shaderCode;
 
-				return shaderModule;
-			}
-			else
-			{
-				std::cerr << "Error: Could not open shader file \"" << fileName << "\"" << "\n";
-				return VK_NULL_HANDLE;
-			}
-		}
+    return shaderModule;
+  } else {
+    std::cerr << "Error: Could not open shader file \"" << fileName << "\""
+              << "\n";
+    return VK_NULL_HANDLE;
+  }
+}
 #endif
 
-		bool fileExists(const std::string &filename)
-		{
-			std::ifstream f(filename.c_str());
-			return !f.fail();
-		}
-
-		uint32_t alignedSize(uint32_t value, uint32_t alignment)
-        {
-	        return (value + alignment - 1) & ~(alignment - 1);
-		}
-
-		size_t alignedSize(size_t value, size_t alignment)
-		{
-			return (value + alignment - 1) & ~(alignment - 1);
-		}
-
-
-		VkDeviceSize alignedVkSize(VkDeviceSize value, VkDeviceSize alignment)
-		{
-			return (value + alignment - 1) & ~(alignment - 1);
-		}
-
-		void setRedIfNotSupport(const VkBool32 supported, const std::string& featureName) {
-			bool isSupported = static_cast<bool>(supported);
-			if (!supported) {
-				Log("Feature not supported: %s", LogLevel::WARNING, featureName.c_str());
-				isSupported = false;
-			} else {
-				Log("Feature supported: %s", featureName.c_str());
-				isSupported = true;
-			}
-			allFeature.push_back(isSupported);
-		}
-
-		void checkAllFeatures(const VkPhysicalDeviceFeatures& features) {
-			Log("Checking all device features:");
-			setRedIfNotSupport(features.robustBufferAccess, "robustBufferAccess");
-			setRedIfNotSupport(features.fullDrawIndexUint32, "fullDrawIndexUint32");
-			setRedIfNotSupport(features.imageCubeArray, "imageCubeArray");
-			setRedIfNotSupport(features.independentBlend, "independentBlend");
-			setRedIfNotSupport(features.geometryShader, "geometryShader");
-			setRedIfNotSupport(features.tessellationShader, "tessellationShader");
-			setRedIfNotSupport(features.sampleRateShading, "sampleRateShading");
-			setRedIfNotSupport(features.dualSrcBlend, "dualSrcBlend");
-			setRedIfNotSupport(features.logicOp, "logicOp");
-			setRedIfNotSupport(features.multiDrawIndirect, "multiDrawIndirect");
-			setRedIfNotSupport(features.drawIndirectFirstInstance, "drawIndirectFirstInstance");
-			setRedIfNotSupport(features.depthClamp, "depthClamp");
-			setRedIfNotSupport(features.depthBiasClamp, "depthBiasClamp");
-			setRedIfNotSupport(features.fillModeNonSolid, "fillModeNonSolid");
-			setRedIfNotSupport(features.wideLines, "wideLines");
-			setRedIfNotSupport(features.largePoints, "largePoints");
-			setRedIfNotSupport(features.alphaToOne, "alphaToOne");
-			setRedIfNotSupport(features.multiViewport, "multiViewport");
-			setRedIfNotSupport(features.samplerAnisotropy, "samplerAnisotropy");
-			setRedIfNotSupport(features.textureCompressionETC2, "textureCompressionETC2");
-			setRedIfNotSupport(features.textureCompressionASTC_LDR, "textureCompressionASTC_LDR");
-			setRedIfNotSupport(features.textureCompressionBC, "textureCompressionBC");
-			setRedIfNotSupport(features.occlusionQueryPrecise, "occlusionQueryPrecise");
-			setRedIfNotSupport(features.pipelineStatisticsQuery, "pipelineStatisticsQuery");
-			setRedIfNotSupport(features.vertexPipelineStoresAndAtomics, "vertexPipelineStoresAndAtomics");
-			setRedIfNotSupport(features.fragmentStoresAndAtomics, "fragmentStoresAndAtomics");
-			setRedIfNotSupport(features.shaderTessellationAndGeometryPointSize, "shaderTessellationAndGeometryPointSize");
-			setRedIfNotSupport(features.shaderImageGatherExtended, "shaderImageGatherExtended");
-			setRedIfNotSupport(features.shaderStorageImageExtendedFormats, "shaderStorageImageExtendedFormats");
-			setRedIfNotSupport(features.shaderStorageImageMultisample, "shaderStorageImageMultisample");
-			setRedIfNotSupport(features.shaderStorageImageReadWithoutFormat, "shaderStorageImageReadWithoutFormat");
-			setRedIfNotSupport(features.shaderStorageImageWriteWithoutFormat, "shaderStorageImageWriteWithoutFormat");
-			setRedIfNotSupport(features.shaderUniformBufferArrayDynamicIndexing, "shaderUniformBufferArrayDynamicIndexing");
-			setRedIfNotSupport(features.shaderSampledImageArrayDynamicIndexing, "shaderSampledImageArrayDynamicIndexing");
-			setRedIfNotSupport(features.shaderStorageBufferArrayDynamicIndexing, "shaderStorageBufferArrayDynamicIndexing");
-			setRedIfNotSupport(features.shaderStorageImageArrayDynamicIndexing, "shaderStorageImageArrayDynamicIndexing");
-			setRedIfNotSupport(features.shaderClipDistance, "shaderClipDistance");
-			setRedIfNotSupport(features.shaderCullDistance, "shaderCullDistance");
-			setRedIfNotSupport(features.shaderFloat64, "shaderFloat64");
-			setRedIfNotSupport(features.shaderInt64, "shaderInt64");
-			setRedIfNotSupport(features.shaderInt16, "shaderInt16");
-			setRedIfNotSupport(features.shaderResourceResidency, "shaderResourceResidency");
-			setRedIfNotSupport(features.shaderResourceMinLod, "shaderResourceMinLod");
-			setRedIfNotSupport(features.sparseBinding, "sparseBinding");
-			setRedIfNotSupport(features.sparseResidencyBuffer, "sparseResidencyBuffer");
-			setRedIfNotSupport(features.sparseResidencyImage2D, "sparseResidencyImage2D");
-			setRedIfNotSupport(features.sparseResidencyImage3D, "sparseResidencyImage3D");
-			setRedIfNotSupport(features.sparseResidency2Samples, "sparseResidency2Samples");
-			setRedIfNotSupport(features.sparseResidency4Samples, "sparseResidency4Samples");
-			setRedIfNotSupport(features.sparseResidency8Samples, "sparseResidency8Samples");
-			setRedIfNotSupport(features.sparseResidency16Samples, "sparseResidency16Samples");
-			setRedIfNotSupport(features.sparseResidencyAliased, "sparseResidencyAliased");
-			setRedIfNotSupport(features.variableMultisampleRate, "variableMultisampleRate");
-			setRedIfNotSupport(features.inheritedQueries, "inheritedQueries");
-			Log("All features: %i", allFeature.size());
-			Log("Total supported features: %i", LogLevel::SUCCESS, std::count(allFeature.begin(), allFeature.end(), true));
-			Log("Total not supported features: %i", LogLevel::WARNING, std::count(allFeature.begin(), allFeature.end(), false));
-			Log("---------------------------------------------------");
-		}
-	}
+bool fileExists(const std::string &filename) {
+  std::ifstream f(filename.c_str());
+  return !f.fail();
 }
+
+uint32_t alignedSize(uint32_t value, uint32_t alignment) {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+size_t alignedSize(size_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+VkDeviceSize alignedVkSize(VkDeviceSize value, VkDeviceSize alignment) {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+void setRedIfNotSupport(const VkBool32 supported,
+                        const std::string &featureName) {
+  bool isSupported = static_cast<bool>(supported);
+  if (!supported) {
+    Log("Feature not supported: %s", LogLevel::WARNING, featureName.c_str());
+    isSupported = false;
+  } else {
+    Log("Feature supported: %s", featureName.c_str());
+    isSupported = true;
+  }
+  allFeature.push_back(isSupported);
+}
+
+void checkAllFeatures(const VkPhysicalDeviceFeatures &features) {
+  Log("Checking all device features:");
+  setRedIfNotSupport(features.robustBufferAccess, "robustBufferAccess");
+  setRedIfNotSupport(features.fullDrawIndexUint32, "fullDrawIndexUint32");
+  setRedIfNotSupport(features.imageCubeArray, "imageCubeArray");
+  setRedIfNotSupport(features.independentBlend, "independentBlend");
+  setRedIfNotSupport(features.geometryShader, "geometryShader");
+  setRedIfNotSupport(features.tessellationShader, "tessellationShader");
+  setRedIfNotSupport(features.sampleRateShading, "sampleRateShading");
+  setRedIfNotSupport(features.dualSrcBlend, "dualSrcBlend");
+  setRedIfNotSupport(features.logicOp, "logicOp");
+  setRedIfNotSupport(features.multiDrawIndirect, "multiDrawIndirect");
+  setRedIfNotSupport(features.drawIndirectFirstInstance,
+                     "drawIndirectFirstInstance");
+  setRedIfNotSupport(features.depthClamp, "depthClamp");
+  setRedIfNotSupport(features.depthBiasClamp, "depthBiasClamp");
+  setRedIfNotSupport(features.fillModeNonSolid, "fillModeNonSolid");
+  setRedIfNotSupport(features.wideLines, "wideLines");
+  setRedIfNotSupport(features.largePoints, "largePoints");
+  setRedIfNotSupport(features.alphaToOne, "alphaToOne");
+  setRedIfNotSupport(features.multiViewport, "multiViewport");
+  setRedIfNotSupport(features.samplerAnisotropy, "samplerAnisotropy");
+  setRedIfNotSupport(features.textureCompressionETC2, "textureCompressionETC2");
+  setRedIfNotSupport(features.textureCompressionASTC_LDR,
+                     "textureCompressionASTC_LDR");
+  setRedIfNotSupport(features.textureCompressionBC, "textureCompressionBC");
+  setRedIfNotSupport(features.occlusionQueryPrecise, "occlusionQueryPrecise");
+  setRedIfNotSupport(features.pipelineStatisticsQuery,
+                     "pipelineStatisticsQuery");
+  setRedIfNotSupport(features.vertexPipelineStoresAndAtomics,
+                     "vertexPipelineStoresAndAtomics");
+  setRedIfNotSupport(features.fragmentStoresAndAtomics,
+                     "fragmentStoresAndAtomics");
+  setRedIfNotSupport(features.shaderTessellationAndGeometryPointSize,
+                     "shaderTessellationAndGeometryPointSize");
+  setRedIfNotSupport(features.shaderImageGatherExtended,
+                     "shaderImageGatherExtended");
+  setRedIfNotSupport(features.shaderStorageImageExtendedFormats,
+                     "shaderStorageImageExtendedFormats");
+  setRedIfNotSupport(features.shaderStorageImageMultisample,
+                     "shaderStorageImageMultisample");
+  setRedIfNotSupport(features.shaderStorageImageReadWithoutFormat,
+                     "shaderStorageImageReadWithoutFormat");
+  setRedIfNotSupport(features.shaderStorageImageWriteWithoutFormat,
+                     "shaderStorageImageWriteWithoutFormat");
+  setRedIfNotSupport(features.shaderUniformBufferArrayDynamicIndexing,
+                     "shaderUniformBufferArrayDynamicIndexing");
+  setRedIfNotSupport(features.shaderSampledImageArrayDynamicIndexing,
+                     "shaderSampledImageArrayDynamicIndexing");
+  setRedIfNotSupport(features.shaderStorageBufferArrayDynamicIndexing,
+                     "shaderStorageBufferArrayDynamicIndexing");
+  setRedIfNotSupport(features.shaderStorageImageArrayDynamicIndexing,
+                     "shaderStorageImageArrayDynamicIndexing");
+  setRedIfNotSupport(features.shaderClipDistance, "shaderClipDistance");
+  setRedIfNotSupport(features.shaderCullDistance, "shaderCullDistance");
+  setRedIfNotSupport(features.shaderFloat64, "shaderFloat64");
+  setRedIfNotSupport(features.shaderInt64, "shaderInt64");
+  setRedIfNotSupport(features.shaderInt16, "shaderInt16");
+  setRedIfNotSupport(features.shaderResourceResidency,
+                     "shaderResourceResidency");
+  setRedIfNotSupport(features.shaderResourceMinLod, "shaderResourceMinLod");
+  setRedIfNotSupport(features.sparseBinding, "sparseBinding");
+  setRedIfNotSupport(features.sparseResidencyBuffer, "sparseResidencyBuffer");
+  setRedIfNotSupport(features.sparseResidencyImage2D, "sparseResidencyImage2D");
+  setRedIfNotSupport(features.sparseResidencyImage3D, "sparseResidencyImage3D");
+  setRedIfNotSupport(features.sparseResidency2Samples,
+                     "sparseResidency2Samples");
+  setRedIfNotSupport(features.sparseResidency4Samples,
+                     "sparseResidency4Samples");
+  setRedIfNotSupport(features.sparseResidency8Samples,
+                     "sparseResidency8Samples");
+  setRedIfNotSupport(features.sparseResidency16Samples,
+                     "sparseResidency16Samples");
+  setRedIfNotSupport(features.sparseResidencyAliased, "sparseResidencyAliased");
+  setRedIfNotSupport(features.variableMultisampleRate,
+                     "variableMultisampleRate");
+  setRedIfNotSupport(features.inheritedQueries, "inheritedQueries");
+  Log("All features: %i", allFeature.size());
+  Log("Total supported features: %i", LogLevel::SUCCESS,
+      std::count(allFeature.begin(), allFeature.end(), true));
+  Log("Total not supported features: %i", LogLevel::WARNING,
+      std::count(allFeature.begin(), allFeature.end(), false));
+  Log("---------------------------------------------------");
+}
+} // namespace tools
+} // namespace vkhandler

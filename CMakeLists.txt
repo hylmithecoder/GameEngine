@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # Set output directories specifically for library targets
 
+add_subdirectory(test)
 add_subdirectory(src)
 add_subdirectory(include)
 add_subdirectory(vendor)
@@ -41,12 +42,8 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
 set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
@@ -81,21 +78,39 @@ set(GLAD_4
 
 file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
 
-find_package(SDL2 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 find_package(glfw3 REQUIRED)
 find_package(SDL2_ttf REQUIRED)
-find_package(PkgConfig REQUIRED)
-# find_package(Vulkan REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(GLEW REQUIRED)
+find_package(OpenGL REQUIRED)
+find_package(Ktx REQUIRED)
 pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 pkg_check_modules(LIBNOTIFY REQUIRED libnotify)
-# find_package(FFMPEG REQUIRED)
+pkg_check_modules(XCB REQUIRED xcb)
+pkg_check_modules(X11 REQUIRED x11)
+# FFMPEG is usually handled via pkg-config or custom find module
+pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libavutil libswresample libswscale)
+
+link_directories(
+    ${GTK3_LIBRARY_DIRS}
+    ${LIBNOTIFY_LIBRARY_DIRS}
+    ${XCB_LIBRARY_DIRS}
+    ${X11_LIBRARY_DIRS}
+    ${FFMPEG_LIBRARY_DIRS}
+)
+find_package(glm REQUIRED)
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
 add_executable(${PROJECT_NAME} ${HEADERS_MAIN_PROJECT} ${SOURCES} ${GLAD_4} ${IMGUI_SOURCES} ${NFD_LIB})
 # target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
-add_executable(TestBackground ${SOURCE_TEST})
-target_link_options(TestBackground PRIVATE -mconsole)
+add_executable(TestBackground ${SOURCE_TEST} ${GLAD_4} ${IMGUI_SOURCES})
+if(WIN32)
+    target_link_options(TestBackground PRIVATE -mconsole)
+endif()
 
 add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES})
 # target_link_options(TestGLSL PRIVATE -mconsole)
@@ -127,7 +142,7 @@ include_directories(
     include/
 )
 
-add_library(IlmeeeEditor SHARED ${NFD_SOURCES} src/cpp/core_engine/core_editor/IlmeeeEditor.cpp res/IlmeeeEditor.rc ${SOURCES_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
+add_library(IlmeeeEditor SHARED ${NFD_LIB} src/cpp/core_engine/core_editor/IlmeeeEditor.cpp res/IlmeeeEditor.rc ${SOURCES_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
 # target_link_options(IlmeeeEditor PRIVATE -mconsole)
 # Define macro untuk export symbols
 add_definitions(-DILMEEEDITOR_EXPORTS)
@@ -158,14 +173,6 @@ find_package(Vulkan REQUIRED)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
-    # System installed libraries
-    /usr/include/SDL2
-    /usr/include/freetype2
-    /usr/include/stb
-    # /usr/include/ffmpeg
-    /usr/include/glm
-    # /usr/include/GLFW
-    ${GTK3_INCLUDE_DIRS}
     # Project directories
     ${CMAKE_SOURCE_DIR}/vendor/icons
     # Custom/third-party libraries
@@ -173,12 +180,32 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${IMGUI_DIR}/backends
     include/nfd/include
     ${JSON_DIR}
-    # ${STB}
     ${NFD_INCLUDE_DIR}
     ${GLAD_4_DIR}/include
-    
-    # Vulkan
-    /usr/include/vulkan
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    /usr/include/discord
+    /usr/local/include/discord
+)
+
+# Search for Discord Game SDK header in Nix store or standard paths
+find_path(DISCORD_SDK_INCLUDE_DIR discord_game_sdk.h
+    PATHS
+    $ENV{DISCORD_SDK_PATH}/lib/include
+    /usr/include/discord
+    /usr/local/include/discord
+)
+
+if(DISCORD_SDK_INCLUDE_DIR)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${DISCORD_SDK_INCLUDE_DIR})
+endif()
+
+# Find the Discord Game SDK library
+find_library(DISCORD_SDK_LIBRARY discord_game_sdk
+    PATHS
+    $ENV{DISCORD_SDK_PATH}/lib
+    ${DISCORD_SDK_PATH}/lib
+    /usr/lib
+    /usr/local/lib
 )
 
 
@@ -186,8 +213,8 @@ target_include_directories(TestBackground PRIVATE
     # ${SDL2_DIR}/include
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
     # ${FFMPEG_DIR}
     # ${STB}
     ${GLFW}/include
@@ -203,56 +230,38 @@ target_include_directories(TestBackground PRIVATE
 )
 
 target_include_directories(TestGLSL PRIVATE
-    # ${SDL2_DIR}/include
-    /usr/include/SDL2
-    /usr/include/SDL2_ttf
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
-    # ${FFMPEG_DIR}
-    ${NFD}/src/include
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${NFD_INCLUDE_DIR}
     ${JSON_DIR}
-    # ${STB}
-    # ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    # ${GLFW}/include
-    glfw3
-    # ${GLES2}
-    gles2
-    opengl32
-    gdi32
-    /usr/include/GLFW
     ${GLAD_4_DIR}/include
-    # ${VULKAN_DIR}
-    Vulkan
 )
 
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     # ${DLFCN}/src
     ${GTK3_INCLUDE_DIRS}
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
+    ${CMAKE_SOURCE_DIR}/include/core_engine
 )
 
 target_include_directories(IlmeeeEngine PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/core_engine/core>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/core_engine/core>
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
 target_include_directories(IlmeeeEditor PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/core_engine/core_editor>
-    $<BUILD_INTERFACE:/usr/include/SDL2>
-    $<BUILD_INTERFACE:/usr/include/GLFW>
-    $<BUILD_INTERFACE:${GTK3_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/core_engine/core_editor>
     $<BUILD_INTERFACE:${ICON_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/headers/ui>
-    $<BUILD_INTERFACE:${NFD}/src/include>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/ui>
+    $<BUILD_INTERFACE:${NFD_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${JSON_DIR}>
     $<BUILD_INTERFACE:${GLAD_4_DIR}/include>
+    $<BUILD_INTERFACE:${XCB_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${X11_INCLUDE_DIRS}>
     # Install interface paths
     $<INSTALL_INTERFACE:include/core_engine/core_editor>
     $<INSTALL_INTERFACE:include>
@@ -264,42 +273,36 @@ target_include_directories(IlmeeeEditor PUBLIC
 )
 
 target_include_directories(IlmeeeHub PRIVATE
-    # ${SDL2_DIR}/include
     ${ICON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/headers/ui
-    ${CMAKE_SOURCE_DIR}/src/headers/core_engine
-    ${NFD}/src/include
-    /usr/include/winpr3
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${NFD_INCLUDE_DIR}
     ${JSON_DIR}
-    /usr/include/GLFW
-    /usr/include/SDL2
-    opengl32
     ${GLAD_4_DIR}/include
-    # ${VULKAN_DIR}
-    Vulkan
-    /usr/include/stb
+    ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${GLM_INCLUDE_DIRS}
 )
 
 target_include_directories(ViewPort3D PRIVATE
-    /usr/include/stb
-    Vulkan
     ${CMAKE_SOURCE_DIR}/include/core_engine
     ${CMAKE_SOURCE_DIR}/include/vulkan
     ${CMAKE_SOURCE_DIR}/include/audio
-    /usr/include/SDL3
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/include/ui
     ${NFD_INCLUDE_DIR}
-    # if(UNIX)
-        # message("Target system is Unix-like.")
     ${GTK3_INCLUDE_DIRS}
     ${LIBNOTIFY_INCLUDE_DIRS}
-    # endif()
-    # vendor/ktx/include
+    ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${GLM_INCLUDE_DIRS}
 )
+# Removed forced include of xcb/xcb.h as it causes build failures and is already included where needed.
 
 # First, find this section and modify it:
 install(TARGETS IlmeeeEngine
@@ -444,76 +447,71 @@ endif()
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    SDL2
-    SDL2_ttf
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    ${FFMPEG_LIBRARIES}
+    glfw
+    ${GTK3_LIBRARIES}
+    glm::glm
+    dl
+    pthread
+    ${DISCORD_SDK_LIBRARY}
+    curl
+)
+
+target_link_libraries(TestBackground PRIVATE
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    avformat
-    avcodec
-    avutil
-    swresample
-    swscale
-    # glfw
-    ${GTK3_LINK_LIBRARIES}
+    glfw
     dl
     pthread
 )
 
-target_link_libraries(TestBackground PRIVATE
-    OpenGL::GL
-)
-
 target_link_libraries(TestGLSL PRIVATE
-    # ${SDL2_DIR}/lib/x64/SDL2.lib
-    # ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    SDL2
-    SDL2_ttf
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    avformat
-    avcodec
-    avutil
-    swresample
-    swscale
+    ${FFMPEG_LIBRARIES}
     glfw
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
 )
 
 target_link_libraries(ViewPort3D PRIVATE
-    SDL3
+    PkgConfig::SDL3
     Vulkan::Vulkan
-    avformat
-    avcodec
-    avutil
-    swresample
-    swscale
-    ktx
-    # if (UNIX)
+    KTX::ktx
+    ${FFMPEG_LIBRARIES}
     ${GTK3_LIBRARIES}
     ${LIBNOTIFY_LIBRARIES}
-    # endif()
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
+    glm::glm
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
-    # ${DLFCN}/build/lib/libdl.dll.a
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     ${GTK3_LIBRARIES}
-    # msimg32  # For GradientFill
-    # comctl32 # For InitCommonControlsEx
 )
 
 target_link_libraries(IlmeeeHub PRIVATE    
-    SDL2
-    SDL2_ttf
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    avformat
-    avcodec
-    avutil
-    swresample
-    swscale
+    ${FFMPEG_LIBRARIES}
     ${GTK3_LIBRARIES}
+    nfd
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
+    glm::glm
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/build/libnfd.so.1.2.1
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
     ${GTK3_LIBRARIES}
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
 )
