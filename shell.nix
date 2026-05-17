@@ -54,6 +54,7 @@ pkgs.mkShell {
     export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
     export LD_LIBRARY_PATH="${pkgs.vulkan-loader}/lib:${pkgs.lib.makeLibraryPath [ pkgs.libGL pkgs.libGLU pkgs.libnotify pkgs.gtk3 pkgs.discord-gamesdk ]}:$LD_LIBRARY_PATH"
     export DISCORD_SDK_PATH="${pkgs.discord-gamesdk}"
+    export DISCORD_SDK_DEV_PATH="${pkgs.discord-gamesdk.dev}"
     
     echo "=== Game Engine Development Environment ==="
     echo "GCC version: $(gcc --version | head -n1)"

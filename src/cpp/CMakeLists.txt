@@ -31,6 +31,11 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer2D.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Discordrich.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorDockSpace.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorTheme.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/panels/PanelManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/panels/VideoPlayerPanel.cpp
     ${SOURCES_VULKAN}
     PARENT_SCOPE
 )

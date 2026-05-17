@@ -559,7 +559,10 @@ void HandlerProject::HandleRenameFileOrFolder(const AssetFile &node) {
 
 void HandlerProject::DrawFileExplorer(AssetFile &node) {
   static string localPath = "";
-  // ::Log("Drawing File Explorer: " + node.name, Debug::LogLevel::INFO);
+  // `filteredFiles` is rebuilt every frame from disk, so any timing
+  // state on AssetFile itself is wiped each frame — that's why the old
+  // manual double-click detection never fired for folders. Use ImGui's
+  // own double-click timing instead, which lives in IO state.
   ImGui::PushID(node.fullPath.c_str());
 
   float itemWidth = thumbnailSize.x + itemSpacing * 2;
@@ -569,57 +572,29 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
   // Simpan posisi awal
   ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 
-  // InvisibleButton sebagai bounding box klik
-  float currentTime = ImGui::GetTime();
+  ImGui::InvisibleButton("##ItemButton", totalSize);
+  const bool itemHovered = ImGui::IsItemHovered();
 
-  // Periksa apakah ini double-click (hanya jika node yang sama yang diklik
-  // sebelumnya)
-  bool isDoubleClick = false;
-  if (localPath == node.fullPath &&
-      (currentTime - node.lastClickTime) < doubleClickTime) {
-    isDoubleClick = true;
-  }
-
-  if (ImGui::InvisibleButton("##ItemButton", totalSize)) {
-    if (isDoubleClick) {
-      Log("Double-clicked: " + node.name);
-
-      if (node.isDirectory) {
-        Log("Opening folder: " + node.name);
-        currentDirectory = node.fullPath;
-        ::Log("Current Directory changed to: " + currentDirectory,
-              Debug::LogLevel::SUCCESS);
-        // Reset selection setelah pindah folder
-        selectedAsset = nullptr;
-        ShowNotification("Opening folder: " + node.name, "Explorer",
-                         ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-      } else {
-        HandlerOpenFileWithExtensionName(node);
-        Log("Opening file: " + node.name);
-        selectedAsset = const_cast<AssetFile *>(&node);
-        ShowNotification("Opening file: " + node.name, "Explorer",
-                         ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-        if (onFileClicked)
-          onFileClicked(node);
-      }
-
-      // Reset lastClickTime untuk mencegah triple-click
-      node.lastClickTime = 0.0f;
-
-    } else {
-      // Single click - hanya select item, jangan ubah directory
-      Log("Time From Struct AssetFile: " + to_string(node.lastClickTime) +
-              " Time Now: " + to_string(currentTime),
-          LogLevel::SUCCESS);
+  if (itemHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    if (node.isDirectory) {
+      currentDirectory = node.fullPath;
       selectedAsset = nullptr;
-      localPath = node.fullPath;
-      ::Log("Current Directory changed to: " + localPath,
-            Debug::LogLevel::SUCCESS);
-      node.lastClickTime = currentTime;
-
-      ShowNotification("Selected: " + node.name, "Explorer",
+      localPath = "";
+      ::Log("Opened folder: " + currentDirectory, Debug::LogLevel::SUCCESS);
+      ShowNotification("Opening folder: " + node.name, "Explorer",
                        ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+    } else {
+      HandlerOpenFileWithExtensionName(node);
+      selectedAsset = &node;
+      ShowNotification("Opening file: " + node.name, "Explorer",
+                       ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+      if (onFileClicked)
+        onFileClicked(node);
     }
+  } else if (itemHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // Single click selects without leaving the directory.
+    selectedAsset = nullptr;
+    localPath = node.fullPath;
   }
 
   // Highlight jika terpilih

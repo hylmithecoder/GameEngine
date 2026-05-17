@@ -6,9 +6,12 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -141,6 +144,14 @@ bool CheckSystemRequirements() {
 
 // Main application entry point
 int main(int argc, char *argv[]) {
+  // Force line buffering on stdout/stderr so Log output streams to a
+  // parent's pipe (e.g. IlmeeeHub's console) line-by-line instead of
+  // sitting in a 4KB buffer until the process exits. When stdout is a
+  // terminal glibc would line-buffer anyway; this only matters when
+  // launched under Hub.
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);
+  std::setvbuf(stderr, nullptr, _IOLBF, 0);
+
   // Print startup information
   PrintStartupInfo();
 
@@ -153,10 +164,32 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // CLI: `--project <abs_path>` (or `--project=<path>`). When provided,
+  // the editor will auto-open this project. Otherwise the hardcoded
+  // debug scene runs — useful for first-gen UI/render testing without
+  // going through IlmeeeHub.
+  std::string cliProjectPath;
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if (a == "--project" && i + 1 < argc) {
+      cliProjectPath = argv[++i];
+    } else if (a.rfind("--project=", 0) == 0) {
+      cliProjectPath = a.substr(strlen("--project="));
+    }
+  }
+  if (!cliProjectPath.empty()) {
+    Log("CLI project path: " + cliProjectPath, Debug::LogLevel::SUCCESS);
+  } else {
+    Log("No --project supplied; running in standalone debug mode.");
+  }
+
   try {
     // Create application manager
     Log("Creating application manager...");
     g_app = make_unique<ApplicationManager>();
+    if (!cliProjectPath.empty()) {
+      g_app->SetProjectPath(cliProjectPath);
+    }
 
     // Launch engine
     Log("Launching engine...");

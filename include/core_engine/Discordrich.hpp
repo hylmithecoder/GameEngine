@@ -1,8 +1,12 @@
+#pragma once
+
+#include <atomic>
 #include <chrono>
-#include <cstddef>
-#include <curl/curl.h>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
+
 #define DISCORDAPP_IMPLEMENTATION
 #include <discord_game_sdk.h>
 
@@ -18,28 +22,34 @@ public:
   void Shutdown();
 
   void SetActivity(const std::string &details, const std::string &state);
-  void updateDiscordStatus(const std::string &token, const std::string &text);
+
+  void SetAssets(const std::string &largeImage, const std::string &largeText,
+                 const std::string &smallImage = "",
+                 const std::string &smallText = "");
+
+  void ClearActivity();
+
+  bool IsConnected() const { return connected.load(); }
 
 private:
-  std::thread updateThread;
-  bool running = false;
+  void StartUpdateThread();
+  void TryInitSDK();
+  void ApplyPendingActivity();
+  static const char *ResultToString(int result);
 
-  std::string activityTitle;
-  std::string activityDetails;
-  std::string activityState;
-  std::string activityAssetsLargeImage;
-  std::string activityAssetsLargeText;
-  std::string activityAssetsSmallImage;
-  std::string activityAssetsSmallText;
-  std::string activityPartyId;
-  std::string activityPartySize;
-  std::string activityPartyMax;
-  std::string activityPartyType;
-  std::string activitySecretsJoin;
-  std::string activitySecretsSpectate;
-  std::string activitySecretsMatch;
-  std::string activityTimestampsStart;
-  std::string activityTimestampsEnd;
-  std::string activityType;
-  std::string activityInstance;
+  std::thread updateThread;
+  std::atomic<bool> running{false};
+  std::atomic<bool> connected{false};
+
+  std::mutex activityMutex;
+  std::string pendingDetails;
+  std::string pendingState;
+  std::string assetsLargeImage = "logo";
+  std::string assetsLargeText = "Ilmeee Engine";
+  std::string assetsSmallImage;
+  std::string assetsSmallText;
+  bool hasPendingActivity = false;
+
+  std::chrono::system_clock::time_point startTimestamp;
+  std::chrono::steady_clock::time_point lastReconnectAttempt;
 };

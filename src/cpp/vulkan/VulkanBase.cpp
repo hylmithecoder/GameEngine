@@ -78,8 +78,9 @@ void VulkanBase::Run() {
       if (event.type == SDL_EVENT_QUIT) {
         isRunning = false;
       }
-      if (event.type == SDL_EVENT_WINDOW_RESIZED) {
-        RecreateSwapChain();
+      if (event.type == SDL_EVENT_WINDOW_RESIZED ||
+          event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+        framebufferResized = true;
       }
     }
 
@@ -267,7 +268,11 @@ bool VulkanBase::CreateSwapChain() {
                    capabilities.maxImageExtent.height);
   }
 
-  uint32_t imageCount = capabilities.minImageCount + 1;
+  // Target triple-buffering (3 images) bila driver mengizinkan, dengan
+  // floor di minImageCount + 1 supaya tidak block presentation. Penting
+  // bahwa nilai ini stabil antar recreate — ImGui mengasumsikan
+  // ImageCount tidak berubah setelah Init.
+  uint32_t imageCount = std::max<uint32_t>(capabilities.minImageCount + 1, 3);
   if (capabilities.maxImageCount > 0 &&
       imageCount > capabilities.maxImageCount) {
     imageCount = capabilities.maxImageCount;
@@ -455,6 +460,14 @@ bool VulkanBase::InitImGui() {
 }
 
 void VulkanBase::DrawFrame() {
+  // Skip rendering kalau window di-minimize/hide (cth. pindah workspace
+  // di Hyprland/Wayland). Render dengan extent 0 atau surface ter-unmap
+  // bisa bikin descriptor set jadi invalid → crash di driver.
+  Uint64 winFlags = SDL_GetWindowFlags(window);
+  if (winFlags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) {
+    return;
+  }
+
   vkWaitForFences(ctx.device, 1, &inFlightFences[currentFrame], VK_TRUE,
                   UINT64_MAX);
 
@@ -466,7 +479,12 @@ void VulkanBase::DrawFrame() {
   if (result == VK_ERROR_OUT_OF_DATE_KHR) {
     RecreateSwapChain();
     return;
+  } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+    throw std::runtime_error("failed to acquire swap chain image!");
   }
+  // Catatan: kalau result == VK_SUBOPTIMAL_KHR, kita TETAP lanjut submit
+  // & present supaya semaphore yang udah ke-signal nggak menggantung.
+  // Recreate dilakukan setelah present.
 
   vkResetFences(ctx.device, 1, &inFlightFences[currentFrame]);
 
@@ -543,8 +561,12 @@ void VulkanBase::DrawFrame() {
 
   result = vkQueuePresentKHR(ctx.presentQueue, &presentInfo);
 
-  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
+      framebufferResized) {
+    framebufferResized = false;
     RecreateSwapChain();
+  } else if (result != VK_SUCCESS) {
+    throw std::runtime_error("failed to present swap chain image!");
   }
 
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -557,9 +579,11 @@ void VulkanBase::DrawFrame() {
 void VulkanBase::RecreateSwapChain() {
   int w, h;
   SDL_GetWindowSize(window, &w, &h);
-  while (w == 0 || h == 0) {
-    SDL_GetWindowSize(window, &w, &h);
-    SDL_WaitEvent(nullptr);
+  // Skip recreate kalau window punya extent 0 (minimized / hidden).
+  // Jangan loop blocking di sini — biar DrawFrame yang skip frame
+  // sampai window visible lagi. Loop blocking nggak reliable di Wayland.
+  if (w == 0 || h == 0) {
+    return;
   }
 
   vkDeviceWaitIdle(ctx.device);
@@ -569,6 +593,18 @@ void VulkanBase::RecreateSwapChain() {
   CreateSwapChain();
   CreateImageViews();
   CreateFramebuffers();
+
+  // Sengaja TIDAK memanggil ImGui_ImplVulkan_SetMinImageCount() di sini.
+  // Backend ImGui versi yang dipakai project ini IM_ASSERT(0) ketika
+  // count berbeda dari yang dipakai saat Init() (lihat
+  // imgui_impl_vulkan.cpp:1289). Driver/compositor (terutama Wayland)
+  // bisa kasih jumlah image yang berbeda antar resize, jadi memanggil
+  // fungsi itu sama saja minta crash.
+  //
+  // Ring buffer internal ImGui (FrameRenderBuffers) di-alokasi sekali
+  // saat Init pakai ImageCount awal. Selama vkDeviceWaitIdle dipanggil
+  // sebelum recreate (lihat di atas), descriptor ImGui tetap valid;
+  // wrb->Index akan terus berputar di rentang yang sah.
 
   OnResize(w, h);
 }

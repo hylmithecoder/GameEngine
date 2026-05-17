@@ -105,6 +105,7 @@ protected:
   const int MAX_FRAMES_IN_FLIGHT = 2;
 
   bool isRunning = false;
+  bool framebufferResized = false;
   int windowWidth, windowHeight;
 
 private:

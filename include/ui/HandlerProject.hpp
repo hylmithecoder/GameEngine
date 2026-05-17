@@ -8,6 +8,7 @@
 #include "../audio/FFmpegWrapper.hpp"
 #include "../core_engine/SceneSerializer.hpp"
 #include "assets.hpp"
+#include "core_engine/Debugger.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -30,6 +31,7 @@
 #endif
 using namespace std;
 namespace fs = filesystem;
+using namespace Debug;
 
 class VulkanHandler;
 
@@ -111,7 +113,7 @@ public:
     vector<AssetFile> result;
 
     if (!fs::is_directory(path)) {
-      cerr << "Bukan direktori: " << path << endl;
+      // DEBUG_LOGF("Bukan direktori: %s", LogLevel::ERROR, path.c_str());
       return result;
     }
 

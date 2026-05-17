@@ -99,4 +99,13 @@ public:
     void StartNetworkThread();
     void ProcessNetworkMessage(const std::string& message);
     void Shutdown();
+
+    // Set the project path before Initialize() so the editor opens
+    // straight into the given project. When empty (no --project arg),
+    // the editor falls back to its hardcoded debug scene.
+    void SetProjectPath(const std::string& path) { projectPath = path; }
+    const std::string& GetProjectPath() const { return projectPath; }
+
+private:
+    std::string projectPath;
 };

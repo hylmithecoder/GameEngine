@@ -1,5 +1,6 @@
 #include "../core_engine/NetworkManager.hpp"
 #include "../core_engine/SceneRenderer2D.hpp"
+#include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
 #include "IconsFontAwesome6.h"
@@ -76,6 +77,11 @@ public:
 
   SceneRenderer2D *sceneRenderer2D = nullptr;
   HandlerProject projectHandler;
+
+  // Modular editor panels (new architecture). Existing Render*Window
+  // members are still rendered directly; over time they should be
+  // migrated to Panel subclasses and registered here.
+  Ilmeee::PanelManager panelManager;
   TextureData backgroundTexture;
   Color backgroundColor;
   SwrContext *swrContext = nullptr;
@@ -149,7 +155,4 @@ public:
 
   const std::vector<std::string> &getMessages() const { return messages; }
   void ClearMessages();
-  void checkGLError(const char *operation);
-  void updateTextureData(GLuint textureID, int width, int height,
-                         unsigned char *data);
 };

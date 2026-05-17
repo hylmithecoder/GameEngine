@@ -1,53 +1,71 @@
 #include "../../../include/core_engine/Debugger.hpp"
+#include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 void MainWindow::RenderHierarchyWindow() {
   ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
-  // ImVec2 pos = ImGui::GetWindowPos();
-  // ImVec2 size = ImGui::GetWindowSize();
-  // HandleBackground(pos, size);
   ImGuiTreeNodeFlags nodeFlags =
       ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
 
-  if (isLoadScene) {
-    if (ImGui::TreeNodeEx(projectHandler.currentScene.sceneName.c_str(),
-                          nodeFlags)) {
-      for (const auto &obj : projectHandler.currentScene.objects) {
-        projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20,
-                                         20);
-        if (ImGui::TreeNodeEx(obj.name.c_str(), nodeFlags)) {
-          ImGui::TreePop();
-        }
-      }
-      ImGui::TreePop();
-    }
-  } else {
-    struct SceneElement {
-      string name;
-      vector<string> properties;
-    };
+  // Hardcoded scene graph for verification — mirrors the mockup the
+  // user is iterating against. Real-scene wiring (driven by
+  // projectHandler.currentScene) will replace this once the 3D pipeline
+  // settles.
+  struct SceneElement {
+    string name;
+    vector<string> properties;
+  };
+  vector<SceneElement> elements = {{"Main Camera", {"Properties"}},
+                                   {"Player", {"Sprite", "Collider"}},
+                                   {"Enemy", {"AI Controller"}}};
 
-    vector<SceneElement> elements = {{"Main Camera", {"Properties"}},
-                                     {"Player", {"Sprite", "Collider"}},
-                                     {"Enemy", {"AI Controller"}}};
+  if (ImGui::TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
+    projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20, 20);
 
-    if (ImGui::TreeNodeEx("Scene", nodeFlags)) {
-      projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20,
-                                       20);
-      for (const auto &element : elements) {
-        if (ImGui::TreeNodeEx(element.name.c_str(), nodeFlags)) {
-          for (const auto &prop : element.properties) {
-            ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "%s",
-                               prop.c_str());
+    // Surface every loaded 3D mesh as a hierarchy entry so clicking
+    // either here or in the Scene viewport selects the right entity.
+    if (sceneRenderer2D) {
+      for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
+        const std::string &meshName = sceneRenderer2D->GetMesh3DName(i);
+        ImGuiTreeNodeFlags leafFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf;
+        bool selected = (meshName == objectName);
+        if (selected)
+          leafFlags |= ImGuiTreeNodeFlags_Selected;
+        ImGui::PushID((int)i);
+        if (ImGui::TreeNodeEx(meshName.c_str(), leafFlags)) {
+          if (ImGui::IsItemClicked()) {
+            std::snprintf(objectName, sizeof(objectName), "%s",
+                          meshName.c_str());
           }
           ImGui::TreePop();
         }
+        ImGui::PopID();
       }
-      ImGui::TreePop();
     }
+
+    for (const auto &element : elements) {
+      bool selected = std::string(objectName) == element.name;
+      ImGuiTreeNodeFlags rowFlags = nodeFlags;
+      if (selected)
+        rowFlags |= ImGuiTreeNodeFlags_Selected;
+      if (ImGui::TreeNodeEx(element.name.c_str(), rowFlags)) {
+        if (ImGui::IsItemClicked()) {
+          std::snprintf(objectName, sizeof(objectName), "%s",
+                        element.name.c_str());
+        }
+        for (const auto &prop : element.properties) {
+          ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "%s",
+                             prop.c_str());
+        }
+        ImGui::TreePop();
+      }
+    }
+    ImGui::TreePop();
   }
   ImGui::End();
 }
@@ -244,10 +262,64 @@ void MainWindow::RenderInspectorWindow() {
   // else {
   ImGui::InputText("Name", objectName, IM_ARRAYSIZE(objectName));
 
+  // Find which loaded mesh (if any) corresponds to the selected name.
+  int meshIdx = -1;
+  if (sceneRenderer2D) {
+    for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
+      if (sceneRenderer2D->GetMesh3DName(i) == objectName) {
+        meshIdx = (int)i;
+        break;
+      }
+    }
+  }
+  const bool meshSelected = meshIdx >= 0;
+
+  if (meshSelected) {
+    glm::vec3 p = sceneRenderer2D->GetMesh3DPosition((size_t)meshIdx);
+    glm::vec3 r = sceneRenderer2D->GetMesh3DRotation((size_t)meshIdx);
+    glm::vec3 s = sceneRenderer2D->GetMesh3DScale((size_t)meshIdx);
+    position[0] = p.x;
+    position[1] = p.y;
+    position[2] = p.z;
+    rotation[0] = r.x;
+    rotation[1] = r.y;
+    rotation[2] = r.z;
+    scale[0] = s.x;
+    scale[1] = s.y;
+    scale[2] = s.z;
+  }
+
   if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::DragFloat3("Position", position, 0.1f);
-    ImGui::DragFloat3("Rotation", rotation, 0.1f);
-    ImGui::DragFloat3("Scale", scale, 0.1f);
+    bool changed = false;
+    changed |= ImGui::DragFloat3("Position", position, 0.02f);
+    changed |= ImGui::DragFloat3("Rotation", rotation, 0.5f);
+    changed |= ImGui::DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
+    if (meshSelected && changed) {
+      sceneRenderer2D->SetMesh3DTransform(
+          (size_t)meshIdx, glm::vec3(position[0], position[1], position[2]),
+          glm::vec3(rotation[0], rotation[1], rotation[2]),
+          glm::vec3(scale[0], scale[1], scale[2]));
+    }
+  }
+
+  // Mesh section: shown for any mesh selected by name.
+  if (meshSelected) {
+    if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::Text("Path: %s",
+                  sceneRenderer2D->GetMesh3DPath((size_t)meshIdx).c_str());
+      ImGui::Text("Vertices: %u",
+                  sceneRenderer2D->GetMesh3DVertexCount((size_t)meshIdx));
+      ImGui::Text("Triangles: %u",
+                  sceneRenderer2D->GetMesh3DTriangleCount((size_t)meshIdx));
+      static bool s_gridVisible = true;
+      if (ImGui::Checkbox("Show 3D Grid", &s_gridVisible)) {
+        sceneRenderer2D->SetGrid3DVisible(s_gridVisible);
+      }
+      if (ImGui::Button("Reset Transform")) {
+        sceneRenderer2D->SetMesh3DTransform((size_t)meshIdx, glm::vec3(0.0f),
+                                            glm::vec3(0.0f), glm::vec3(1.0f));
+      }
+    }
   }
 
   if (ImGui::CollapsingHeader("Material")) {
@@ -264,16 +336,23 @@ void MainWindow::RenderInspectorWindow() {
     ImGui::SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
   }
 
-  if (ImGui::CollapsingHeader("Physics")) {
+  if (ImGui::CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Defaults: gravity on, kinematic off, mass 1, drag 0 — Unity-ish
+    // sensible defaults so a freshly-added object falls under gravity
+    // unless explicitly held static.
     static bool useGravity = true;
     static bool isKinematic = false;
     static float mass = 1.0f;
     static float drag = 0.0f;
+    static float gravityY = -9.81f;
 
     ImGui::Checkbox("Use Gravity", &useGravity);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(default)");
     ImGui::Checkbox("Is Kinematic", &isKinematic);
     ImGui::InputFloat("Mass", &mass, 0.1f);
     ImGui::InputFloat("Drag", &drag, 0.01f);
+    ImGui::InputFloat("Gravity Y", &gravityY, 0.1f);
   }
 
   if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
@@ -481,15 +560,139 @@ void MainWindow::RenderSceneWindow() {
     ImVec2 windowSize = ImGui::GetWindowSize();
     ImVec2 contentSize = ImGui::GetContentRegionAvail();
 
+    // First-frame scene bootstrap. Two modes:
+    //   - Standalone debug (no project loaded): keep the Yixuan
+    //     hardcoded fallback so the engine boots into something
+    //     visible without needing a project.
+    //   - Project mode (projectPath set): obey the project's
+    //     scenes/main.ilmeeescene blueprint. Auto-create it with a
+    //     single Cube if missing so a fresh project still renders.
+    static std::string s_loadedForProject = "<none>";
+    const std::string activeProject = projectHandler.projectPath;
+    const std::string desired =
+        activeProject.empty() ? "<standalone>" : activeProject;
+    if (s_loadedForProject != desired) {
+      sceneRenderer2D->ClearMeshes3D();
+
+      if (activeProject.empty()) {
+        // Standalone fallback (intentional — kept so engineers can
+        // boot GameEngineSDL directly for first-gen debugging).
+        if (sceneRenderer2D->LoadObjMesh("assets/3dmodels/yixuan.obj")) {
+          s_loadedForProject = desired;
+        }
+      } else {
+        namespace fs = std::filesystem;
+        fs::path scenesDir = fs::path(activeProject) / "scenes";
+        std::error_code ec;
+        fs::create_directories(scenesDir, ec);
+        fs::path mainScene = scenesDir / "main.ilmeeescene";
+
+        ilmeee::IlmeeeScene scene;
+        if (!ilmeee::LoadScene(mainScene.string(), scene)) {
+          scene = ilmeee::DefaultScene();
+          ilmeee::SaveScene(mainScene.string(), scene);
+          ::Log("Created default scene at " + mainScene.string(),
+                Debug::LogLevel::SUCCESS);
+        } else {
+          ::Log("Loaded scene " + mainScene.string(), Debug::LogLevel::SUCCESS);
+        }
+
+        for (const auto &e : scene.entities) {
+          bool ok = false;
+          switch (e.kind) {
+          case ilmeee::PrimitiveKind::Cube:
+            ok = sceneRenderer2D->LoadCube(e.name);
+            break;
+          case ilmeee::PrimitiveKind::Sphere:
+            ok = sceneRenderer2D->LoadSphere(e.name);
+            break;
+          case ilmeee::PrimitiveKind::Plane:
+            ok = sceneRenderer2D->LoadPlane(e.name);
+            break;
+          case ilmeee::PrimitiveKind::ExternalObj: {
+            fs::path full = fs::path(activeProject) / e.externalPath;
+            ok = sceneRenderer2D->LoadObjMesh(full.string());
+            break;
+          }
+          }
+          if (ok) {
+            size_t idx = sceneRenderer2D->GetMesh3DCount() - 1;
+            sceneRenderer2D->SetMesh3DTransform(idx, e.position,
+                                                e.rotationEuler, e.scale);
+          }
+        }
+        s_loadedForProject = desired;
+      }
+    }
+
+    // Resize the offscreen target to match the panel so the 3D viewport
+    // fills the entire window without letterboxing.
+    if (contentSize.x > 0 && contentSize.y > 0) {
+      sceneRenderer2D->SetViewportSize((int)contentSize.x, (int)contentSize.y);
+    }
+
+    // Gather one-frame input for the 3D camera. Only feed it when the
+    // panel is hovered so editor shortcuts elsewhere keep working.
+    SceneRenderer2D::ViewportInput vpIn;
+    vpIn.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+    ImGuiIO &io = ImGui::GetIO();
+    vpIn.deltaTime = io.DeltaTime > 0.0f ? io.DeltaTime : 1.0f / 60.0f;
+    vpIn.rmbDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    ImVec2 dragDelta = io.MouseDelta;
+    vpIn.mouseDeltaX = dragDelta.x;
+    vpIn.mouseDeltaY = dragDelta.y;
+    vpIn.scroll = io.MouseWheel;
+    if (vpIn.hovered) {
+      vpIn.wDown = ImGui::IsKeyDown(ImGuiKey_W);
+      vpIn.aDown = ImGui::IsKeyDown(ImGuiKey_A);
+      vpIn.sDown = ImGui::IsKeyDown(ImGuiKey_S);
+      vpIn.dDown = ImGui::IsKeyDown(ImGuiKey_D);
+      vpIn.qDown = ImGui::IsKeyDown(ImGuiKey_Q);
+      vpIn.eDown = ImGui::IsKeyDown(ImGuiKey_E);
+      vpIn.shiftDown = ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
+                       ImGui::IsKeyDown(ImGuiKey_RightShift);
+    }
+    sceneRenderer2D->UpdateCamera3D(vpIn);
+
     // Render scene dengan ukuran penuh
     sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
 
-    // Dapatkan texture ID dari scene renderer
-    // ImTextureID sceneTexture =
-    // (ImTextureID)(intptr_t)sceneRenderer2D->GetSceneTextureID();
-
-    // Render texture dengan ukuran penuh
-    // ImGui::Image(sceneTexture, contentSize, ImVec2(0, 1), ImVec2(1, 0));
+    // Tampilkan offscreen image di panel. Y dibalik (ImVec2(0,1)→(1,0))
+    // karena framebuffer Vulkan top-left origin sedangkan ImGui sample
+    // bottom-up; tanpa flip, segitiga terbalik vertikal.
+    VkDescriptorSet sceneDesc = sceneRenderer2D->GetViewportDescriptorSet();
+    if (sceneDesc != VK_NULL_HANDLE && contentSize.x > 0 && contentSize.y > 0) {
+      ImGui::Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1),
+                   ImVec2(1, 0));
+      // LMB click on the viewport selects the first 3D mesh as a
+      // hardcoded fallback until proper ray-picking lands. Populates
+      // the Inspector Name field and highlights the matching Hierarchy
+      // row by name match.
+      if (ImGui::IsItemClicked(ImGuiMouseButton_Left) &&
+          sceneRenderer2D->HasMesh3D()) {
+        const std::string &firstName = sceneRenderer2D->GetMesh3DName(0);
+        std::snprintf(objectName, sizeof(objectName), "%s", firstName.c_str());
+      }
+      // LMB drag → move the currently-selected mesh in screen plane.
+      int selIdx = -1;
+      for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
+        if (sceneRenderer2D->GetMesh3DName(i) == objectName) {
+          selIdx = (int)i;
+          break;
+        }
+      }
+      const bool dragging = ImGui::IsItemHovered() &&
+                            ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+                            !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+                            selIdx >= 0;
+      if (dragging) {
+        ImVec2 md = ImGui::GetIO().MouseDelta;
+        if (md.x != 0.0f || md.y != 0.0f) {
+          sceneRenderer2D->DragMesh3DScreen((size_t)selIdx, md.x, md.y,
+                                            (int)contentSize.y);
+        }
+      }
+    }
 
     // Render toolbar di atas viewport
     RenderSceneToolbarView(windowPos, windowSize);

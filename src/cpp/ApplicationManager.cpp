@@ -35,6 +35,15 @@ bool ApplicationManager::Initialize() {
       return false;
     }
 
+    // If a project path was passed in (typically from IlmeeeHub via
+    // --project), open it now so the editor starts directly in-context.
+    // When unset, the editor keeps its hardcoded debug behavior — useful
+    // when running GameEngineSDL directly without going through Hub.
+    if (!projectPath.empty()) {
+      ::Log("Auto-opening project: " + projectPath, Debug::LogLevel::SUCCESS);
+      window->projectHandler.OpenProject(projectPath.c_str());
+    }
+
     if (discordRich) {
       discordRich->Init();
     }
@@ -151,13 +160,37 @@ void ApplicationManager::Run() {
 }
 
 void ApplicationManager::Shutdown() {
-  if (!isRunning)
+  // Dipanggil dua kali — sekali eksplisit (dari main / akhir Run),
+  // sekali implisit dari ~ApplicationManager. Idempoten via static
+  // flag (asumsi: hanya satu ApplicationManager per proses, yang
+  // dijaga oleh g_app unique_ptr di main.cpp).
+  // Tetap memproses cleanup walau isRunning==false, supaya thread &
+  // resource yang sempat dibuat saat init gagal di tengah jalan tetap
+  // di-tear-down dengan benar.
+  static bool shutdownDone = false;
+  if (shutdownDone)
     return;
+  shutdownDone = true;
 
-  networkManager->sendMessage("Stop");
   ::Log("Starting application shutdown...");
+
+  if (networkManager && isRunning) {
+    try {
+      networkManager->sendMessage("Stop");
+    } catch (...) {
+      // sendMessage bisa throw kalau peer sudah disconnect; jangan
+      // halangi shutdown.
+    }
+  }
   isRunning = false;
   shouldExit = true;
+
+  // Discord update thread harus di-join sebelum unique_ptr destroy
+  // DiscordRichPresence, kalau tidak destruktor std::thread bawaan
+  // panggil std::terminate.
+  if (discordRich) {
+    discordRich->Shutdown();
+  }
 
   CleanupNetwork();
   CleanupEngine();
@@ -170,8 +203,19 @@ void ApplicationManager::CleanupNetwork() {
   networkThreadRunning = false;
   if (networkThread.joinable())
     networkThread.join();
-  if (networkManager)
+
+  if (networkManager) {
+    // Penting: panggil stop() supaya listenThread_ & receiveThread_
+    // internal NetworkManager di-join. Tanpa ini, ~NetworkManager
+    // (default-generated) menghancurkan std::thread yang masih
+    // joinable → std::terminate → crash di shutdown.
+    try {
+      networkManager->stop();
+    } catch (...) {
+      // best-effort; lanjut destroy walaupun gagal
+    }
     networkManager.reset();
+  }
 }
 
 void ApplicationManager::CleanupEngine() {

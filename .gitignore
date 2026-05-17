@@ -18,6 +18,8 @@
 *.lo
 *.o
 *.obj
+!assets/3models/**/*.obj
+!assets/3models/*.obj
 
 # Compiled Dynamic libraries
 *.so
@@ -52,4 +54,6 @@ Thumbs.db
 
 /.cache
 /.agent
+
+*.*.mcp_bak
 references/

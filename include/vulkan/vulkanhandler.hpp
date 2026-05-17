@@ -67,16 +67,26 @@ public:
   void updateAudio();
   void updateBothVideoAndAudio();
   void updateBothVideoAndAudio24fps();
+
+  // Seek to a specific absolute position in seconds. Clamped to
+  // [0, duration]. Flushes decoder + audio queue so playback resumes
+  // at the new position. Returns false if no video is loaded or the
+  // demuxer rejected the seek.
+  bool SeekTo(double seconds);
   void setAndUpdateWidthAndHeight(int width, int height) {
     this->width = width;
     this->height = height;
   };
 
-  bool isOnlyRenderImage, isOnlyAudio;
-  uint32_t width, height;
+  bool isOnlyRenderImage = false, isOnlyAudio = false;
+  uint32_t width = 0, height = 0;
   AVFormatContext *formatContext = nullptr;
   int videoStream = -1;
-  double currentTime, duration, fps = 0.0;
+  // All three were previously uninitialized — duration read as garbage
+  // crashed ImGui's slider assert (NaN/inf out of FLT_MAX/2 range).
+  double currentTime = 0.0;
+  double duration = 0.0;
+  double fps = 0.0;
   AVCodecContext *audioCodecContext = nullptr;
 
   VkPhysicalDeviceMemoryProperties deviceMemoryProperties{};
@@ -120,16 +130,19 @@ protected:
   VkPhysicalDeviceMemoryProperties currentMemoryProperties{};
 
 private:
-  // Video texture variables for Vulkan
-  VkImage videoImage;
-  VkDeviceMemory videoImageMemory;
-  VkImageView videoImageView;
-  VkSampler videoSampler;
-  VkDescriptorSet videoDescriptorSet;
+  // Video texture variables for Vulkan. Initialized to VK_NULL_HANDLE
+  // explicitly — getVideoDescriptorSet() is called from the UI every
+  // frame and previously returned garbage when no video was loaded,
+  // causing the Mesa anv driver to crash at descriptor bind time.
+  VkImage videoImage = VK_NULL_HANDLE;
+  VkDeviceMemory videoImageMemory = VK_NULL_HANDLE;
+  VkImageView videoImageView = VK_NULL_HANDLE;
+  VkSampler videoSampler = VK_NULL_HANDLE;
+  VkDescriptorSet videoDescriptorSet = VK_NULL_HANDLE;
 
   // Buffer for staging texture data
-  VkBuffer stagingBuffer;
-  VkDeviceMemory stagingBufferMemory;
+  VkBuffer stagingBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
 
   // FFmpeg variable
   bool isPlayingAudio = false;

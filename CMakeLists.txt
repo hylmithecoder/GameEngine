@@ -91,8 +91,13 @@ pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 pkg_check_modules(LIBNOTIFY REQUIRED libnotify)
 pkg_check_modules(XCB REQUIRED xcb)
 pkg_check_modules(X11 REQUIRED x11)
+
 # FFMPEG is usually handled via pkg-config or custom find module
 pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libavutil libswresample libswscale)
+
+# Find stb headers
+find_path(STB_INCLUDE_DIRS NAMES stb/stb_image.h REQUIRED)
+
 
 link_directories(
     ${GTK3_LIBRARY_DIRS}
@@ -125,7 +130,16 @@ target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 add_executable(HandlerIlmeeeEngine ${SOURCE_HANDLER})
 # target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
-add_executable(IlmeeeHub src/cpp/Hub.cpp res/resources.rc ${NFD_LIB} ${IMGUI_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
+add_executable(IlmeeeHub
+    src/cpp/Hub.cpp
+    res/resources.rc
+    ${NFD_LIB}
+    ${IMGUI_SOURCES}
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${ICON_SOURCE}
+    ${JSON}
+    ${GLAD_4}
+)
 # target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
 set_target_properties(IlmeeeEngine PROPERTIES
@@ -183,6 +197,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${NFD_INCLUDE_DIR}
     ${GLAD_4_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    ${XCB_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${STB_INCLUDE_DIRS}
     /usr/include/discord
     /usr/local/include/discord
 )
@@ -190,7 +208,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # Search for Discord Game SDK header in Nix store or standard paths
 find_path(DISCORD_SDK_INCLUDE_DIR discord_game_sdk.h
     PATHS
+    $ENV{DISCORD_SDK_DEV_PATH}/lib/include
     $ENV{DISCORD_SDK_PATH}/lib/include
+    $ENV{DISCORD_SDK_PATH}/include
     /usr/include/discord
     /usr/local/include/discord
 )
@@ -200,13 +220,24 @@ if(DISCORD_SDK_INCLUDE_DIR)
 endif()
 
 # Find the Discord Game SDK library
-find_library(DISCORD_SDK_LIBRARY discord_game_sdk
+find_library(DISCORD_SDK_LIBRARY NAMES discord_game_sdk discord_game_sdk.so
     PATHS
     $ENV{DISCORD_SDK_PATH}/lib
-    ${DISCORD_SDK_PATH}/lib
     /usr/lib
     /usr/local/lib
 )
+
+if(DISCORD_SDK_LIBRARY AND NOT TARGET discord-gamesdk)
+    add_library(discord-gamesdk SHARED IMPORTED)
+    set_target_properties(discord-gamesdk PROPERTIES
+        IMPORTED_LOCATION "${DISCORD_SDK_LIBRARY}"
+    )
+    if(DISCORD_SDK_INCLUDE_DIR)
+        set_target_properties(discord-gamesdk PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${DISCORD_SDK_INCLUDE_DIR}"
+        )
+    endif()
+endif()
 
 
 target_include_directories(TestBackground PRIVATE
@@ -456,7 +487,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glm::glm
     dl
     pthread
-    ${DISCORD_SDK_LIBRARY}
+    discord-gamesdk
     curl
 )
 
@@ -495,16 +526,17 @@ target_link_libraries(HandlerIlmeeeEngine PRIVATE
     ${GTK3_LIBRARIES}
 )
 
-target_link_libraries(IlmeeeHub PRIVATE    
+target_link_libraries(IlmeeeHub PRIVATE
     PkgConfig::SDL3
     Vulkan::Vulkan
     OpenGL::GL
     ${FFMPEG_LIBRARIES}
     ${GTK3_LIBRARIES}
-    nfd
     ${XCB_LIBRARIES}
     ${X11_LIBRARIES}
     glm::glm
+    dl
+    pthread
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE

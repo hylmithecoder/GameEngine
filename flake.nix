@@ -58,6 +58,7 @@
             nlohmann_json
             sqlite
             discord-gamesdk
+            discord-gamesdk.dev
             curl
           ];
 
@@ -73,6 +74,7 @@
             
             # Set path to discord sdk for CMake
             export DISCORD_SDK_PATH="${pkgs.discord-gamesdk}"
+            export DISCORD_SDK_DEV_PATH="${pkgs.discord-gamesdk.dev}"
 
             echo "=== Ilmee Engine Flake Environment ==="
             echo "GCC version: $(gcc --version | head -n1)"

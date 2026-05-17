@@ -1,6 +1,9 @@
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/audio/FFmpegWrapper.hpp"
 #include "../../../include/core_engine/Debugger.hpp"
+#include "../../../include/core_engine/core_editor/EditorDockSpace.hpp"
+#include "../../../include/core_engine/core_editor/EditorTheme.hpp"
+#include "../../../include/core_engine/core_editor/panels/VideoPlayerPanel.hpp"
 #include "../../../include/ui/SecondaryWindow.hpp"
 #include "../../../include/ui/assets.hpp"
 #include <SDL3/SDL.h>
@@ -38,7 +41,8 @@ void MainWindow::OnInit() {
   string fontPath = "assets/fonts/zh-cn.ttf";
   io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 13.0f);
 
-  setTheme(darkTheme);
+  Ilmeee::EditorTheme::Apply(darkTheme ? Ilmeee::EditorTheme::Variant::Dark
+                                       : Ilmeee::EditorTheme::Variant::Light);
 
   sceneRenderer2D = new SceneRenderer2D(800, 600);
   sceneRenderer2D->SetVulkanContext(ctx.device, ctx.physicalDevice,
@@ -63,6 +67,11 @@ void MainWindow::OnInit() {
   projectHandler.fileChangesDetected = false;
   projectHandler.StartFileWatcher();
 
+  // Modular panels — VideoPlayerPanel now owns its own ImGui window
+  // (transport + seek bar + frame), replacing the old monolithic
+  // renderVideoPlayer() implementation.
+  panelManager.Register<Ilmeee::VideoPlayerPanel>(&vulkanHandler);
+
   ::Log("MainWindow::OnInit - Completed");
 }
 
@@ -77,7 +86,12 @@ void MainWindow::OnUpdate(float deltaTime) {
 }
 
 void MainWindow::OnRender(VkCommandBuffer cmd) {
+  // Fullscreen dockspace wraps every panel below. RenderMenuBar() must
+  // stay outside the host window so the OS-style menubar sits at the
+  // top of the actual main viewport, not inside a docked window.
   RenderMenuBar();
+
+  Ilmeee::EditorDockSpace::Begin();
 
   if (showMainView)
     RenderMainViewWindow();
@@ -94,9 +108,11 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
   if (showConsole)
     RenderConsoleWindow();
 
-  // if (videoPlayer && videoPlayer->isPlaying) {
-  renderVideoPlayer();
-  // }
+  // Modular panels (e.g. VideoPlayerPanel). Each panel renders into
+  // its own ImGui window via PanelManager — dockable like the rest.
+  panelManager.RenderAll();
+
+  Ilmeee::EditorDockSpace::End();
 }
 
 void MainWindow::OnCleanup() {
@@ -1206,63 +1222,4 @@ void MainWindow::renderVideoFrame() {
   } else {
     ui::Text("Failed to render video frame.");
   }
-}
-
-void MainWindow::checkGLError(const char *operation) {
-  GLenum error = glGetError();
-  if (error != GL_NO_ERROR) {
-    cout << "OpenGL Error after " << operation << ": " << error;
-    switch (error) {
-    case GL_INVALID_ENUM:
-      cout << " (GL_INVALID_ENUM)";
-      break;
-    case GL_INVALID_VALUE:
-      cout << " (GL_INVALID_VALUE)";
-      break;
-    case GL_INVALID_OPERATION:
-      cout << " (GL_INVALID_OPERATION)";
-      break;
-    case GL_OUT_OF_MEMORY:
-      cout << " (GL_OUT_OF_MEMORY)";
-      break;
-    default:
-      cout << " (UNKNOWN)";
-      break;
-    }
-    cout << endl;
-  }
-}
-
-void MainWindow::updateTextureData(GLuint textureID, int width, int height,
-                                   unsigned char *data) {
-  // Clear errors
-  while (glGetError() != GL_NO_ERROR) {
-  }
-
-  cout << "Updating texture " << textureID << " with size " << width << "x"
-       << height << endl;
-
-  glBindTexture(GL_TEXTURE_2D, textureID);
-  checkGLError("bind texture for update");
-
-  // Pastikan parameter texture benar
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  checkGLError("set texture parameters");
-
-  // Upload data - pastikan format benar
-  // Untuk RGB data:
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
-               GL_UNSIGNED_BYTE, data);
-  // Atau untuk RGBA data:
-  // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
-  // GL_UNSIGNED_BYTE, data);
-  checkGLError("upload texture data");
-
-  glBindTexture(GL_TEXTURE_2D, 0);
-  checkGLError("unbind texture after update");
-
-  cout << "Texture update completed" << endl;
 }

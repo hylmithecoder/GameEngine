@@ -1335,3 +1335,39 @@ VulkanHandler::loadShader(const char *fileName, VkShaderStageFlagBits stage) {
   }
   return shaderStage;
 }
+
+bool VulkanHandler::SeekTo(double seconds) {
+  if (!formatContext || videoStream < 0) {
+    Log("[VulkanHandler] SeekTo ignored: no video loaded", LogLevel::WARNING);
+    return false;
+  }
+
+  if (seconds < 0.0)
+    seconds = 0.0;
+  if (duration > 0.0 && seconds > duration)
+    seconds = duration;
+
+  const int64_t target =
+      static_cast<int64_t>(seconds * static_cast<double>(AV_TIME_BASE));
+
+  int r = av_seek_frame(formatContext, -1, target, AVSEEK_FLAG_BACKWARD);
+  if (r < 0) {
+    char errbuf[256];
+    av_strerror(r, errbuf, sizeof(errbuf));
+    Log(std::string("[VulkanHandler] av_seek_frame failed: ") + errbuf,
+        LogLevel::WARNING);
+    return false;
+  }
+
+  if (codecContext)
+    avcodec_flush_buffers(codecContext);
+  if (audioCodecContext)
+    avcodec_flush_buffers(audioCodecContext);
+  if (audioStream)
+    SDL_ClearAudioStream(audioStream);
+
+  currentTime = seconds;
+  Log(std::string("[VulkanHandler] Seek to ") + std::to_string(seconds) + "s",
+      LogLevel::INFO);
+  return true;
+}
