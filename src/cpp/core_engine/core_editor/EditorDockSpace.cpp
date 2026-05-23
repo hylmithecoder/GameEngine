@@ -15,14 +15,11 @@ void EditorDockSpace::Begin(const char *dockspaceId) {
   ImGui::SetNextWindowSize(viewport->WorkSize);
   ImGui::SetNextWindowViewport(viewport->ID);
 
-  ImGuiWindowFlags hostFlags = ImGuiWindowFlags_NoTitleBar |
-                               ImGuiWindowFlags_NoCollapse |
-                               ImGuiWindowFlags_NoResize |
-                               ImGuiWindowFlags_NoMove |
-                               ImGuiWindowFlags_NoBringToFrontOnFocus |
-                               ImGuiWindowFlags_NoNavFocus |
-                               ImGuiWindowFlags_NoDocking |
-                               ImGuiWindowFlags_NoBackground;
+  ImGuiWindowFlags hostFlags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground;
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -52,7 +49,8 @@ void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
 
   ImGui::DockBuilderRemoveNode(dockspaceId);
   ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-  ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+  ImGui::DockBuilderSetNodeSize(dockspaceId,
+                                ImGui::GetMainViewport()->WorkSize);
 
   // Symmetric side panels — same ratio left/right keeps the center
   // viewport balanced. Bottom row split into 60/40 so video player /

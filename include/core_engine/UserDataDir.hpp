@@ -36,6 +36,18 @@ inline std::string HomeDirectory() {
 #endif
 }
 
+// User-specified .ilmeee directory for layout settings and legacy
+// configurations.
+inline std::filesystem::path IlmeeeDir() {
+  std::string home = HomeDirectory();
+  std::filesystem::path root =
+      home.empty() ? std::filesystem::temp_directory_path() / "ilmeee"
+                   : std::filesystem::path(home) / ".ilmeee";
+  std::error_code ec;
+  std::filesystem::create_directories(root, ec);
+  return root;
+}
+
 // Root of all Ilmeee user data. Created on first call.
 inline std::filesystem::path UserDataRoot() {
   std::string home = HomeDirectory();
@@ -50,7 +62,8 @@ inline std::filesystem::path UserDataRoot() {
 // Subdirectory for a specific project's transient data. The project
 // path is hashed into a stable slug so a moved project doesn't collide
 // with the original on disk.
-inline std::filesystem::path ProjectScratchDir(const std::string &projectAbsPath) {
+inline std::filesystem::path
+ProjectScratchDir(const std::string &projectAbsPath) {
   // Lightweight FNV-1a hash so we don't pull in <openssl>/<crypto>.
   uint64_t h = 1469598103934665603ull;
   for (unsigned char c : projectAbsPath) {

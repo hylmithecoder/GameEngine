@@ -44,10 +44,10 @@ void MainWindow::OnInit() {
   Ilmeee::EditorTheme::Apply(darkTheme ? Ilmeee::EditorTheme::Variant::Dark
                                        : Ilmeee::EditorTheme::Variant::Light);
 
-  sceneRenderer2D = new SceneRenderer2D(800, 600);
-  sceneRenderer2D->SetVulkanContext(ctx.device, ctx.physicalDevice,
-                                    ctx.graphicsQueue, ctx.commandPool,
-                                    ctx.descriptorPool);
+  sceneRenderer = new SceneRenderer(800, 600);
+  sceneRenderer->SetVulkanContext(ctx.device, ctx.physicalDevice,
+                                  ctx.graphicsQueue, ctx.commandPool,
+                                  ctx.descriptorPool);
 
   // Initialize VulkanHandler with the context
   VkPhysicalDeviceMemoryProperties memProperties;
@@ -86,6 +86,11 @@ void MainWindow::OnUpdate(float deltaTime) {
 }
 
 void MainWindow::OnRender(VkCommandBuffer cmd) {
+  // Check for Ctrl+S keyboard shortcut
+  if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+    Save3DScene();
+  }
+
   // Fullscreen dockspace wraps every panel below. RenderMenuBar() must
   // stay outside the host window so the OS-style menubar sits at the
   // top of the actual main viewport, not inside a docked window.
@@ -119,9 +124,9 @@ void MainWindow::OnCleanup() {
   ::Log("MainWindow::OnCleanup");
   projectHandler.StopFileWatcher();
 
-  if (sceneRenderer2D) {
-    delete sceneRenderer2D;
-    sceneRenderer2D = nullptr;
+  if (sceneRenderer) {
+    delete sceneRenderer;
+    sceneRenderer = nullptr;
   }
 
   if (sdlAudioStream) {
@@ -131,8 +136,8 @@ void MainWindow::OnCleanup() {
 }
 
 void MainWindow::OnResize(int width, int height) {
-  if (sceneRenderer2D) {
-    sceneRenderer2D->SetViewportSize(width, height);
+  if (sceneRenderer) {
+    sceneRenderer->SetViewportSize(width, height);
   }
 }
 

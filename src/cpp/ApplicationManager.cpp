@@ -35,6 +35,10 @@ bool ApplicationManager::Initialize() {
       return false;
     }
 
+    // Propagate the standalone-debug fallback selector before opening
+    // any project. Only consumed when projectPath is empty.
+    window->debug2D = debug2D;
+
     // If a project path was passed in (typically from IlmeeeHub via
     // --project), open it now so the editor starts directly in-context.
     // When unset, the editor keeps its hardcoded debug behavior — useful

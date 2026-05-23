@@ -36,6 +36,8 @@ enum class PrimitiveKind : uint8_t {
   Cube = 1,
   Sphere = 2,
   Plane = 3,
+  ExternalPmx = 4,
+  Light = 5,
 };
 
 struct SceneEntity {
@@ -45,6 +47,14 @@ struct SceneEntity {
   glm::vec3 position{0.0f};
   glm::vec3 rotationEuler{0.0f};
   glm::vec3 scale{1.0f};
+
+  // Light properties (active only when kind == PrimitiveKind::Light)
+  float lightGamma = 1.05f;
+  glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+  float lightIntensity = 1.0f;
+  int lightType = 0; // 0 = Directional, 1 = Point, 2 = Spotlight
+  float lightRange = 10.0f;
+  float lightSpotAngle = 30.0f;
 };
 
 struct IlmeeeScene {
@@ -107,7 +117,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 0); // minor
+  detail::WriteU16(f, 1); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -117,6 +127,14 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteVec3(f, e.position);
     detail::WriteVec3(f, e.rotationEuler);
     detail::WriteVec3(f, e.scale);
+
+    // Version 1.1 extra fields
+    detail::WriteF32(f, e.lightGamma);
+    detail::WriteVec3(f, e.lightColor);
+    detail::WriteF32(f, e.lightIntensity);
+    detail::WriteU32(f, (uint32_t)e.lightType);
+    detail::WriteF32(f, e.lightRange);
+    detail::WriteF32(f, e.lightSpotAngle);
   }
   return f.good();
 }
@@ -156,6 +174,24 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       return false;
     if (!detail::ReadVec3(f, e.scale))
       return false;
+
+    // Load version 1.1 fields if available
+    if (minor >= 1) {
+      if (!detail::ReadF32(f, e.lightGamma))
+        return false;
+      if (!detail::ReadVec3(f, e.lightColor))
+        return false;
+      if (!detail::ReadF32(f, e.lightIntensity))
+        return false;
+      uint32_t lt = 0;
+      if (!detail::ReadU32(f, lt))
+        return false;
+      e.lightType = (int)lt;
+      if (!detail::ReadF32(f, e.lightRange))
+        return false;
+      if (!detail::ReadF32(f, e.lightSpotAngle))
+        return false;
+    }
     out.entities.push_back(std::move(e));
   }
   return true;

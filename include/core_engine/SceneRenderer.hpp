@@ -1,4 +1,5 @@
 #pragma once
+#include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "TextureManager.hpp"
 #include <glm/glm.hpp>
@@ -10,10 +11,10 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
-class SceneRenderer2D {
+class SceneRenderer {
 public:
-  SceneRenderer2D(int width, int height);
-  ~SceneRenderer2D();
+  SceneRenderer(int width, int height);
+  ~SceneRenderer();
 
   void SetViewportSize(int width, int height);
   void RenderSceneToTexture(const Scene &scene);
@@ -100,14 +101,30 @@ private:
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
   } offscreen;
 
+  // Second offscreen target: renders the scene from the in-scene player
+  // camera for the "Camera Preview" window. Fixed 16:9 size; shares the
+  // main offscreen render pass.
+  Offscreen preview;
+  int previewWidth = 480;
+  int previewHeight = 270;
+  bool previewReady = false;
+
   // Pipelines
   VkPipeline spritePipeline = VK_NULL_HANDLE;
   VkPipelineLayout spritePipelineLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout spriteDescriptorSetLayout = VK_NULL_HANDLE;
   VkPipeline gridPipeline = VK_NULL_HANDLE;
   VkPipelineLayout gridPipelineLayout = VK_NULL_HANDLE;
+  // Editor-only line gizmos (dashed camera frustums + light direction
+  // rays). Lines are rebuilt on the CPU each frame into a growable
+  // host-visible buffer — counts are tiny (a few cameras/lights).
   VkPipeline gizmoPipeline = VK_NULL_HANDLE;
   VkPipelineLayout gizmoPipelineLayout = VK_NULL_HANDLE;
+  VkBuffer gizmoVertexBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory gizmoVertexMemory = VK_NULL_HANDLE;
+  VkDeviceSize gizmoCapacity = 0;
+  uint32_t gizmoVertexCount = 0;
+  bool gizmoVisible = true;
   // Self-contained "hello triangle" — no descriptor sets, no vertex
   // buffer, no UBO; vertex positions baked in the shader via
   // gl_VertexIndex. Serves as a render-pipeline smoke test inside the
@@ -149,12 +166,36 @@ private:
     glm::vec3 userScale = glm::vec3(1.0f);
     std::string path;
     std::string displayName;
+    // PMX bone hierarchy (empty for OBJ meshes / primitives)
+    std::vector<pmx::PMXBone> bones;
+
+    // Light specific properties
+    bool isLight = false;
+    float lightGamma = 1.05f;
+    glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+    float lightIntensity = 1.0f;
+    int lightType = 0; // 0 = Directional, 1 = Point, 2 = Spotlight
+    float lightRange = 10.0f;
+    float lightSpotAngle = 30.0f;
+
+    // Camera specific properties (active only when isCamera == true). This
+    // is the in-scene "player" camera, distinct from the editor free-cam.
+    bool isCamera = false;
+    int camProjection = 0;     // 0 = Perspective, 1 = Orthographic
+    float camFov = 60.0f;      // perspective vertical FOV (degrees)
+    float camOrthoSize = 5.0f; // orthographic half-height (world units)
+    float camNear = 0.1f;
+    float camFar = 100.0f;
 
     glm::mat4 ComputeModel() const;
   };
   std::vector<Mesh3D> meshes3d;
 
-  // Static 3D grid drawn on the XZ plane (Y=0) as a spatial reference.
+  // Infinite ground grid drawn on the XZ plane (Y=0). Rendered as one
+  // fullscreen triangle whose fragment shader raycasts the plane, so it
+  // covers exactly the visible ground with constant memory (no per-line
+  // vertex buffer). The buffer fields are unused now but kept for the
+  // shared cleanup path.
   struct GridResources {
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -163,6 +204,19 @@ private:
     uint32_t vertexCount = 0;
   } grid3d;
   bool grid3dVisible = true;
+
+  // Decorative sun sphere drawn in the sky (unlit, depth test off). Kept
+  // separate from meshes3d so it stays out of the hierarchy / selection.
+  struct SunResources {
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+    uint32_t indexCount = 0;
+  } sun;
+  bool sunVisible = true;
 
   // Texture manager
   TextureManager textureManager;
@@ -192,11 +246,36 @@ private:
 
   // Grid helpers
   void InitGridResources();
-  void DrawGrid3D(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+  void DrawGrid3D(VkCommandBuffer cmd, const glm::mat4 &view,
+                  const glm::mat4 &proj);
+
+  // Sun helpers
+  void InitSunResources();
+  void DrawSun(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+
+  // Gizmo (dashed lines) helpers
+  void InitGizmoPipeline();
+  void DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+
+  // Preview (player-camera) helpers
+  void CreatePreviewResources();
+  void DestroyPreviewResources();
+  // Record the 3D world (sun, grid, meshes, optional gizmos) for the given
+  // camera matrices into an already-open render pass.
+  void RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
+                   const glm::mat4 &proj3d, bool drawGizmos);
+  // Compute the player camera's view/proj for the given aspect ratio.
+  // Returns false if there is no camera object in the scene.
+  bool ComputePlayerCameraMatrices(float aspect, glm::mat4 &view,
+                                   glm::mat4 &proj) const;
 
 public:
   // Load an OBJ file into the 3D mesh list. Returns true on success.
   bool LoadObjMesh(const std::string &path);
+
+  // Load a PMX (MikuMikuDance) model. Parses geometry, materials,
+  // and bones. Renders in bind pose using the mesh pipeline.
+  bool LoadPMXMesh(const std::string &path);
 
   // Procedural primitives — built on the same Mesh3D pipeline so they
   // pick up the same lighting, picking, transform UI, etc. Each call
@@ -205,6 +284,16 @@ public:
   bool LoadSphere(const std::string &name = "Sphere", float radius = 0.5f,
                   int segments = 24, int rings = 16);
   bool LoadPlane(const std::string &name = "Plane", float size = 2.0f);
+  bool LoadLight(const std::string &name = "Light", int type = 0,
+                 const glm::vec3 &color = glm::vec3(1.0f, 0.96f, 0.88f),
+                 float intensity = 1.0f, float range = 10.0f,
+                 float spotAngle = 30.0f, float gamma = 1.05f);
+
+  // In-scene player camera (separate from the editor free-cam). Appears as
+  // a small marker mesh plus a dashed frustum gizmo, and can be previewed.
+  bool LoadCamera(const std::string &name = "Camera", int projection = 0,
+                  float fov = 60.0f, float orthoSize = 5.0f, float nearP = 0.1f,
+                  float farP = 100.0f);
 
   // Clear all loaded meshes (used when switching projects).
   void ClearMeshes3D();
@@ -221,9 +310,47 @@ public:
   const std::string &GetMesh3DPath(size_t i) const;
   uint32_t GetMesh3DVertexCount(size_t i) const;
   uint32_t GetMesh3DTriangleCount(size_t i) const;
+  uint32_t GetMesh3DBoneCount(size_t i) const;
   void SetMesh3DTransform(size_t i, const glm::vec3 &position,
                           const glm::vec3 &rotationEuler,
                           const glm::vec3 &scale);
+
+  // Light property accessors
+  bool IsMesh3DLight(size_t i) const;
+  float GetMesh3DLightGamma(size_t i) const;
+  glm::vec3 GetMesh3DLightColor(size_t i) const;
+  float GetMesh3DLightIntensity(size_t i) const;
+  int GetMesh3DLightType(size_t i) const;
+  float GetMesh3DLightRange(size_t i) const;
+  float GetMesh3DLightSpotAngle(size_t i) const;
+
+  void SetMesh3DLightGamma(size_t i, float gamma);
+  void SetMesh3DLightColor(size_t i, const glm::vec3 &color);
+  void SetMesh3DLightIntensity(size_t i, float intensity);
+  void SetMesh3DLightType(size_t i, int type);
+  void SetMesh3DLightRange(size_t i, float range);
+  void SetMesh3DLightSpotAngle(size_t i, float angle);
+
+  // Camera property accessors
+  bool IsMesh3DCamera(size_t i) const;
+  int GetMesh3DCameraProjection(size_t i) const;
+  float GetMesh3DCameraFov(size_t i) const;
+  float GetMesh3DCameraOrthoSize(size_t i) const;
+  float GetMesh3DCameraNear(size_t i) const;
+  float GetMesh3DCameraFar(size_t i) const;
+  void SetMesh3DCameraProjection(size_t i, int projection);
+  void SetMesh3DCameraFov(size_t i, float fov);
+  void SetMesh3DCameraOrthoSize(size_t i, float size);
+  void SetMesh3DCameraNear(size_t i, float nearP);
+  void SetMesh3DCameraFar(size_t i, float farP);
+
+  // Player-camera preview. Render the scene from the first camera object
+  // into the preview target; the Scene UI shows it in a small window.
+  bool HasPlayerCamera() const;
+  void RenderPlayerCameraPreview();
+  VkDescriptorSet GetPlayerCameraPreviewDescriptor() const;
+  int GetPreviewWidth() const { return previewWidth; }
+  int GetPreviewHeight() const { return previewHeight; }
   // Translate the i-th mesh in the camera's screen plane by (dxPx, dyPx)
   // mouse pixels. Resolves pixel→world using the object's distance from
   // the camera and the viewport height.
@@ -231,6 +358,34 @@ public:
 
   void SetGrid3DVisible(bool v) { grid3dVisible = v; }
   bool IsGrid3DVisible() const { return grid3dVisible; }
+
+  void SetSunVisible(bool v) { sunVisible = v; }
+  bool IsSunVisible() const { return sunVisible; }
+
+  // Forward direction of the 3D camera (normalized), matching the render
+  // path. Useful for placing objects in front of the camera.
+  glm::vec3 GetCameraForward() const;
+
+  // Unproject a viewport pixel (top-left origin, panel pixels) onto the
+  // y=0 ground plane using the current 3D camera. Returns false when the
+  // ray is parallel to the ground or the hit is behind the camera.
+  bool ScreenToGround(float pxX, float pxY, glm::vec3 &outWorld) const;
+
+  bool IsSnapToGrid() const { return snapToGrid; }
+
+  // 2D grid helpers — exposed so the Scene panel can render a dynamic
+  // ImDrawList overlay that respects pan/zoom without needing a
+  // dedicated Vulkan grid pipeline.
+  float GetGridSize() const { return gridSize; }
+  bool IsGridVisible() const { return gridVisible; }
+
+  // Unity-style directional sun light. Direction points *toward* the
+  // light source (i.e. the shader computes max(dot(N, sunDir), 0)).
+  struct SunLight {
+    glm::vec3 direction = glm::normalize(glm::vec3(0.55f, 0.80f, 0.30f));
+    glm::vec3 color = glm::vec3(1.0f, 0.96f, 0.88f);
+    float intensity = 0.90f;
+  } sunLight;
 
   // FPS-style 3D camera driven by the Scene viewport. The 2D pan/zoom
   // controls are kept for sprite scenes; when meshes3d is non-empty the

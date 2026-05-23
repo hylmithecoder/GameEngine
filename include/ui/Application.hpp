@@ -106,6 +106,13 @@ public:
     void SetProjectPath(const std::string& path) { projectPath = path; }
     const std::string& GetProjectPath() const { return projectPath; }
 
+    // When true and no --project was supplied, the standalone debug
+    // fallback boots a 2D sprite scene instead of the 3D OBJ. Has no
+    // effect when a project is loaded.
+    void SetDebug2D(bool v) { debug2D = v; }
+    bool GetDebug2D() const { return debug2D; }
+
 private:
     std::string projectPath;
+    bool debug2D = false;
 };

@@ -1,6 +1,7 @@
 #include "../../include/vulkan/VulkanBase.hpp"
 #include <algorithm>
 #include <chrono>
+#include <core_engine/UserDataDir.hpp>
 #include <set>
 #include <stdexcept>
 
@@ -439,6 +440,9 @@ bool VulkanBase::CreateSyncPrimitives() {
 bool VulkanBase::InitImGui() {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+  ImGuiIO &io = ImGui::GetIO();
+  static std::string imguiPath = (ilmeee::IlmeeeDir() / "imgui.ini").string();
+  io.IniFilename = imguiPath.c_str();
   ImGui::StyleColorsDark();
 
   ImGui_ImplSDL3_InitForVulkan(window);
@@ -585,6 +589,9 @@ void VulkanBase::RecreateSwapChain() {
   if (w == 0 || h == 0) {
     return;
   }
+
+  windowWidth = w;
+  windowHeight = h;
 
   vkDeviceWaitIdle(ctx.device);
 

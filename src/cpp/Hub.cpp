@@ -928,6 +928,9 @@ public:
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
+    static std::string imguiHubPath =
+        (ilmeee::IlmeeeDir() / "imgui_hub.ini").string();
+    io.IniFilename = imguiHubPath.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     // Try to load CJK font if present; otherwise fall back to default.
     const std::string fontPath = "assets/fonts/zh-cn.ttf";

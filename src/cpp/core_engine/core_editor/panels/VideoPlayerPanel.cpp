@@ -88,10 +88,10 @@ void VideoPlayerPanel::DrawVideoFrame() {
   }
   ImTextureID tex = (ImTextureID)ds;
 
-  const float aspect =
-      handler->height > 0
-          ? static_cast<float>(handler->width) / static_cast<float>(handler->height)
-          : 16.0f / 9.0f;
+  const float aspect = handler->height > 0
+                           ? static_cast<float>(handler->width) /
+                                 static_cast<float>(handler->height)
+                           : 16.0f / 9.0f;
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   // Reserve some vertical room for the controls below.

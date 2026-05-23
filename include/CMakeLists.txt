@@ -8,8 +8,9 @@ set(HEADERS_MAIN_PROJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerProject.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Scene.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer2D.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PMXLoader.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GLHeader.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Debugger.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NetworkManager.hpp

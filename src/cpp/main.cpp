@@ -1,5 +1,5 @@
 #include "../../include/core_engine/Debugger.hpp"
-#include "../../include/core_engine/SceneRenderer2D.hpp"
+#include "../../include/core_engine/SceneRenderer.hpp"
 #include "../../include/core_engine/TextureManager.hpp"
 #include "../../include/ui/Application.hpp"
 #include <SDL3/SDL.h>
@@ -164,23 +164,36 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // CLI: `--project <abs_path>` (or `--project=<path>`). When provided,
-  // the editor will auto-open this project. Otherwise the hardcoded
-  // debug scene runs — useful for first-gen UI/render testing without
-  // going through IlmeeeHub.
+  // CLI flags:
+  //   --project <abs_path> | --project=<path>
+  //       When provided, the editor auto-opens this project.
+  //   --2d | --2d=true|false
+  //       Only meaningful in standalone debug mode (no --project).
+  //       When true, the debug fallback loads a 2D sprite scene
+  //       (assets/testimage.png) instead of the default 3D OBJ.
   std::string cliProjectPath;
+  bool cliDebug2D = false;
+  auto parseBoolFlag = [](const std::string &v) {
+    return v == "true" || v == "1" || v == "yes" || v == "on";
+  };
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--project" && i + 1 < argc) {
       cliProjectPath = argv[++i];
     } else if (a.rfind("--project=", 0) == 0) {
       cliProjectPath = a.substr(strlen("--project="));
+    } else if (a == "--2d") {
+      cliDebug2D = true;
+    } else if (a.rfind("--2d=", 0) == 0) {
+      cliDebug2D = parseBoolFlag(a.substr(strlen("--2d=")));
     }
   }
   if (!cliProjectPath.empty()) {
     Log("CLI project path: " + cliProjectPath, Debug::LogLevel::SUCCESS);
   } else {
-    Log("No --project supplied; running in standalone debug mode.");
+    Log(std::string(
+            "No --project supplied; running in standalone debug mode (") +
+        (cliDebug2D ? "2D sprite" : "3D OBJ") + " fallback).");
   }
 
   try {
@@ -190,6 +203,7 @@ int main(int argc, char *argv[]) {
     if (!cliProjectPath.empty()) {
       g_app->SetProjectPath(cliProjectPath);
     }
+    g_app->SetDebug2D(cliDebug2D);
 
     // Launch engine
     Log("Launching engine...");

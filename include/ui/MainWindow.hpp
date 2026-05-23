@@ -1,5 +1,5 @@
 #include "../core_engine/NetworkManager.hpp"
-#include "../core_engine/SceneRenderer2D.hpp"
+#include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
@@ -17,6 +17,7 @@
 #include <vector>
 #define IMGUI_HAS_DOCK
 #define IMGUI_HAS_VIEWPORT
+using namespace ImGui;
 using namespace Debug;
 
 #include "../vulkan/VulkanBase.hpp"
@@ -75,8 +76,14 @@ public:
   MainWindow(const char *title, int width = 1280, int height = 720);
   ~MainWindow();
 
-  SceneRenderer2D *sceneRenderer2D = nullptr;
+  SceneRenderer *sceneRenderer = nullptr;
   HandlerProject projectHandler;
+
+  // Standalone-debug fallback selector. When true and no project is
+  // loaded, RenderSceneWindow boots a 2D sprite scene (testimage.png)
+  // instead of the default 3D OBJ. Set by --2d CLI flag; ignored once
+  // a project is opened.
+  bool debug2D = false;
 
   // Modular editor panels (new architecture). Existing Render*Window
   // members are still rendered directly; over time they should be
@@ -149,6 +156,7 @@ public:
   void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
   void RenderSceneWindow();
   void RenderHierarchyWindow();
+  void Save3DScene();
   void RenderSceneToolbarView(ImVec2 viewportPos, ImVec2 viewportSize);
   void RenderPlayMenu();
   void PushMessage(const std::string &message);

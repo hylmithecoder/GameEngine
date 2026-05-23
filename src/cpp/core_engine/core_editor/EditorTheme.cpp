@@ -99,7 +99,8 @@ void ApplyDarkColors(ImGuiStyle &style) {
 
   c[ImGuiCol_Tab] = bg0;
   c[ImGuiCol_TabHovered] = ImVec4(accent.x, accent.y, accent.z, 0.55f);
-  c[ImGuiCol_TabActive] = ImVec4(accent.x * 0.7f, accent.y * 0.7f, accent.z * 0.9f, 1.00f);
+  c[ImGuiCol_TabActive] =
+      ImVec4(accent.x * 0.7f, accent.y * 0.7f, accent.z * 0.9f, 1.00f);
   c[ImGuiCol_TabUnfocused] = bg0;
   c[ImGuiCol_TabUnfocusedActive] = bg1;
 

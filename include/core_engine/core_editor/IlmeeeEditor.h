@@ -15,7 +15,7 @@
 #endif
 
 #include "TCPConnection.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include <glad/glad.h>
 #include <imgui.h>

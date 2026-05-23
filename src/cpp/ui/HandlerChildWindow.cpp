@@ -8,7 +8,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 void MainWindow::RenderHierarchyWindow() {
-  ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
+  Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
   ImGuiTreeNodeFlags nodeFlags =
       ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
 
@@ -24,27 +24,27 @@ void MainWindow::RenderHierarchyWindow() {
                                    {"Player", {"Sprite", "Collider"}},
                                    {"Enemy", {"AI Controller"}}};
 
-  if (ImGui::TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
     projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20, 20);
 
     // Surface every loaded 3D mesh as a hierarchy entry so clicking
     // either here or in the Scene viewport selects the right entity.
-    if (sceneRenderer2D) {
-      for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
-        const std::string &meshName = sceneRenderer2D->GetMesh3DName(i);
+    if (sceneRenderer) {
+      for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
+        const std::string &meshName = sceneRenderer->GetMesh3DName(i);
         ImGuiTreeNodeFlags leafFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf;
         bool selected = (meshName == objectName);
         if (selected)
           leafFlags |= ImGuiTreeNodeFlags_Selected;
-        ImGui::PushID((int)i);
-        if (ImGui::TreeNodeEx(meshName.c_str(), leafFlags)) {
-          if (ImGui::IsItemClicked()) {
+        PushID((int)i);
+        if (TreeNodeEx(meshName.c_str(), leafFlags)) {
+          if (IsItemClicked()) {
             std::snprintf(objectName, sizeof(objectName), "%s",
                           meshName.c_str());
           }
-          ImGui::TreePop();
+          TreePop();
         }
-        ImGui::PopID();
+        PopID();
       }
     }
 
@@ -53,60 +53,57 @@ void MainWindow::RenderHierarchyWindow() {
       ImGuiTreeNodeFlags rowFlags = nodeFlags;
       if (selected)
         rowFlags |= ImGuiTreeNodeFlags_Selected;
-      if (ImGui::TreeNodeEx(element.name.c_str(), rowFlags)) {
-        if (ImGui::IsItemClicked()) {
+      if (TreeNodeEx(element.name.c_str(), rowFlags)) {
+        if (IsItemClicked()) {
           std::snprintf(objectName, sizeof(objectName), "%s",
                         element.name.c_str());
         }
         for (const auto &prop : element.properties) {
-          ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "%s",
-                             prop.c_str());
+          TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "%s", prop.c_str());
         }
-        ImGui::TreePop();
+        TreePop();
       }
     }
-    ImGui::TreePop();
+    TreePop();
   }
-  ImGui::End();
+  End();
 }
 
 void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
                                       HandlerProject::AssetFile assetFolder,
                                       const string &assetPath,
                                       bool firstOpenProject) {
-  ImGui::Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
-  ImVec2 pos = ImGui::GetWindowPos();
-  ImVec2 size = ImGui::GetWindowSize();
+  Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
+  ImVec2 pos = GetWindowPos();
+  ImVec2 size = GetWindowSize();
   HandleBackground(
       pos, size); // panggil di sini!
                   // ::Log("Asset Folder: " + assetFolder.fullPath +
                   // "\nChildren: "+to_string(assetFolder.children.size()),
                   // Debug::LogLevel::INFO);
   if (firstOpenProject) {
-    ImGui::BeginGroup();
+    BeginGroup();
 
     // Add toolbar above assets
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
 
     // Refresh button
-    if (ImGui::Button("Refresh")) {
+    if (Button("Refresh")) {
       projectHandler.isOpenedProject = true;
     }
 
     // Tooltip for refresh button
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Manually refresh asset tree");
+    if (IsItemHovered()) {
+      SetTooltip("Manually refresh asset tree");
     }
 
-    ImGui::SameLine();
+    SameLine();
 
     // Add file watcher toggle button
     bool watcherRunning = projectHandler.IsFileWatcherRunning();
-    if (ImGui::Button(watcherRunning ? "Watching" : "Watch Off")) {
+    if (Button(watcherRunning ? "Watching" : "Watch Off")) {
       if (watcherRunning) {
         projectHandler.StopFileWatcher();
       } else {
@@ -115,12 +112,12 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
     }
 
     // Tooltip for watcher button
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(watcherRunning ? "Auto-refresh is active"
-                                       : "Turn on auto-refresh");
+    if (IsItemHovered()) {
+      SetTooltip(watcherRunning ? "Auto-refresh is active"
+                                : "Turn on auto-refresh");
     }
 
-    ImGui::SameLine();
+    SameLine();
 
     // Back button - disabled if in root directory
     string rootPath = projectHandler.projectPath + "\\assets";
@@ -128,17 +125,17 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
 
     // Disable button if in root directory
     if (isInRootDirectory) {
-      ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
-      ImGui::Button("Back");
-      ImGui::PopStyleColor();
-      ImGui::PopStyleVar();
+      PushStyleVar(ImGuiStyleVar_Alpha, GetStyle().Alpha * 0.5f);
+      PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
+      Button("Back");
+      PopStyleColor();
+      PopStyleVar();
 
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Already in root directory");
+      if (IsItemHovered()) {
+        SetTooltip("Already in root directory");
       }
     } else {
-      if (ImGui::Button("Back")) {
+      if (Button("Back")) {
         size_t lastSlash = projectHandler.currentDirectory.find_last_of("/\\");
         if (lastSlash != string::npos) {
           projectHandler.currentDirectory =
@@ -148,35 +145,35 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
         }
       }
 
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Go back to parent folder");
+      if (IsItemHovered()) {
+        SetTooltip("Go back to parent folder");
       }
     }
 
-    ImGui::SameLine();
+    SameLine();
 
     // Add filter/search box
     HandleSearch();
 
-    ImGui::PopStyleColor(3);
+    PopStyleColor(3);
 
     // Get available content region
-    ImVec2 contentSize = ImGui::GetContentRegionAvail();
+    ImVec2 contentSize = GetContentRegionAvail();
 
     // Left panel (Project tree)
-    ImGui::BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
+    BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
     projectHandler.DrawAssetTree(projectRoot);
-    ImGui::EndChild();
+    EndChild();
 
     // Splitter
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 0.3f));
-    ImGui::Button("##Splitter", ImVec2(4.0f, contentSize.y));
-    ImGui::PopStyleColor();
+    SameLine();
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 0.3f));
+    Button("##Splitter", ImVec2(4.0f, contentSize.y));
+    PopStyleColor();
 
     // Handle splitter dragging
-    if (ImGui::IsItemActive()) {
-      float delta = ImGui::GetIO().MouseDelta.x;
+    if (IsItemActive()) {
+      float delta = GetIO().MouseDelta.x;
       if (explorerSplitPosition + delta >= MIN_PANEL_WIDTH &&
           explorerSplitPosition + delta <= contentSize.x - MIN_PANEL_WIDTH) {
         explorerSplitPosition += delta;
@@ -184,23 +181,23 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
     }
 
     // Show resize cursor when hovering over splitter
-    if (ImGui::IsItemHovered())
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (IsItemHovered())
+      SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
     // Right panel (File explorer)
-    ImGui::SameLine();
-    ImGui::BeginChild("AssetRoot", ImVec2(0, 0), true);
+    SameLine();
+    BeginChild("AssetRoot", ImVec2(0, 0), true);
     // Fix: Get files directly from projectHandler instead of through
     // selectedAsset
     // ::Log("If You See it this is work in method RenderExplorerWindow",
     // Debug::LogLevel::SUCCESS);
     projectHandler.DrawFolderGridView();
-    ImGui::EndChild();
+    EndChild();
 
-    ImGui::EndGroup();
+    EndGroup();
   }
 
-  ImGui::End();
+  End();
 }
 
 void MainWindow::RenderInspectorWindow() {
@@ -208,13 +205,13 @@ void MainWindow::RenderInspectorWindow() {
   strncpy(currentScriptName, currentScriptName, sizeof(currentScriptName) - 1);
   currentScriptName[sizeof(currentScriptName) - 1] =
       '\0'; // Ensure null-termination
-  ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
-  ImVec2 pos = ImGui::GetWindowPos();
-  ImVec2 size = ImGui::GetWindowSize();
+  Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
+  ImVec2 pos = GetWindowPos();
+  ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
 
-  ImGui::Text("Selected Object");
-  ImGui::Separator();
+  Text("Selected Object");
+  Separator();
 
   // if (isLoadScene)
   // {
@@ -222,10 +219,10 @@ void MainWindow::RenderInspectorWindow() {
   //     for (auto& obj : projectHandler.currentScene.objects) {
   //             //
   //             projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
-  //             // if (ImGui::TreeNodeEx(obj.name.c_str())) {
-  //             //     ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
+  //             // if (TreeNodeEx(obj.name.c_str())) {
+  //             //     TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
   //             "Properties");
-  //             //     ImGui::TreePop();
+  //             //     TreePop();
   //             // }
   //             // Use a temporary buffer for editing the name
   //             char nameBuffer[256];
@@ -234,39 +231,39 @@ void MainWindow::RenderInspectorWindow() {
   //             nameBuffer[sizeof(nameBuffer) - 1] = '\0';
 
   //             for (int i = 0; i < obj.name.length(); i++) {
-  //                 ImGui::PushID(i);
-  //                 if (ImGui::InputText("##Name", nameBuffer,
+  //                 PushID(i);
+  //                 if (InputText("##Name", nameBuffer,
   //                 IM_ARRAYSIZE(nameBuffer))) {
   //                     obj.name = nameBuffer;
   //                 };
-  //                 ImGui::PopID();
-  //                 if (ImGui::CollapsingHeader("Transform",
+  //                 PopID();
+  //                 if (CollapsingHeader("Transform",
   //                 ImGuiTreeNodeFlags_DefaultOpen)) {
-  //                     // ImGui::DragFloat3("Position", obj.x,obj.y,obj.width,
+  //                     // DragFloat3("Position", obj.x,obj.y,obj.width,
   //                     0.1f);
-  //                     // ImGui::DragFloat3("Rotation", obj.rotation, 0.1f);
-  //                     // ImGui::DragFloat3("Scale", obj.scale, 0.1f);
+  //                     // DragFloat3("Rotation", obj.rotation, 0.1f);
+  //                     // DragFloat3("Scale", obj.scale, 0.1f);
   //                 }
-  //                 ImGui::PushID(i);
-  //                 if (ImGui::CollapsingHeader("Sprite"),
+  //                 PushID(i);
+  //                 if (CollapsingHeader("Sprite"),
   //                 ImGuiTreeNodeFlags_DefaultOpen) {
-  //                     if (ImGui::InputText("Sprite Path", spritePath,
+  //                     if (InputText("Sprite Path", spritePath,
   //                     IM_ARRAYSIZE(spritePath))) {
   //                         obj.spritePath = spritePath;
   //                     }
   //                 }
-  //                 ImGui::PopID();
+  //                 PopID();
   //             }
   //         }
   // }
   // else {
-  ImGui::InputText("Name", objectName, IM_ARRAYSIZE(objectName));
+  InputText("Name", objectName, IM_ARRAYSIZE(objectName));
 
   // Find which loaded mesh (if any) corresponds to the selected name.
   int meshIdx = -1;
-  if (sceneRenderer2D) {
-    for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
-      if (sceneRenderer2D->GetMesh3DName(i) == objectName) {
+  if (sceneRenderer) {
+    for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
+      if (sceneRenderer->GetMesh3DName(i) == objectName) {
         meshIdx = (int)i;
         break;
       }
@@ -275,9 +272,9 @@ void MainWindow::RenderInspectorWindow() {
   const bool meshSelected = meshIdx >= 0;
 
   if (meshSelected) {
-    glm::vec3 p = sceneRenderer2D->GetMesh3DPosition((size_t)meshIdx);
-    glm::vec3 r = sceneRenderer2D->GetMesh3DRotation((size_t)meshIdx);
-    glm::vec3 s = sceneRenderer2D->GetMesh3DScale((size_t)meshIdx);
+    glm::vec3 p = sceneRenderer->GetMesh3DPosition((size_t)meshIdx);
+    glm::vec3 r = sceneRenderer->GetMesh3DRotation((size_t)meshIdx);
+    glm::vec3 s = sceneRenderer->GetMesh3DScale((size_t)meshIdx);
     position[0] = p.x;
     position[1] = p.y;
     position[2] = p.z;
@@ -289,116 +286,205 @@ void MainWindow::RenderInspectorWindow() {
     scale[2] = s.z;
   }
 
-  if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
     bool changed = false;
-    changed |= ImGui::DragFloat3("Position", position, 0.02f);
-    changed |= ImGui::DragFloat3("Rotation", rotation, 0.5f);
-    changed |= ImGui::DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
+    changed |= DragFloat3("Position", position, 0.02f);
+    changed |= DragFloat3("Rotation", rotation, 0.5f);
+    changed |= DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
     if (meshSelected && changed) {
-      sceneRenderer2D->SetMesh3DTransform(
+      sceneRenderer->SetMesh3DTransform(
           (size_t)meshIdx, glm::vec3(position[0], position[1], position[2]),
           glm::vec3(rotation[0], rotation[1], rotation[2]),
           glm::vec3(scale[0], scale[1], scale[2]));
     }
   }
 
-  // Mesh section: shown for any mesh selected by name.
-  if (meshSelected) {
-    if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-      ImGui::Text("Path: %s",
-                  sceneRenderer2D->GetMesh3DPath((size_t)meshIdx).c_str());
-      ImGui::Text("Vertices: %u",
-                  sceneRenderer2D->GetMesh3DVertexCount((size_t)meshIdx));
-      ImGui::Text("Triangles: %u",
-                  sceneRenderer2D->GetMesh3DTriangleCount((size_t)meshIdx));
+  const bool isLight =
+      meshSelected && sceneRenderer->IsMesh3DLight((size_t)meshIdx);
+  const bool isCamera =
+      meshSelected && sceneRenderer->IsMesh3DCamera((size_t)meshIdx);
+
+  // Mesh section: shown for any plain mesh (not a light/camera) by name.
+  if (meshSelected && !isLight && !isCamera) {
+    if (CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+      Text("Path: %s", sceneRenderer->GetMesh3DPath((size_t)meshIdx).c_str());
+      Text("Vertices: %u",
+           sceneRenderer->GetMesh3DVertexCount((size_t)meshIdx));
+      Text("Triangles: %u",
+           sceneRenderer->GetMesh3DTriangleCount((size_t)meshIdx));
+      uint32_t boneCount = sceneRenderer->GetMesh3DBoneCount((size_t)meshIdx);
+      if (boneCount > 0) {
+        Text("Bones: %u", boneCount);
+      }
       static bool s_gridVisible = true;
-      if (ImGui::Checkbox("Show 3D Grid", &s_gridVisible)) {
-        sceneRenderer2D->SetGrid3DVisible(s_gridVisible);
+      if (Checkbox("Show 3D Grid", &s_gridVisible)) {
+        sceneRenderer->SetGrid3DVisible(s_gridVisible);
       }
-      if (ImGui::Button("Reset Transform")) {
-        sceneRenderer2D->SetMesh3DTransform((size_t)meshIdx, glm::vec3(0.0f),
-                                            glm::vec3(0.0f), glm::vec3(1.0f));
+      if (Button("Reset Transform")) {
+        sceneRenderer->SetMesh3DTransform((size_t)meshIdx, glm::vec3(0.0f),
+                                          glm::vec3(0.0f), glm::vec3(1.0f));
       }
     }
   }
 
-  if (ImGui::CollapsingHeader("Material")) {
-    static float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    ImGui::ColorEdit4("Color", color);
+  // Light Source section: only shown if selected object is a light
+  if (isLight) {
+    if (CollapsingHeader("Light Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+      int type = sceneRenderer->GetMesh3DLightType((size_t)meshIdx);
+      float gamma = sceneRenderer->GetMesh3DLightGamma((size_t)meshIdx);
+      glm::vec3 color = sceneRenderer->GetMesh3DLightColor((size_t)meshIdx);
+      float intensity = sceneRenderer->GetMesh3DLightIntensity((size_t)meshIdx);
+      float range = sceneRenderer->GetMesh3DLightRange((size_t)meshIdx);
+      float spotAngle = sceneRenderer->GetMesh3DLightSpotAngle((size_t)meshIdx);
 
-    const char *items[] = {"Standard", "Transparent", "Emission"};
-    static int item_current = 0;
-    ImGui::Combo("Shader", &item_current, items, IM_ARRAYSIZE(items));
+      const char *types[] = {"Directional", "Point", "Spotlight (Senter)"};
+      if (Combo("Light Type", &type, types, IM_ARRAYSIZE(types))) {
+        sceneRenderer->SetMesh3DLightType((size_t)meshIdx, type);
+      }
 
-    static float metallic = 0.0f;
-    static float smoothness = 0.5f;
-    ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
-    ImGui::SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
+      float col[3] = {color.x, color.y, color.z};
+      if (ColorEdit3("Color", col)) {
+        sceneRenderer->SetMesh3DLightColor((size_t)meshIdx,
+                                           glm::vec3(col[0], col[1], col[2]));
+      }
+
+      if (DragFloat("Intensity", &intensity, 0.05f, 0.0f, 20.0f, "%.2f")) {
+        sceneRenderer->SetMesh3DLightIntensity((size_t)meshIdx, intensity);
+      }
+
+      if (type > 0) { // Point or Spotlight
+        if (DragFloat("Range", &range, 0.1f, 0.1f, 1000.0f, "%.1f")) {
+          sceneRenderer->SetMesh3DLightRange((size_t)meshIdx, range);
+        }
+      }
+
+      if (type == 2) { // Spotlight (Senter)
+        if (SliderFloat("Spot Angle", &spotAngle, 1.0f, 179.0f, "%.1f deg")) {
+          sceneRenderer->SetMesh3DLightSpotAngle((size_t)meshIdx, spotAngle);
+        }
+      }
+
+      if (SliderFloat("Lighting Gamma", &gamma, 0.2f, 4.0f, "%.2f")) {
+        sceneRenderer->SetMesh3DLightGamma((size_t)meshIdx, gamma);
+      }
+    }
   }
 
-  if (ImGui::CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
-    // Defaults: gravity on, kinematic off, mass 1, drag 0 — Unity-ish
-    // sensible defaults so a freshly-added object falls under gravity
-    // unless explicitly held static.
-    static bool useGravity = true;
-    static bool isKinematic = false;
-    static float mass = 1.0f;
-    static float drag = 0.0f;
-    static float gravityY = -9.81f;
+  // Camera section: only shown if the selected object is a player camera.
+  if (isCamera) {
+    if (CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+      int proj = sceneRenderer->GetMesh3DCameraProjection((size_t)meshIdx);
+      float fov = sceneRenderer->GetMesh3DCameraFov((size_t)meshIdx);
+      float orthoSize =
+          sceneRenderer->GetMesh3DCameraOrthoSize((size_t)meshIdx);
+      float nearP = sceneRenderer->GetMesh3DCameraNear((size_t)meshIdx);
+      float farP = sceneRenderer->GetMesh3DCameraFar((size_t)meshIdx);
 
-    ImGui::Checkbox("Use Gravity", &useGravity);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(default)");
-    ImGui::Checkbox("Is Kinematic", &isKinematic);
-    ImGui::InputFloat("Mass", &mass, 0.1f);
-    ImGui::InputFloat("Drag", &drag, 0.01f);
-    ImGui::InputFloat("Gravity Y", &gravityY, 0.1f);
+      const char *projections[] = {"Perspective", "Orthographic"};
+      if (Combo("Projection", &proj, projections, IM_ARRAYSIZE(projections))) {
+        sceneRenderer->SetMesh3DCameraProjection((size_t)meshIdx, proj);
+      }
+
+      if (proj == 0) { // Perspective
+        if (SliderFloat("FOV", &fov, 10.0f, 120.0f, "%.0f deg")) {
+          sceneRenderer->SetMesh3DCameraFov((size_t)meshIdx, fov);
+        }
+      } else { // Orthographic
+        if (DragFloat("Ortho Size", &orthoSize, 0.1f, 0.1f, 500.0f, "%.2f")) {
+          sceneRenderer->SetMesh3DCameraOrthoSize((size_t)meshIdx, orthoSize);
+        }
+      }
+
+      if (DragFloat("Near", &nearP, 0.01f, 0.001f, farP - 0.01f, "%.3f")) {
+        sceneRenderer->SetMesh3DCameraNear((size_t)meshIdx, nearP);
+      }
+      if (DragFloat("Far", &farP, 0.5f, nearP + 0.01f, 5000.0f, "%.1f")) {
+        sceneRenderer->SetMesh3DCameraFar((size_t)meshIdx, farP);
+      }
+
+      TextDisabled("Aim with the object's Rotation. See the cyan");
+      TextDisabled("frustum gizmo + the Camera Preview window.");
+    }
   }
 
-  if (ImGui::Button("Add Component", ImVec2(-1, 0))) {
-    ImGui::OpenPopup("AddComponentPopup");
+  if (!isLight && !isCamera) {
+    if (CollapsingHeader("Material")) {
+      static float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+      ColorEdit4("Color", color);
+
+      const char *items[] = {"Standard", "Transparent", "Emission"};
+      static int item_current = 0;
+      Combo("Shader", &item_current, items, IM_ARRAYSIZE(items));
+
+      static float metallic = 0.0f;
+      static float smoothness = 0.5f;
+      SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
+      SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
+    }
+
+    if (CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+      // Defaults: gravity on, kinematic off, mass 1, drag 0 — Unity-ish
+      // sensible defaults so a freshly-added object falls under gravity
+      // unless explicitly held static.
+      static bool useGravity = true;
+      static bool isKinematic = false;
+      static float mass = 1.0f;
+      static float drag = 0.0f;
+      static float gravityY = -9.81f;
+
+      Checkbox("Use Gravity", &useGravity);
+      SameLine();
+      TextDisabled("(default)");
+      Checkbox("Is Kinematic", &isKinematic);
+      InputFloat("Mass", &mass, 0.1f);
+      InputFloat("Drag", &drag, 0.01f);
+      InputFloat("Gravity Y", &gravityY, 0.1f);
+    }
   }
 
-  if (ImGui::BeginPopup("AddComponentPopup")) {
-    ImGui::Text("Components");
-    if (ImGui::Selectable("Mesh Renderer")) {
+  if (Button("Add Component", ImVec2(-1, 0))) {
+    OpenPopup("AddComponentPopup");
+  }
+
+  if (BeginPopup("AddComponentPopup")) {
+    Text("Components");
+    if (Selectable("Mesh Renderer")) {
     }
-    if (ImGui::Selectable("Audio Source")) {
+    if (Selectable("Audio Source")) {
     }
-    if (ImGui::Selectable("Collider")) {
+    if (Selectable("Collider")) {
     }
-    if (ImGui::Selectable("Particle System")) {
+    if (Selectable("Particle System")) {
     }
-    if (ImGui::Selectable("Light")) {
+    if (Selectable("Light")) {
     }
 
     // Script creation section
     static bool showScriptInput = false;
-    if (ImGui::Selectable("Script")) {
+    if (Selectable("Script")) {
       showScriptInput = true;
     }
 
     // Show script input UI when Script is selected
     if (showScriptInput) {
-      ImGui::Separator();
-      ImGui::Text("Create New Script");
+      Separator();
+      Text("Create New Script");
 
       // Script input field with better styling
-      ImGui::PushItemWidth(-1); // Make input field fill available width
-      bool entered = ImGui::InputText("##ScriptName", currentScriptName,
-                                      IM_ARRAYSIZE(currentScriptName),
-                                      ImGuiInputTextFlags_EnterReturnsTrue);
+      PushItemWidth(-1); // Make input field fill available width
+      bool entered = InputText("##ScriptName", currentScriptName,
+                               IM_ARRAYSIZE(currentScriptName),
+                               ImGuiInputTextFlags_EnterReturnsTrue);
 
       // Show placeholder if empty
       if (strlen(currentScriptName) == 0) {
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetItemRectMin().x + 5);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                           "Enter script name...");
+        SameLine();
+        SetCursorPosX(GetItemRectMin().x + 5);
+        TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Enter script name...");
       }
 
       // Create and Cancel buttons
-      if (ImGui::Button("Create", ImVec2(120, 0)) || entered) {
+      if (Button("Create", ImVec2(120, 0)) || entered) {
         if (strlen(currentScriptName) > 0) {
           cout << "Create" << endl;
           projectHandler.NewScripts(currentScriptName);
@@ -410,11 +496,11 @@ void MainWindow::RenderInspectorWindow() {
           showScriptInput = false;
           memset(currentScriptName, 0,
                  sizeof(currentScriptName)); // Clear input
-          ImGui::CloseCurrentPopup();
+          CloseCurrentPopup();
         }
       }
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+      SameLine();
+      if (Button("Cancel", ImVec2(120, 0))) {
         showScriptInput = false;
         projectHandler.ShowNotification("Script Creation Cancelled",
                                         "Script creation cancelled",
@@ -422,13 +508,13 @@ void MainWindow::RenderInspectorWindow() {
         memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
       }
 
-      ImGui::PopItemWidth();
+      PopItemWidth();
     }
 
-    ImGui::EndPopup();
+    EndPopup();
     // }
   }
-  ImGui::End();
+  End();
 }
 
 void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
@@ -437,8 +523,8 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
   ImVec2 toolbarPos = ImVec2(parentPos.x + 10, parentPos.y + 30);
 
   // Set toolbar window properties
-  ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.8f); // Semi-transparent background
+  SetNextWindowPos(toolbarPos, ImGuiCond_Always);
+  SetNextWindowBgAlpha(0.8f); // Semi-transparent background
 
   // Toolbar window flags
   ImGuiWindowFlags toolbar_flags =
@@ -447,92 +533,91 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing;
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
   // Begin floating toolbar
-  if (ImGui::Begin("Scene Toolbar", nullptr, toolbar_flags)) {
+  if (Begin("Scene Toolbar", nullptr, toolbar_flags)) {
     // Reset View Button
-    if (ImGui::Button("Reset View")) {
+    if (Button("Reset View")) {
       ::Log("Resetting camera view", Debug::LogLevel::INFO);
-      sceneRenderer2D->ResetCamera();
+      sceneRenderer->ResetCamera();
     }
 
-    ImGui::SameLine();
+    SameLine();
 
     // Zoom controls
-    // static float zoom = sceneRenderer2D->zoom;
-    ImGui::SetNextItemWidth(100);
-    if (ImGui::SliderFloat("##Zoom", &sceneRenderer2D->zoom, 1.0f, 10.0f,
-                           "%.2fx")) {
-      sceneRenderer2D->SetCameraZoom(sceneRenderer2D->zoom);
+    // static float zoom = sceneRenderer->zoom;
+    SetNextItemWidth(100);
+    if (SliderFloat("##Zoom", &sceneRenderer->zoom, 1.0f, 10.0f, "%.2fx")) {
+      sceneRenderer->SetCameraZoom(sceneRenderer->zoom);
     }
 
-    ImGui::SameLine();
-    ImGui::Text("Zoom");
+    SameLine();
+    Text("Zoom");
 
     // New line for more controls
-    ImGui::NewLine();
+    NewLine();
 
     // Grid size control
     static float gridSize = 50.0f;
-    ImGui::SetNextItemWidth(80);
-    if (ImGui::DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f,
-                         "%.0f")) {
-      sceneRenderer2D->SetGridSize(gridSize);
+    SetNextItemWidth(80);
+    if (DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
+      sceneRenderer->SetGridSize(gridSize);
     }
 
-    ImGui::SameLine();
-    ImGui::Text("Grid Size");
+    SameLine();
+    Text("Grid Size");
 
     // Third line for color controls
-    ImGui::NewLine();
+    NewLine();
 
     // Grid color picker (compact)
     static float gridColor[3] = {0.5f, 0.5f, 0.5f};
-    ImGui::SetNextItemWidth(60);
-    if (ImGui::ColorEdit3("##GridColor", gridColor,
-                          ImGuiColorEditFlags_NoInputs |
-                              ImGuiColorEditFlags_NoLabel)) {
-      sceneRenderer2D->SetGridColor(gridColor[0], gridColor[1], gridColor[2],
-                                    1.0f);
+    SetNextItemWidth(60);
+    if (ColorEdit3("##GridColor", gridColor,
+                   ImGuiColorEditFlags_NoInputs |
+                       ImGuiColorEditFlags_NoLabel)) {
+      sceneRenderer->SetGridColor(gridColor[0], gridColor[1], gridColor[2],
+                                  1.0f);
     }
 
-    ImGui::SameLine();
-    ImGui::Text("Grid");
+    SameLine();
+    Text("Grid");
 
-    ImGui::SameLine();
+    SameLine();
 
     // Background color picker (compact)
     static float bgColor[3] = {0.2f, 0.2f, 0.2f};
-    ImGui::SetNextItemWidth(60);
-    if (ImGui::ColorEdit3("##BgColor", bgColor,
-                          ImGuiColorEditFlags_NoInputs |
-                              ImGuiColorEditFlags_NoLabel)) {
-      // if (sceneRenderer2D) {
-      sceneRenderer2D->SetBackgroundColor(
-          bgColor[0], bgColor[1], bgColor[2],
-          1.0f); // You'll need to implement this
-                 // }
+    SetNextItemWidth(60);
+    if (ColorEdit3("##BgColor", bgColor,
+                   ImGuiColorEditFlags_NoInputs |
+                       ImGuiColorEditFlags_NoLabel)) {
+      // if (sceneRenderer) {
+      sceneRenderer->SetBackgroundColor(bgColor[0], bgColor[1], bgColor[2],
+                                        1.0f); // You'll need to implement this
+                                               // }
     }
 
-    ImGui::SameLine();
-    ImGui::Text("Background");
+    SameLine();
+    Text("Background");
 
     // Snap to grid toggle
-    ImGui::NewLine();
+    NewLine();
     static bool snapToGrid = false;
-    ImGui::Checkbox("Snap to Grid", &snapToGrid);
+    if (Checkbox("Snap to Grid", &snapToGrid)) {
+      sceneRenderer->SetSnapToGrid(snapToGrid);
+    }
 
-    ImGui::SameLine();
+    SameLine();
 
     // View mode selector
     static int viewMode = 0;
     const char *viewModes[] = {"2D", "3D", "Wireframe"};
-    ImGui::SetNextItemWidth(80);
-    ImGui::Combo("##ViewMode", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
+    SetNextItemWidth(80);
+    Combo("##ViewMode", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
   }
-  ImGui::End();
+  End();
 
-  ImGui::PopStyleVar(1);
+  PopStyleVar(1);
 }
 
 void MainWindow::RenderSceneWindow() {
@@ -545,40 +630,72 @@ void MainWindow::RenderSceneWindow() {
       ImGuiWindowFlags_NoScrollWithMouse; // Tambahkan flag ini
 
   // Set window properties
-  ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowBgAlpha(0.0f);
+  SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+  SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
+  SetNextWindowBgAlpha(0.0f);
 
   // Push style untuk menghilangkan padding window
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  // ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-  // ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
-  // ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  // PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+  // PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
+  // PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
-  if (ImGui::Begin("Scene", &showScene, window_flags)) {
-    ImVec2 windowPos = ImGui::GetWindowPos();
-    ImVec2 windowSize = ImGui::GetWindowSize();
-    ImVec2 contentSize = ImGui::GetContentRegionAvail();
+  if (Begin("Scene", &showScene, window_flags)) {
+    ImVec2 windowPos = GetWindowPos();
+    ImVec2 windowSize = GetWindowSize();
+    ImVec2 contentSize = GetContentRegionAvail();
 
     // First-frame scene bootstrap. Two modes:
-    //   - Standalone debug (no project loaded): keep the Yixuan
-    //     hardcoded fallback so the engine boots into something
-    //     visible without needing a project.
+    //   - Standalone debug (no project loaded): boot either the 3D OBJ
+    //     fallback (Yixuan) or, when --2d was passed, a 2D sprite scene
+    //     using assets/testimage.png — both are intentional dev paths
+    //     so the engine renders something without needing a project.
     //   - Project mode (projectPath set): obey the project's
     //     scenes/main.ilmeeescene blueprint. Auto-create it with a
     //     single Cube if missing so a fresh project still renders.
     static std::string s_loadedForProject = "<none>";
     const std::string activeProject = projectHandler.projectPath;
     const std::string desired =
-        activeProject.empty() ? "<standalone>" : activeProject;
+        activeProject.empty()
+            ? (debug2D ? "<standalone-2d>" : "<standalone-3d>")
+            : activeProject;
     if (s_loadedForProject != desired) {
-      sceneRenderer2D->ClearMeshes3D();
+      sceneRenderer->ClearMeshes3D();
+      projectHandler.currentScene.objects.clear();
 
       if (activeProject.empty()) {
-        // Standalone fallback (intentional — kept so engineers can
-        // boot GameEngineSDL directly for first-gen debugging).
-        if (sceneRenderer2D->LoadObjMesh("assets/3dmodels/yixuan.obj")) {
+        if (debug2D) {
+          // 2D debug fallback: drop a single sprite at the world origin
+          // sized 300x300 px. The 2D orthographic projection is pixel-
+          // based (-W/2..+W/2), so this lands centered in any panel
+          // size. The mesh-pipeline 3D grid is hidden to keep the view
+          // clean — the 2D grid (toggle in the Scene toolbar) still
+          // works.
+          GameObject sprite;
+          sprite.name = "TestSprite";
+          sprite.spritePath = "assets/testimage.png";
+          sprite.x = 0.0f;
+          sprite.y = 0.0f;
+          sprite.width = 300.0f;
+          sprite.height = 300.0f;
+          projectHandler.currentScene.objects.push_back(sprite);
+          sceneRenderer->SetGrid3DVisible(false);
+          ::Log("Standalone 2D debug scene: testimage sprite loaded.",
+                Debug::LogLevel::SUCCESS);
           s_loadedForProject = desired;
+        } else {
+          // 3D fallback (intentional — kept so engineers can boot
+          // GameEngineSDL directly for first-gen debugging).
+          // Prefer PMX model if available, fall back to OBJ.
+          bool loaded = false;
+          if (!loaded)
+            loaded =
+                sceneRenderer->LoadPMXMesh("assets/3dmodels/wise/wise.pmx");
+          if (!loaded)
+            loaded = sceneRenderer->LoadObjMesh("assets/3dmodels/belle.obj");
+          if (loaded) {
+            s_loadedForProject = desired;
+          }
         }
       } else {
         namespace fs = std::filesystem;
@@ -601,24 +718,40 @@ void MainWindow::RenderSceneWindow() {
           bool ok = false;
           switch (e.kind) {
           case ilmeee::PrimitiveKind::Cube:
-            ok = sceneRenderer2D->LoadCube(e.name);
+            ok = sceneRenderer->LoadCube(e.name);
             break;
           case ilmeee::PrimitiveKind::Sphere:
-            ok = sceneRenderer2D->LoadSphere(e.name);
+            ok = sceneRenderer->LoadSphere(e.name);
             break;
           case ilmeee::PrimitiveKind::Plane:
-            ok = sceneRenderer2D->LoadPlane(e.name);
+            ok = sceneRenderer->LoadPlane(e.name);
             break;
           case ilmeee::PrimitiveKind::ExternalObj: {
             fs::path full = fs::path(activeProject) / e.externalPath;
-            ok = sceneRenderer2D->LoadObjMesh(full.string());
+            std::string ext = full.extension().string();
+            // Auto-detect: .pmx → PMX loader, otherwise OBJ
+            if (ext == ".pmx" || ext == ".PMX")
+              ok = sceneRenderer->LoadPMXMesh(full.string());
+            else
+              ok = sceneRenderer->LoadObjMesh(full.string());
+            break;
+          }
+          case ilmeee::PrimitiveKind::ExternalPmx: {
+            fs::path full = fs::path(activeProject) / e.externalPath;
+            ok = sceneRenderer->LoadPMXMesh(full.string());
+            break;
+          }
+          case ilmeee::PrimitiveKind::Light: {
+            ok = sceneRenderer->LoadLight(e.name, e.lightType, e.lightColor,
+                                          e.lightIntensity, e.lightRange,
+                                          e.lightSpotAngle, e.lightGamma);
             break;
           }
           }
           if (ok) {
-            size_t idx = sceneRenderer2D->GetMesh3DCount() - 1;
-            sceneRenderer2D->SetMesh3DTransform(idx, e.position,
-                                                e.rotationEuler, e.scale);
+            size_t idx = sceneRenderer->GetMesh3DCount() - 1;
+            sceneRenderer->SetMesh3DTransform(idx, e.position, e.rotationEuler,
+                                              e.scale);
           }
         }
         s_loadedForProject = desired;
@@ -628,69 +761,238 @@ void MainWindow::RenderSceneWindow() {
     // Resize the offscreen target to match the panel so the 3D viewport
     // fills the entire window without letterboxing.
     if (contentSize.x > 0 && contentSize.y > 0) {
-      sceneRenderer2D->SetViewportSize((int)contentSize.x, (int)contentSize.y);
+      sceneRenderer->SetViewportSize((int)contentSize.x, (int)contentSize.y);
     }
 
     // Gather one-frame input for the 3D camera. Only feed it when the
     // panel is hovered so editor shortcuts elsewhere keep working.
-    SceneRenderer2D::ViewportInput vpIn;
-    vpIn.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
-    ImGuiIO &io = ImGui::GetIO();
+    SceneRenderer::ViewportInput vpIn;
+    vpIn.hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+    ImGuiIO &io = GetIO();
     vpIn.deltaTime = io.DeltaTime > 0.0f ? io.DeltaTime : 1.0f / 60.0f;
-    vpIn.rmbDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    vpIn.rmbDown = IsMouseDown(ImGuiMouseButton_Right);
     ImVec2 dragDelta = io.MouseDelta;
     vpIn.mouseDeltaX = dragDelta.x;
     vpIn.mouseDeltaY = dragDelta.y;
     vpIn.scroll = io.MouseWheel;
     if (vpIn.hovered) {
-      vpIn.wDown = ImGui::IsKeyDown(ImGuiKey_W);
-      vpIn.aDown = ImGui::IsKeyDown(ImGuiKey_A);
-      vpIn.sDown = ImGui::IsKeyDown(ImGuiKey_S);
-      vpIn.dDown = ImGui::IsKeyDown(ImGuiKey_D);
-      vpIn.qDown = ImGui::IsKeyDown(ImGuiKey_Q);
-      vpIn.eDown = ImGui::IsKeyDown(ImGuiKey_E);
-      vpIn.shiftDown = ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
-                       ImGui::IsKeyDown(ImGuiKey_RightShift);
+      vpIn.wDown = IsKeyDown(ImGuiKey_W);
+      vpIn.aDown = IsKeyDown(ImGuiKey_A);
+      vpIn.sDown = IsKeyDown(ImGuiKey_S);
+      vpIn.dDown = IsKeyDown(ImGuiKey_D);
+      vpIn.qDown = IsKeyDown(ImGuiKey_Q);
+      vpIn.eDown = IsKeyDown(ImGuiKey_E);
+      vpIn.shiftDown =
+          IsKeyDown(ImGuiKey_LeftShift) || IsKeyDown(ImGuiKey_RightShift);
     }
-    sceneRenderer2D->UpdateCamera3D(vpIn);
+    // Route input depending on what's loaded. With 3D meshes present we
+    // drive the FPS camera; without them (the 2D sprite fallback or any
+    // empty scene) we treat the viewport as a 2D editor: RMB drag pans
+    // cameraPosition, wheel zooms.
+    const bool sceneIs2D = !sceneRenderer->HasMesh3D();
+    if (sceneIs2D) {
+      if (vpIn.hovered && vpIn.rmbDown &&
+          (vpIn.mouseDeltaX != 0.0f || vpIn.mouseDeltaY != 0.0f)) {
+        sceneRenderer->HandleDrag(vpIn.mouseDeltaX, vpIn.mouseDeltaY);
+      }
+      if (vpIn.hovered && vpIn.scroll != 0.0f) {
+        sceneRenderer->HandleZoom(vpIn.scroll);
+      }
+    } else {
+      sceneRenderer->UpdateCamera3D(vpIn);
+    }
 
     // Render scene dengan ukuran penuh
-    sceneRenderer2D->RenderSceneToTexture(projectHandler.currentScene);
+    sceneRenderer->RenderSceneToTexture(projectHandler.currentScene);
 
     // Tampilkan offscreen image di panel. Y dibalik (ImVec2(0,1)→(1,0))
     // karena framebuffer Vulkan top-left origin sedangkan ImGui sample
     // bottom-up; tanpa flip, segitiga terbalik vertikal.
-    VkDescriptorSet sceneDesc = sceneRenderer2D->GetViewportDescriptorSet();
+    VkDescriptorSet sceneDesc = sceneRenderer->GetViewportDescriptorSet();
     if (sceneDesc != VK_NULL_HANDLE && contentSize.x > 0 && contentSize.y > 0) {
-      ImGui::Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1),
-                   ImVec2(1, 0));
+      Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1), ImVec2(1, 0));
+
+      // Dynamic 2D grid overlay. Drawn via ImDrawList on top of the
+      // viewport image so it instantly tracks pan/zoom without needing
+      // its own Vulkan pipeline. World→screen mapping uses the same
+      // ortho/center convention as the renderer (Y is inverted because
+      // ImGui is Y-down while the displayed image is Y-up post UV
+      // flip). Step adapts to zoom so lines stay 16–128 px apart.
+      if (sceneIs2D && sceneRenderer->IsGridVisible()) {
+        ImDrawList *dl = GetWindowDrawList();
+        const ImVec2 imgMin = GetItemRectMin();
+        const ImVec2 imgMax = GetItemRectMax();
+        const ImVec2 imgSize = ImVec2(imgMax.x - imgMin.x, imgMax.y - imgMin.y);
+        const ImVec2 center =
+            ImVec2(imgMin.x + imgSize.x * 0.5f, imgMin.y + imgSize.y * 0.5f);
+        const glm::vec2 cam = sceneRenderer->cameraPosition;
+        const float zoom =
+            sceneRenderer->cameraZoom > 0.0f ? sceneRenderer->cameraZoom : 1.0f;
+        float step = sceneRenderer->GetGridSize();
+        if (step <= 0.0f)
+          step = 50.0f;
+        float pxStep = step * zoom;
+        // Keep lines in a comfortable density: rescale step by powers of 2.
+        while (pxStep > 0.0f && pxStep < 16.0f) {
+          step *= 2.0f;
+          pxStep = step * zoom;
+        }
+        while (pxStep > 128.0f) {
+          step *= 0.5f;
+          pxStep = step * zoom;
+        }
+
+        const float worldL = cam.x - imgSize.x * 0.5f / zoom;
+        const float worldR = cam.x + imgSize.x * 0.5f / zoom;
+        const float worldB = cam.y - imgSize.y * 0.5f / zoom;
+        const float worldT = cam.y + imgSize.y * 0.5f / zoom;
+
+        const ImU32 minorCol = IM_COL32(90, 90, 100, 160);
+        const ImU32 majorCol = IM_COL32(140, 140, 160, 200);
+        const ImU32 axisXCol = IM_COL32(220, 70, 70, 230);  // red — X
+        const ImU32 axisYCol = IM_COL32(70, 130, 230, 230); // blue — Y
+
+        dl->PushClipRect(imgMin, imgMax, true);
+
+        // Vertical lines (constant world X)
+        const float startX = std::floor(worldL / step) * step;
+        for (float wx = startX; wx <= worldR + step * 0.5f; wx += step) {
+          const float sx = center.x + (wx - cam.x) * zoom;
+          const bool major =
+              std::fabs(std::fmod(wx, step * 5.0f)) < step * 0.5f;
+          dl->AddLine(ImVec2(sx, imgMin.y), ImVec2(sx, imgMax.y),
+                      major ? majorCol : minorCol, major ? 1.2f : 1.0f);
+        }
+        // Horizontal lines (constant world Y) — Y inverted for screen.
+        const float startY = std::floor(worldB / step) * step;
+        for (float wy = startY; wy <= worldT + step * 0.5f; wy += step) {
+          const float sy = center.y - (wy - cam.y) * zoom;
+          const bool major =
+              std::fabs(std::fmod(wy, step * 5.0f)) < step * 0.5f;
+          dl->AddLine(ImVec2(imgMin.x, sy), ImVec2(imgMax.x, sy),
+                      major ? majorCol : minorCol, major ? 1.2f : 1.0f);
+        }
+        // Axes through world origin.
+        const float ay0 = center.y - (0.0f - cam.y) * zoom;
+        const float ax0 = center.x + (0.0f - cam.x) * zoom;
+        dl->AddLine(ImVec2(imgMin.x, ay0), ImVec2(imgMax.x, ay0), axisXCol,
+                    1.6f);
+        dl->AddLine(ImVec2(ax0, imgMin.y), ImVec2(ax0, imgMax.y), axisYCol,
+                    1.6f);
+
+        dl->PopClipRect();
+      }
+
       // LMB click on the viewport selects the first 3D mesh as a
       // hardcoded fallback until proper ray-picking lands. Populates
       // the Inspector Name field and highlights the matching Hierarchy
       // row by name match.
-      if (ImGui::IsItemClicked(ImGuiMouseButton_Left) &&
-          sceneRenderer2D->HasMesh3D()) {
-        const std::string &firstName = sceneRenderer2D->GetMesh3DName(0);
+      if (IsItemClicked(ImGuiMouseButton_Left) && sceneRenderer->HasMesh3D()) {
+        const std::string &firstName = sceneRenderer->GetMesh3DName(0);
         std::snprintf(objectName, sizeof(objectName), "%s", firstName.c_str());
       }
       // LMB drag → move the currently-selected mesh in screen plane.
       int selIdx = -1;
-      for (size_t i = 0; i < sceneRenderer2D->GetMesh3DCount(); ++i) {
-        if (sceneRenderer2D->GetMesh3DName(i) == objectName) {
+      for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
+        if (sceneRenderer->GetMesh3DName(i) == objectName) {
           selIdx = (int)i;
           break;
         }
       }
-      const bool dragging = ImGui::IsItemHovered() &&
-                            ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
-                            !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
-                            selIdx >= 0;
+      const bool dragging = IsItemHovered() &&
+                            IsMouseDragging(ImGuiMouseButton_Left) &&
+                            !IsMouseDown(ImGuiMouseButton_Right) && selIdx >= 0;
       if (dragging) {
-        ImVec2 md = ImGui::GetIO().MouseDelta;
+        ImVec2 md = GetIO().MouseDelta;
         if (md.x != 0.0f || md.y != 0.0f) {
-          sceneRenderer2D->DragMesh3DScreen((size_t)selIdx, md.x, md.y,
-                                            (int)contentSize.y);
+          sceneRenderer->DragMesh3DScreen((size_t)selIdx, md.x, md.y,
+                                          (int)contentSize.y);
         }
+      }
+
+      // Right-click WITHOUT drag opens an "Add" menu and instances a
+      // default object on the ground where the cursor was. RMB-drag is
+      // camera mouselook, so we snapshot the press position; ImGui only
+      // opens the context popup when the button is released without
+      // dragging past the threshold, which gives us click-vs-drag for
+      // free without stealing the orbit gesture.
+      const ImVec2 imgMin = GetItemRectMin();
+      static ImVec2 s_rmbAnchor(0.0f, 0.0f);
+      if (IsItemHovered() && IsMouseClicked(ImGuiMouseButton_Right)) {
+        ImVec2 m = GetMousePos();
+        s_rmbAnchor = ImVec2(m.x - imgMin.x, m.y - imgMin.y);
+      }
+      if (BeginPopupContextItem("SceneAddMenu",
+                                ImGuiPopupFlags_MouseButtonRight)) {
+        if (BeginMenu("Add")) {
+          // 0 = Cube (default), 1 = Sphere, 2 = Plane
+          auto spawn = [&](int kind) {
+            glm::vec3 world(0.0f);
+            if (!sceneRenderer->ScreenToGround(s_rmbAnchor.x, s_rmbAnchor.y,
+                                               world)) {
+              // Ground not under cursor (looking up/at horizon): drop it
+              // on the ground a few units ahead of the camera.
+              glm::vec3 f = sceneRenderer->GetCameraForward();
+              glm::vec3 cp = sceneRenderer->camera3d.position;
+              glm::vec2 fh = glm::vec2(f.x, f.z);
+              if (glm::length(fh) > 1e-4f)
+                fh = glm::normalize(fh);
+              world = glm::vec3(cp.x + fh.x * 6.0f, 0.0f, cp.z + fh.y * 6.0f);
+            }
+            if (sceneRenderer->IsSnapToGrid()) {
+              world.x = std::round(world.x);
+              world.z = std::round(world.z);
+            }
+            const char *base = (kind == 0)   ? "Cube"
+                               : (kind == 1) ? "Sphere"
+                               : (kind == 2) ? "Plane"
+                               : (kind == 3) ? "Light"
+                                             : "Camera";
+            // Auto-number so repeated adds don't collide by name.
+            std::string name = base;
+            auto taken = [&](const std::string &s) {
+              for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
+                if (sceneRenderer->GetMesh3DName(i) == s)
+                  return true;
+              return false;
+            };
+            for (int n = 1; taken(name); ++n)
+              name = std::string(base) + " " + std::to_string(n);
+
+            bool ok = false;
+            if (kind == 0)
+              ok = sceneRenderer->LoadCube(name);
+            else if (kind == 1)
+              ok = sceneRenderer->LoadSphere(name);
+            else if (kind == 2)
+              ok = sceneRenderer->LoadPlane(name);
+            else if (kind == 3)
+              ok = sceneRenderer->LoadLight(name, 0,
+                                            glm::vec3(1.0f, 0.96f, 0.88f), 1.0f,
+                                            10.0f, 30.0f, 1.05f);
+            else if (kind == 4)
+              ok = sceneRenderer->LoadCamera(name);
+
+            if (ok) {
+              size_t idx = sceneRenderer->GetMesh3DCount() - 1;
+              sceneRenderer->SetMesh3DTransform(idx, world, glm::vec3(0.0f),
+                                                glm::vec3(1.0f));
+              std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
+            }
+          };
+          if (MenuItem("Cube"))
+            spawn(0);
+          if (MenuItem("Sphere"))
+            spawn(1);
+          if (MenuItem("Plane"))
+            spawn(2);
+          if (MenuItem("Light"))
+            spawn(3);
+          if (MenuItem("Camera"))
+            spawn(4);
+          EndMenu();
+        }
+        EndPopup();
       }
     }
 
@@ -698,45 +1000,69 @@ void MainWindow::RenderSceneWindow() {
     RenderSceneToolbarView(windowPos, windowSize);
 
     // Status bar dengan background semi-transparan
-    ImGui::SetCursorPos(ImVec2(0, windowSize.y - 25));
-    // ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f));
-    ImGui::BeginChild("StatusBar", ImVec2(windowSize.x, 25), false);
-    ImGui::Text(" Scene View | FPS: %.1f | Zoom: %.2fx",
-                ImGui::GetIO().Framerate, sceneRenderer2D->GetZoom());
-    ImGui::EndChild();
-    // ImGui::PopStyleColor();
+    SetCursorPos(ImVec2(0, windowSize.y - 25));
+    // PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f));
+    BeginChild("StatusBar", ImVec2(windowSize.x, 25), false);
+    Text(" Scene View | FPS: %.1f | Zoom: %.2fx", GetIO().Framerate,
+         sceneRenderer->GetZoom());
+    EndChild();
+    // PopStyleColor();
   }
-  ImGui::End();
+  End();
 
   // Pop semua style yang di-push
-  ImGui::PopStyleVar(1);
+  PopStyleVar(1);
+
+  // Player-camera preview: render the scene from the first camera object in
+  // the scene and show it in its own window. Only present when a camera
+  // exists, so the editor stays uncluttered otherwise.
+  if (sceneRenderer && sceneRenderer->HasPlayerCamera()) {
+    sceneRenderer->RenderPlayerCameraPreview();
+    if (Begin("Camera Preview", nullptr, ImGuiWindowFlags_NoScrollbar)) {
+      VkDescriptorSet d = sceneRenderer->GetPlayerCameraPreviewDescriptor();
+      if (d != VK_NULL_HANDLE) {
+        ImVec2 avail = GetContentRegionAvail();
+        float aspect = (float)sceneRenderer->GetPreviewWidth() /
+                       (float)sceneRenderer->GetPreviewHeight();
+        float w = avail.x;
+        float h = w / aspect;
+        if (h > avail.y && avail.y > 0.0f) {
+          h = avail.y;
+          w = h * aspect;
+        }
+        // Flip V like the main viewport (framebuffer is top-left origin).
+        Image((ImTextureID)d, ImVec2(w, h), ImVec2(0, 1), ImVec2(1, 0));
+      }
+    }
+    End();
+  }
 }
 
 void MainWindow::RenderMainViewWindow() {
   if (!showMainView)
     return;
 
-  ImGui::Begin("Main View", &showMainView, ImGuiWindowFlags_NoCollapse);
+  Begin("Main View", &showMainView, ImGuiWindowFlags_NoCollapse);
 
-  if (ImGui::BeginTabBar("MainTabs")) {
-    if (ImGui::BeginTabItem("Viewport")) {
-      ImGui::EndTabItem();
+  if (BeginTabBar("MainTabs")) {
+    if (BeginTabItem("Viewport")) {
+      EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Animation")) {
-      ImGui::Text("Animation editor will be displayed here");
-      ImGui::EndTabItem();
+    if (BeginTabItem("Animation")) {
+      Text("Animation editor will be displayed here");
+      EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Particle Editor")) {
-      ImGui::Text("Particle system editor will be displayed here");
-      ImGui::EndTabItem();
+    if (BeginTabItem("Particle Editor")) {
+      Text("Particle system editor will be displayed here");
+      EndTabItem();
     }
 
-    ImGui::EndTabBar();
+    EndTabBar();
   }
 
-  ImGui::End();
+  End();
 }
 
 void MainWindow::RenderViewportToolbar() {
@@ -744,69 +1070,68 @@ void MainWindow::RenderViewportToolbar() {
   float toolbarHeight = 28.0f;
 
   // Mode dropdown
-  ImGui::Text("Mode:");
-  ImGui::SameLine();
+  Text("Mode:");
+  SameLine();
   const char *modes[] = {"Select", "Move", "Rotate", "Scale"};
   static int currentMode = 0;
-  ImGui::SetNextItemWidth(100);
-  if (ImGui::Combo("##viewportMode", &currentMode, modes,
-                   IM_ARRAYSIZE(modes))) {
+  SetNextItemWidth(100);
+  if (Combo("##viewportMode", &currentMode, modes, IM_ARRAYSIZE(modes))) {
     // Handle mode change
-    sceneRenderer2D->SetEditMode((SceneRenderer2D::EditMode)currentMode);
+    sceneRenderer->SetEditMode((SceneRenderer::EditMode)currentMode);
   }
 
   // Tombol grid
-  ImGui::SameLine(0, 15);
+  SameLine(0, 15);
   static bool showGrid = true;
-  if (ImGui::Checkbox("Show Grid", &showGrid)) {
-    sceneRenderer2D->SetGridVisible(showGrid);
+  if (Checkbox("Show Grid", &showGrid)) {
+    sceneRenderer->SetGridVisible(showGrid);
   }
 
   // Grid size slider
-  ImGui::SameLine(0, 15);
-  ImGui::Text("Grid Size:");
-  ImGui::SameLine();
+  SameLine(0, 15);
+  Text("Grid Size:");
+  SameLine();
   static float gridSize = 32.0f;
-  ImGui::SetNextItemWidth(80);
-  if (ImGui::SliderFloat("##gridSize", &gridSize, 8.0f, 64.0f, "%.0f")) {
-    sceneRenderer2D->SetGridSize(gridSize);
+  SetNextItemWidth(80);
+  if (SliderFloat("##gridSize", &gridSize, 8.0f, 64.0f, "%.0f")) {
+    sceneRenderer->SetGridSize(gridSize);
   }
 
   // Snap to grid
-  ImGui::SameLine(0, 15);
+  SameLine(0, 15);
   static bool snapToGrid = true;
-  if (ImGui::Checkbox("Snap to Grid", &snapToGrid)) {
-    sceneRenderer2D->SetSnapToGrid(snapToGrid);
+  if (Checkbox("Snap to Grid", &snapToGrid)) {
+    sceneRenderer->SetSnapToGrid(snapToGrid);
   }
 
   // Camera controls
-  ImGui::SameLine(0, 20);
-  if (ImGui::Button("Reset Camera")) {
-    sceneRenderer2D->ResetCamera();
+  SameLine(0, 20);
+  if (Button("Reset Camera")) {
+    sceneRenderer->ResetCamera();
   }
 
-  ImGui::SameLine();
-  ImGui::Text("Zoom:");
-  ImGui::SameLine();
+  SameLine();
+  Text("Zoom:");
+  SameLine();
   static float zoom = 1.0f;
-  ImGui::SetNextItemWidth(80);
-  if (ImGui::SliderFloat("##zoom", &zoom, 0.1f, 5.0f, "%.1fx")) {
-    sceneRenderer2D->SetCameraZoom(zoom);
+  SetNextItemWidth(80);
+  if (SliderFloat("##zoom", &zoom, 0.1f, 5.0f, "%.1fx")) {
+    sceneRenderer->SetCameraZoom(zoom);
   }
 
-  ImGui::Separator();
+  Separator();
 }
 
 void MainWindow::HandleViewportInteraction(ImVec2 viewportPos,
                                            ImVec2 viewportSize) {
   // Cek apakah mouse berada di dalam viewport
-  ImVec2 mousePos = ImGui::GetMousePos();
-  bool isHovered = ImGui::IsItemHovered();
+  ImVec2 mousePos = GetMousePos();
+  bool isHovered = IsItemHovered();
 
   // Jika viewport dihover, tampilkan overlay informasi di pojok kanan bawah
   if (isHovered) {
-    // ImGui::Text("Now Hovered View Port");
-    // ImGui::SameLine();
+    // Text("Now Hovered View Port");
+    // SameLine();
     // Hitung posisi mouse relatif terhadap viewport (dalam piksel viewport)
     float viewportX = mousePos.x - viewportPos.x;
     float viewportY = mousePos.y - viewportPos.y;
@@ -814,71 +1139,70 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos,
     // Konversi koordinat viewport ke koordinat world (dengan memperhitungkan
     // zoom/pan)
     glm::vec2 worldPos =
-        sceneRenderer2D->ViewportToWorldPosition(viewportX, viewportY);
+        sceneRenderer->ViewportToWorldPosition(viewportX, viewportY);
 
     // Tampilkan informasi koordinat di pojok kanan bawah viewport
     char coordText[64];
     snprintf(coordText, sizeof(coordText), "X: %.1f, Y: %.1f", worldPos.x,
              worldPos.y);
 
-    ImVec2 textSize = ImGui::CalcTextSize(coordText);
+    ImVec2 textSize = CalcTextSize(coordText);
     ImVec2 textPos = ImVec2(viewportPos.x + viewportSize.x - textSize.x - 10,
                             viewportPos.y + viewportSize.y - textSize.y - 5);
 
-    ImGui::GetWindowDrawList()->AddText(textPos, IM_COL32(0, 0, 0, 220),
-                                        coordText);
+    GetWindowDrawList()->AddText(textPos, IM_COL32(0, 0, 0, 220), coordText);
 
     // Handling click untuk seleksi objek
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-      // ImGui::Text("Select Object");
-      // ImGui::SameLine();
+    if (IsMouseClicked(ImGuiMouseButton_Left)) {
+      // Text("Select Object");
+      // SameLine();
       cout << "Click" << endl;
       // projectHandler.sceneRenderer->HandleClick(worldPos.x, worldPos.y);
     }
 
     // Handling drag untuk move objek atau pan kamera
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-      // ImGui::Text("Drag Object");
-      // ImGui::SameLine();
+    if (IsMouseDragging(ImGuiMouseButton_Left)) {
+      // Text("Drag Object");
+      // SameLine();
       cout << "Dragging" << endl;
-      ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-      sceneRenderer2D->HandleDrag(delta.x, delta.y);
-      ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
+      ImVec2 delta = GetMouseDragDelta(ImGuiMouseButton_Left);
+      sceneRenderer->HandleDrag(delta.x, delta.y);
+      ResetMouseDragDelta(ImGuiMouseButton_Left);
     }
 
     // Handling zoom dengan mouse wheel
-    float wheel = ImGui::GetIO().MouseWheel;
+    float wheel = GetIO().MouseWheel;
     if (wheel != 0) {
       cout << "Handle Zoom" << endl;
-      sceneRenderer2D->HandleZoom(wheel);
+      sceneRenderer->HandleZoom(wheel);
     }
 
     // Handling key input untuk precision movement
-    ImGuiIO &io = ImGui::GetIO();
-    if (sceneRenderer2D->HasSelectedObject()) {
+    ImGuiIO &io = GetIO();
+    if (sceneRenderer->HasSelectedObject()) {
       // cout << "Receive Input" << endl;
       float moveAmount = io.KeyShift ? 10.0f : 1.0f;
 
-      if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+      if (IsKeyPressed(ImGuiKey_LeftArrow)) {
         cout << "Left Arrow" << endl;
-        sceneRenderer2D->MoveSelected(-moveAmount, 0);
+        sceneRenderer->MoveSelected(-moveAmount, 0);
       }
-      if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+      if (IsKeyPressed(ImGuiKey_RightArrow)) {
         cout << "Right Arrow" << endl;
-        sceneRenderer2D->MoveSelected(moveAmount, 0);
+        sceneRenderer->MoveSelected(moveAmount, 0);
       }
-      if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+      if (IsKeyPressed(ImGuiKey_UpArrow)) {
         cout << "Up Arrow" << endl;
-        sceneRenderer2D->MoveSelected(0, -moveAmount);
+        sceneRenderer->MoveSelected(0, -moveAmount);
       }
-      if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+      if (IsKeyPressed(ImGuiKey_DownArrow)) {
         cout << "Down Arrow" << endl;
-        sceneRenderer2D->MoveSelected(0, moveAmount);
+        sceneRenderer->MoveSelected(0, moveAmount);
       }
 
       // Delete key untuk menghapus objek
-      if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-        sceneRenderer2D->DeleteSelected();
+      if (IsKeyPressed(ImGuiKey_Delete)) {
+        sceneRenderer->DeleteSelected();
       }
     }
   }
@@ -888,51 +1212,50 @@ void MainWindow::RenderConsoleWindow() {
   if (!showConsole)
     return;
   // Set window properties
-  ImGui::Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
-  ImVec2 pos = ImGui::GetWindowPos();
-  ImVec2 size = ImGui::GetWindowSize();
+  Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
+  ImVec2 pos = GetWindowPos();
+  ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
 
   static int selectedTab = 0;
-  ImGui::BeginTabBar("ConsoleTabs");
+  BeginTabBar("ConsoleTabs");
 
-  if (ImGui::BeginTabItem("Output")) {
+  if (BeginTabItem("Output")) {
     // Toolbar area
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
-    ImGui::BeginChild("ConsoleToolbar", ImVec2(0, 30), false);
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+    BeginChild("ConsoleToolbar", ImVec2(0, 30), false);
 
     // Clear button with better styling
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-    if (ImGui::Button("Clear", ImVec2(60, 24))) {
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+    if (Button("Clear", ImVec2(60, 24))) {
       messages.clear();
     }
-    ImGui::PopStyleColor(2);
+    PopStyleColor(2);
 
     // Filter dropdown
-    ImGui::SameLine();
+    SameLine();
     const char *filters[] = {"All", "Info", "Warning", "Error"};
     static int currentFilter = 0;
-    ImGui::SetNextItemWidth(100);
-    ImGui::Combo("##Filter", &currentFilter, filters, IM_ARRAYSIZE(filters));
+    SetNextItemWidth(100);
+    Combo("##Filter", &currentFilter, filters, IM_ARRAYSIZE(filters));
 
     // Search box
-    ImGui::SameLine();
+    SameLine();
     static char searchBuffer[128] = "";
-    ImGui::SetNextItemWidth(-1); // Take remaining width
-    ImGui::InputTextWithHint("##search", "Search in console...", searchBuffer,
-                             IM_ARRAYSIZE(searchBuffer));
+    SetNextItemWidth(-1); // Take remaining width
+    InputTextWithHint("##search", "Search in console...", searchBuffer,
+                      IM_ARRAYSIZE(searchBuffer));
 
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
+    EndChild();
+    PopStyleVar();
 
     // Console output area
-    ImGui::BeginChild("ConsoleOutput", ImVec2(0, -5), true);
+    BeginChild("ConsoleOutput", ImVec2(0, -5), true);
 
     // Style for console text
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
+    PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
 
     static char consoleBuffer[4096];
     string combinedLog;
@@ -956,103 +1279,102 @@ void MainWindow::RenderConsoleWindow() {
     strncpy(consoleBuffer, combinedLog.c_str(), sizeof(consoleBuffer) - 1);
     consoleBuffer[sizeof(consoleBuffer) - 1] = '\0';
 
-    ImGui::InputTextMultiline("##console", consoleBuffer,
-                              IM_ARRAYSIZE(consoleBuffer), ImVec2(-1, -1),
-                              ImGuiInputTextFlags_ReadOnly);
+    InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer),
+                       ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
     // Auto-scroll
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-      ImGui::SetScrollHereY(1.0f);
+    if (GetScrollY() >= GetScrollMaxY()) {
+      SetScrollHereY(1.0f);
     }
 
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-    ImGui::EndChild();
+    PopStyleVar();
+    PopStyleColor();
+    EndChild();
 
-    ImGui::EndTabItem();
+    EndTabItem();
   }
 
-  if (ImGui::BeginTabItem("Build")) {
+  if (BeginTabItem("Build")) {
     selectedTab = 2;
-    ImGui::Text("Build output will be displayed here");
-    ImGui::EndTabItem();
+    Text("Build output will be displayed here");
+    EndTabItem();
   }
 
-  ImGui::EndTabBar();
+  EndTabBar();
 
-  ImGui::End();
+  End();
 }
 
 void MainWindow::RenderMenuBar() {
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("File")) {
-      if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
+  if (BeginMainMenuBar()) {
+    if (BeginMenu("File")) {
+      if (MenuItem("New Scene", "Ctrl+N")) {
         projectHandler.SaveNewScene();
       }
-      if (ImGui::MenuItem("Open Project", "Ctrl+O")) {
+      if (MenuItem("Open Project", "Ctrl+O")) {
         projectHandler.isOpenedProject = true;
         projectHandler.OpenFolder();
       }
-      if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
+      if (MenuItem("Load Scene", "Ctrl+O")) {
         // projectHandler.OpenScene();
         networkManager->sendMessage("LoadScene");
       }
-      if (ImGui::MenuItem("Save", "Ctrl+S")) {
+      if (MenuItem("Save", "Ctrl+S")) {
+        Save3DScene();
       }
-      if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+      if (MenuItem("Save As...", "Ctrl+Shift+S")) {
         projectHandler.SaveAsScene();
       }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Exit", "Alt+F4"))
+      Separator();
+      if (MenuItem("Exit", "Alt+F4"))
         isRunning = false;
-      ImGui::EndMenu();
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("Edit")) {
-      if (ImGui::MenuItem("Undo", "Ctrl+Z")) {
+    if (BeginMenu("Edit")) {
+      if (MenuItem("Undo", "Ctrl+Z")) {
       }
-      if (ImGui::MenuItem("Redo", "Ctrl+Y")) {
+      if (MenuItem("Redo", "Ctrl+Y")) {
       }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Cut", "Ctrl+X")) {
+      Separator();
+      if (MenuItem("Cut", "Ctrl+X")) {
       }
-      if (ImGui::MenuItem("Copy", "Ctrl+C")) {
+      if (MenuItem("Copy", "Ctrl+C")) {
       }
-      if (ImGui::MenuItem("Paste", "Ctrl+V")) {
+      if (MenuItem("Paste", "Ctrl+V")) {
       }
-      ImGui::EndMenu();
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("View")) {
-      if (ImGui::MenuItem("Toggle Dark/Light Theme", "Ctrl+T")) {
+    if (BeginMenu("View")) {
+      if (MenuItem("Toggle Dark/Light Theme", "Ctrl+T")) {
         darkTheme = !darkTheme;
         setTheme(darkTheme);
       }
-      if (ImGui::MenuItem("Toggle Fullscreen", "F")) {
+      if (MenuItem("Toggle Fullscreen", "F")) {
         fullscreen = !fullscreen;
         SDL_SetWindowFullscreen(window, fullscreen);
       }
-      ImGui::EndMenu();
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("Tools")) {
-      if (ImGui::MenuItem("Secondary Window", nullptr, &showSecondary)) {
+    if (BeginMenu("Tools")) {
+      if (MenuItem("Secondary Window", nullptr, &showSecondary)) {
       }
-      ImGui::EndMenu();
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("Help")) {
-      if (ImGui::MenuItem("Documentation")) {
+    if (BeginMenu("Help")) {
+      if (MenuItem("Documentation")) {
       }
-      if (ImGui::MenuItem("About")) {
+      if (MenuItem("About")) {
       }
-      ImGui::EndMenu();
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("Background")) {
-      ImGui::Checkbox("Use Background", &isBackgroundActived);
-      if (ImGui::Combo(" ", &currentBgInt, backgroundOptions,
-                       Background_Count)) {
+    if (BeginMenu("Background")) {
+      Checkbox("Use Background", &isBackgroundActived);
+      if (Combo(" ", &currentBgInt, backgroundOptions, Background_Count)) {
         currentBg = static_cast<CurrentBackground>(currentBgInt);
         cout << currentBg << endl;
         isBackgroundChanged = true;
@@ -1060,32 +1382,32 @@ void MainWindow::RenderMenuBar() {
       }
 
       // Tambahan pengaturan background opacity
-      ImGui::SliderFloat("Opacity", &volume, 0.1f, 1.0f);
-      ImGui::EndMenu();
+      SliderFloat("Opacity", &volume, 0.1f, 1.0f);
+      EndMenu();
     }
 
-    if (ImGui::BeginMenu("Windows")) {
-      if (ImGui::MenuItem("Main View", nullptr, &showMainView)) {
+    if (BeginMenu("Windows")) {
+      if (MenuItem("Main View", nullptr, &showMainView)) {
       }
-      if (ImGui::MenuItem("Explorer", nullptr, &showExplorer)) {
+      if (MenuItem("Explorer", nullptr, &showExplorer)) {
       }
-      if (ImGui::MenuItem("Inspector", nullptr, &showInspector)) {
+      if (MenuItem("Inspector", nullptr, &showInspector)) {
       }
-      if (ImGui::MenuItem("Scene", "Ctrl+1", &showScene)) {
+      if (MenuItem("Scene", "Ctrl+1", &showScene)) {
       }
-      if (ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy)) {
+      if (MenuItem("Hierarchy", nullptr, &showHierarchy)) {
         RenderHierarchyWindow();
       }
-      if (ImGui::MenuItem("Console", "Ctrl+2", &showConsole)) {
+      if (MenuItem("Console", "Ctrl+2", &showConsole)) {
       }
-      ImGui::EndMenu();
+      EndMenu();
     }
 
     // Status bar di menu kanan
-    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
-    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+    SetCursorPosX(GetWindowWidth() - 200);
+    Text("FPS: %.1f", GetIO().Framerate);
 
-    ImGui::EndMainMenuBar();
+    EndMainMenuBar();
   }
 }
 
@@ -1099,7 +1421,7 @@ void MainWindow::HandleBackground(const ImVec2 &windowPos,
     isBackgroundChanged = false;
   }
 
-  ImDrawList *drawList = ImGui::GetWindowDrawList();
+  ImDrawList *drawList = GetWindowDrawList();
 
   // Calculate image dimensions while maintaining aspect ratio
   float imageAspect = (float)backgroundTexture.Width / backgroundTexture.Height;
@@ -1129,7 +1451,7 @@ void MainWindow::HandleBackground(const ImVec2 &windowPos,
   // ::Log("Dominant Color: " + to_string(r) + ", " + to_string(g) + ", " +
   // to_string(b), Debug::LogLevel::INFO); First draw the dominant color
   // background for the entire window
-  ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, volume));
+  ImU32 fillColor = ColorConvertFloat4ToU32(ImVec4(r, g, b, volume));
   drawList->AddRectFilled(
       windowPos, ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
       fillColor);
@@ -1139,7 +1461,7 @@ void MainWindow::HandleBackground(const ImVec2 &windowPos,
                      ImVec2(imageX, imageY),
                      ImVec2(imageX + imageWidth, imageY + imageHeight),
                      ImVec2(0, 0), ImVec2(1, 1),
-                     ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, volume)));
+                     ColorConvertFloat4ToU32(ImVec4(1, 1, 1, volume)));
 }
 
 void MainWindow::HandleSearch() {
@@ -1148,10 +1470,10 @@ void MainWindow::HandleSearch() {
   static vector<HandlerProject::AssetFile> searchResults;
 
   // Atur lebar input sesuai jendela.
-  // ImGui::PushItemWidth(-1);
+  // PushItemWidth(-1);
   // Menampilkan input text dengan hint. Menunggu Enter untuk trigger pencarian.
-  if (ImGui::InputTextWithHint("##search", "Search assets...", searchBuffer,
-                               IM_ARRAYSIZE(searchBuffer))) {
+  if (InputTextWithHint("##search", "Search assets...", searchBuffer,
+                        IM_ARRAYSIZE(searchBuffer))) {
     projectHandler.currentFilter = searchBuffer;
     // Jika buffer tidak kosong, lakukan pencarian.
     if (strlen(searchBuffer) > 0 || projectHandler.currentFilter != "") {
@@ -1168,39 +1490,39 @@ void MainWindow::HandleSearch() {
   }
 
   // Tombol tambahan untuk filter cepat
-  ImGui::SameLine();
-  if (ImGui::Button("Filter")) {
-    ImGui::OpenPopup("FilterOptions");
+  SameLine();
+  if (Button("Filter")) {
+    OpenPopup("FilterOptions");
     // showingFilterPopup = true;
   }
 
   // Popup filter
-  if (ImGui::BeginPopup("FilterOptions")) {
-    if (ImGui::MenuItem("All Files")) {
+  if (BeginPopup("FilterOptions")) {
+    if (MenuItem("All Files")) {
       projectHandler.currentFilter = "";
       strcpy(searchBuffer, "");
     }
-    if (ImGui::MenuItem("Scripts (.cpp, .c)")) {
+    if (MenuItem("Scripts (.cpp, .c)")) {
       projectHandler.currentFilter = ".cpp .c";
       strcpy(searchBuffer, ".cpp .c");
     }
-    if (ImGui::MenuItem("Models (.fbx, .obj)")) {
+    if (MenuItem("Models (.fbx, .obj)")) {
       projectHandler.currentFilter = ".fbx .obj";
       strcpy(searchBuffer, ".fbx .obj");
     }
-    if (ImGui::MenuItem("Images (.png, .jpg)")) {
+    if (MenuItem("Images (.png, .jpg)")) {
       projectHandler.currentFilter = ".png .jpg .jpeg";
       strcpy(searchBuffer, ".png .jpg .jpeg");
     }
-    ImGui::EndPopup();
+    EndPopup();
     // showingFilterPopup = false;
   }
-  // ImGui::PopItemWidth();
+  // PopItemWidth();
 
   // Jika ada hasil pencarian, tampilkan daftar hasil.
   if (!searchResults.empty()) {
-    ImGui::Separator();
-    ImGui::Text("Search Results:");
+    Separator();
+    Text("Search Results:");
     for (const auto &result : searchResults) {
       // Buat label dengan menampilkan nama dan menandai direktori.
       string label;
@@ -1210,7 +1532,7 @@ void MainWindow::HandleSearch() {
         label = result.name;
 
       // Tampilkan hasil sebagai selectable item.
-      if (ImGui::Selectable(label.c_str())) {
+      if (Selectable(label.c_str())) {
         // Jika yang dipilih adalah file, periksa ekstensi file.
         if (!result.isDirectory) {
           string extension;
@@ -1226,10 +1548,10 @@ void MainWindow::HandleSearch() {
           }
         }
       }
-      if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::Text("%s", result.fullPath.c_str());
-        ImGui::EndTooltip();
+      if (IsItemHovered()) {
+        BeginTooltip();
+        Text("%s", result.fullPath.c_str());
+        EndTooltip();
       }
     }
     // Jika input search dikosongkan, pastikan daftar hasil juga dikosongkan.
@@ -1239,13 +1561,13 @@ void MainWindow::HandleSearch() {
 }
 
 void MainWindow::RenderPlayMenu() {
-  ImVec2 viewportSize = ImGui::GetMainViewport()->Size;
+  ImVec2 viewportSize = GetMainViewport()->Size;
   float buttonHeight = 20.0f;
   float toolbarHeight = buttonHeight; // Tinggi window sama dengan tombol
 
-  float menuBarHeight = ImGui::GetFrameHeight();
-  ImGui::SetNextWindowPos(ImVec2(0, menuBarHeight));
-  ImGui::SetNextWindowSize(ImVec2(viewportSize.x, toolbarHeight));
+  float menuBarHeight = GetFrameHeight();
+  SetNextWindowPos(ImVec2(0, menuBarHeight));
+  SetNextWindowSize(ImVec2(viewportSize.x, toolbarHeight));
 
   ImGuiWindowFlags toolbar_flags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
@@ -1253,68 +1575,61 @@ void MainWindow::RenderPlayMenu() {
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
       ImGuiWindowFlags_NoNavFocus;
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-  ImGui::PushStyleColor(
-      ImGuiCol_WindowBg,
-      ImVec4(0.1f, 0.1f, 0.1f, 0.0f)); // Semi-transparent background
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  PushStyleColor(ImGuiCol_WindowBg,
+                 ImVec4(0.1f, 0.1f, 0.1f, 0.0f)); // Semi-transparent background
 
-  if (ImGui::Begin("PlayControlsToolbar", nullptr, toolbar_flags)) {
+  if (Begin("PlayControlsToolbar", nullptr, toolbar_flags)) {
     ImVec2 buttonSize(30, buttonHeight);
     float spacing = 5.0f;
     float totalWidth = (buttonSize.x * 3) + (spacing * 2);
     float startX = (viewportSize.x - totalWidth) * 0.5f;
 
-    ImGui::SetCursorPosX(startX);
+    SetCursorPosX(startX);
 
     // Play
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.1f, 0.6f, 0.1f, 1.0f));
-    if (ImGui::Button("##Play", buttonSize)) {
+    PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.6f, 0.1f, 1.0f));
+    if (Button("##Play", buttonSize)) {
       ::Log("Starting game...", Debug::LogLevel::INFO);
     }
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Play (Ctrl+P)");
-    ImGui::PopStyleColor(3);
+    if (IsItemHovered())
+      SetTooltip("Play (Ctrl+P)");
+    PopStyleColor(3);
 
     // Pause
-    ImGui::SameLine(0, spacing);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.7f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.6f, 0.6f, 0.1f, 1.0f));
-    if (ImGui::Button("##Pause", buttonSize)) {
+    SameLine(0, spacing);
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.7f, 0.2f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.1f, 1.0f));
+    if (Button("##Pause", buttonSize)) {
       ::Log("Pausing game...", Debug::LogLevel::INFO);
     }
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Pause (Ctrl+Shift+P)");
-    ImGui::PopStyleColor(3);
+    if (IsItemHovered())
+      SetTooltip("Pause (Ctrl+Shift+P)");
+    PopStyleColor(3);
 
     // Stop
-    ImGui::SameLine(0, spacing);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-    if (ImGui::Button("##Stop", buttonSize)) {
+    SameLine(0, spacing);
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
+    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+    if (Button("##Stop", buttonSize)) {
       ::Log("Stopping game...", Debug::LogLevel::INFO);
     }
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Stop (Ctrl+S)");
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(1);
+    if (IsItemHovered())
+      SetTooltip("Stop (Ctrl+S)");
+    PopStyleColor(3);
+    PopStyleVar(1);
   }
-  ImGui::End();
-  ImGui::PopStyleColor(1); // Pop background color
-  ImGui::PopStyleVar(4);
+  End();
+  PopStyleColor(1); // Pop background color
+  PopStyleVar(4);
 }
 
 void MainWindow::PushMessage(const string &message) {
@@ -1330,4 +1645,77 @@ void MainWindow::PushMessage(const string &message) {
 void MainWindow::ClearMessages() {
   lock_guard<mutex> lock(messagesMutex);
   messages.clear();
+}
+
+void MainWindow::Save3DScene() {
+  if (!sceneRenderer)
+    return;
+  const std::string activeProject = projectHandler.projectPath;
+  if (activeProject.empty()) {
+    ::Log("Cannot save scene: No active project opened.",
+          Debug::LogLevel::WARNING);
+    projectHandler.ShowNotification("Save Warning",
+                                    "No active project is opened",
+                                    ImVec4(1.0f, 0.6f, 0.0f, 1.0f));
+    return;
+  }
+  namespace fs = std::filesystem;
+  fs::path scenesDir = fs::path(activeProject) / "scenes";
+  fs::path mainScene = scenesDir / "main.ilmeeescene";
+
+  ilmeee::IlmeeeScene scene;
+  for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
+    ilmeee::SceneEntity e;
+    e.name = sceneRenderer->GetMesh3DName(i);
+    e.position = sceneRenderer->GetMesh3DPosition(i);
+    e.rotationEuler = sceneRenderer->GetMesh3DRotation(i);
+    e.scale = sceneRenderer->GetMesh3DScale(i);
+
+    if (sceneRenderer->IsMesh3DLight(i)) {
+      e.kind = ilmeee::PrimitiveKind::Light;
+      e.lightGamma = sceneRenderer->GetMesh3DLightGamma(i);
+      e.lightColor = sceneRenderer->GetMesh3DLightColor(i);
+      e.lightIntensity = sceneRenderer->GetMesh3DLightIntensity(i);
+      e.lightType = sceneRenderer->GetMesh3DLightType(i);
+      e.lightRange = sceneRenderer->GetMesh3DLightRange(i);
+      e.lightSpotAngle = sceneRenderer->GetMesh3DLightSpotAngle(i);
+    } else {
+      std::string path = sceneRenderer->GetMesh3DPath(i);
+      if (path.empty()) {
+        if (e.name.find("Cube") != std::string::npos) {
+          e.kind = ilmeee::PrimitiveKind::Cube;
+        } else if (e.name.find("Sphere") != std::string::npos) {
+          e.kind = ilmeee::PrimitiveKind::Sphere;
+        } else if (e.name.find("Plane") != std::string::npos) {
+          e.kind = ilmeee::PrimitiveKind::Plane;
+        } else {
+          e.kind = ilmeee::PrimitiveKind::Cube;
+        }
+      } else {
+        fs::path absPath = path;
+        std::error_code ec;
+        fs::path rel = fs::relative(absPath, activeProject, ec);
+        e.externalPath = ec ? path : rel.string();
+        std::string ext = absPath.extension().string();
+        if (ext == ".pmx" || ext == ".PMX") {
+          e.kind = ilmeee::PrimitiveKind::ExternalPmx;
+        } else {
+          e.kind = ilmeee::PrimitiveKind::ExternalObj;
+        }
+      }
+    }
+    scene.entities.push_back(std::move(e));
+  }
+
+  if (ilmeee::SaveScene(mainScene.string(), scene)) {
+    ::Log("Saved 3D scene to " + mainScene.string(), Debug::LogLevel::SUCCESS);
+    projectHandler.ShowNotification("Scene Saved",
+                                    "Successfully saved main.ilmeeescene",
+                                    ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+  } else {
+    ::Log("Failed to save 3D scene to " + mainScene.string(),
+          Debug::LogLevel::ERROR);
+    projectHandler.ShowNotification("Save Error", "Failed to save scene",
+                                    ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+  }
 }
