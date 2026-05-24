@@ -2,6 +2,7 @@
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -10,6 +11,7 @@ layout(push_constant) uniform PC {
     vec4 lightColorType; // xyz = color, w = type (special -1.0 = emissive/unlit)
     vec4 lightDir;       // xyz = spotlight forward vector, w = unused
     vec4 lightParams;    // x = range, y = spotAngleRad, z = gamma, w = spotCosOuter
+    vec4 material;       // xyz = diffuse tint, w = hasTexture (1.0 = sample albedoTex)
 } pc;
 
 layout(location = 0) out vec3 vNormalWorld;
@@ -18,6 +20,8 @@ layout(location = 2) out vec4 vLightPosOrDir;
 layout(location = 3) out vec4 vLightColorType;
 layout(location = 4) out vec4 vLightDir;
 layout(location = 5) out vec4 vLightParams;
+layout(location = 6) out vec2 vUV;
+layout(location = 7) out vec4 vMaterial;
 
 void main() {
     vec4 world = pc.model * vec4(inPos, 1.0);
@@ -27,5 +31,7 @@ void main() {
     vLightColorType = pc.lightColorType;
     vLightDir = pc.lightDir;
     vLightParams = pc.lightParams;
+    vUV = inUV;
+    vMaterial = pc.material;
     gl_Position = pc.mvp * vec4(inPos, 1.0);
 }

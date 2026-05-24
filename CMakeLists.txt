@@ -107,6 +107,13 @@ link_directories(
     ${FFMPEG_LIBRARY_DIRS}
 )
 find_package(glm REQUIRED)
+
+# ufbx — vendored single-file FBX importer (MIT). Built as a small static
+# lib so ufbx.c compiles once; PUBLIC include dir propagates to consumers.
+add_library(ufbx STATIC ${CMAKE_SOURCE_DIR}/vendor/ufbx/ufbx.c)
+target_include_directories(ufbx PUBLIC ${CMAKE_SOURCE_DIR}/vendor/ufbx)
+target_link_libraries(ufbx PUBLIC m)
+
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
@@ -489,6 +496,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     pthread
     discord-gamesdk
     curl
+    ufbx
 )
 
 target_link_libraries(TestBackground PRIVATE

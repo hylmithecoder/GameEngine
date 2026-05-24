@@ -133,10 +133,20 @@ private:
   VkPipelineLayout testTrianglePipelineLayout = VK_NULL_HANDLE;
   bool showTestTriangle = false;
 
-  // 3D mesh pipeline (pos + normal vertex, MVP+model push constants,
-  // depth-tested). Used to render OBJ meshes loaded into meshes3d.
+  // 3D mesh pipeline (pos + normal + uv vertex, MVP+model+material push
+  // constants, depth-tested, samples one albedo texture per submesh).
   VkPipeline meshPipeline = VK_NULL_HANDLE;
   VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
+  // set=0 binding=0 = combined image sampler (fragment). Defined identically
+  // to ImGui's texture layout so descriptors handed out by TextureManager
+  // (which uses ImGui_ImplVulkan_AddTexture) bind to this pipeline directly.
+  VkDescriptorSetLayout meshTextureSetLayout = VK_NULL_HANDLE;
+  // 1x1 white fallback bound for submeshes with no texture (Vulkan requires
+  // every declared sampler be bound even when the shader ignores it).
+  VkImage whiteImage = VK_NULL_HANDLE;
+  VkDeviceMemory whiteMemory = VK_NULL_HANDLE;
+  VkImageView whiteView = VK_NULL_HANDLE;
+  VkDescriptorSet whiteDescriptor = VK_NULL_HANDLE;
 
   // Vertex data
   struct Buffer {
@@ -147,6 +157,22 @@ private:
   struct MeshVertex {
     glm::vec3 pos;
     glm::vec3 normal;
+    glm::vec2 uv{0.0f};
+  };
+
+  // A contiguous index range that shares one material/texture. For PMX
+  // models each PMXMaterial maps to one SubMesh (the "detected surface"
+  // the user can click and re-texture); OBJ meshes and primitives get a
+  // single SubMesh covering the whole index buffer.
+  struct SubMesh {
+    uint32_t indexOffset = 0;
+    uint32_t indexCount = 0;
+    std::string name;                       // material name (PMX) or ""
+    std::string texturePath;                // resolved absolute path, "" = none
+    glm::vec3 diffuse{0.84f, 0.80f, 0.74f}; // tint / fallback color
+    VkDescriptorSet textureDescriptor =
+        VK_NULL_HANDLE; // owned by TextureManager
+    bool hasTexture = false;
   };
 
   struct Mesh3D {
@@ -168,6 +194,18 @@ private:
     std::string displayName;
     // PMX bone hierarchy (empty for OBJ meshes / primitives)
     std::vector<pmx::PMXBone> bones;
+
+    // Per-material surface ranges. Always at least one entry after a
+    // successful load; DrawMeshes issues one draw per submesh so each can
+    // bind its own texture.
+    std::vector<SubMesh> submeshes;
+
+    // CPU copy of the geometry kept for click-picking (ray-triangle tests
+    // run against these in object space, transformed by ComputeModel()).
+    // Indices match the GPU index buffer 1:1 so a hit triangle maps back
+    // to the owning submesh range.
+    std::vector<glm::vec3> cpuPositions;
+    std::vector<uint32_t> cpuIndices;
 
     // Light specific properties
     bool isLight = false;
@@ -243,6 +281,11 @@ private:
   bool UploadMeshBuffers(Mesh3D &mesh, const std::vector<MeshVertex> &verts,
                          const std::vector<uint32_t> &indices);
   void DestroyMesh(Mesh3D &mesh);
+  // Lazily create the 1x1 white fallback texture + its descriptor.
+  void InitWhiteTexture();
+  // Resolve a texture path to a bindable descriptor, falling back to the
+  // white texture on empty path or load failure.
+  VkDescriptorSet ResolveTextureDescriptor(const std::string &path);
 
   // Grid helpers
   void InitGridResources();
@@ -276,6 +319,10 @@ public:
   // Load a PMX (MikuMikuDance) model. Parses geometry, materials,
   // and bones. Renders in bind pose using the mesh pipeline.
   bool LoadPMXMesh(const std::string &path);
+
+  // Load an FBX model via ufbx. Merges all meshes into one Mesh3D with
+  // per-material submeshes (surfaces) and auto-loads diffuse textures.
+  bool LoadFbxMesh(const std::string &path);
 
   // Procedural primitives — built on the same Mesh3D pipeline so they
   // pick up the same lighting, picking, transform UI, etc. Each call
@@ -314,6 +361,27 @@ public:
   void SetMesh3DTransform(size_t i, const glm::vec3 &position,
                           const glm::vec3 &rotationEuler,
                           const glm::vec3 &scale);
+
+  // --- Surfaces (submeshes) and per-surface texturing ---
+  // A "surface" is one material range of the mesh. For PMX these are the
+  // model's materials (auto-detected); OBJ/primitives expose a single one.
+  uint32_t GetMesh3DSubmeshCount(size_t i) const;
+  const std::string &GetMesh3DSubmeshName(size_t i, uint32_t sub) const;
+  const std::string &GetMesh3DSubmeshTexture(size_t i, uint32_t sub) const;
+  glm::vec3 GetMesh3DSubmeshDiffuse(size_t i, uint32_t sub) const;
+  // Load `path` and bind it to surface `sub` of mesh `i`. Empty path or a
+  // load failure clears the binding (falls back to the diffuse color).
+  bool BindMesh3DSubmeshTexture(size_t i, uint32_t sub,
+                                const std::string &path);
+  void ClearMesh3DSubmeshTexture(size_t i, uint32_t sub);
+
+  // Click-pick: cast a ray through panel pixel (pxX,pxY) and return the
+  // nearest mesh + surface hit. Returns false if the ray misses everything.
+  bool PickMesh3DSurface(float pxX, float pxY, int &outMeshIndex,
+                         int &outSubmesh) const;
+  // Build a world-space ray from a panel pixel using the current 3D camera.
+  bool ScreenToRay(float pxX, float pxY, glm::vec3 &outOrigin,
+                   glm::vec3 &outDir) const;
 
   // Light property accessors
   bool IsMesh3DLight(size_t i) const;

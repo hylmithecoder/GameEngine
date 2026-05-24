@@ -54,6 +54,9 @@ private:
   float position[3] = {0.0f, 0.0f, 0.0f};
   float rotation[3] = {0.0f, 0.0f, 0.0f};
   float scale[3] = {1.0f, 1.0f, 1.0f};
+  // Surface (submesh) clicked in the viewport, targeted by the Inspector's
+  // per-surface texture binding. -1 = none yet.
+  int selectedSurface = -1;
   static constexpr float MIN_PANEL_WIDTH = 100.0f;
   float explorerSplitPosition = 200.0f;
 

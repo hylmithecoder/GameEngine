@@ -395,7 +395,7 @@ void Editor::LoadScene() {
   NFD::Guard nfdGuard;
   NFD::UniquePath outPath;
 
-  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
 
   try {
     nfdresult_t result =
@@ -404,7 +404,7 @@ void Editor::LoadScene() {
     if (result == NFD_OKAY && outPath.get() != nullptr) {
       std::string scenePath = outPath.get();
 
-      if (fs::path(scenePath).extension() != ".ilmeescene") {
+      if (fs::path(scenePath).extension() != ".ilmeeescene") {
         LogError("Invalid scene file format");
         return;
       }

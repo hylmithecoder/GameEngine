@@ -173,7 +173,7 @@ public:
         path += "file.png";
       else if (ext == ".prefab")
         path += "file.png";
-      else if (ext == ".ilmeescene" || ext == ".unity")
+      else if (ext == ".ilmeeescene" || ext == ".unity")
         path += "file.png";
       else
         path += "file.png";

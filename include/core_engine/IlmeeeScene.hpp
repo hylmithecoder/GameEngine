@@ -38,6 +38,15 @@ enum class PrimitiveKind : uint8_t {
   Plane = 3,
   ExternalPmx = 4,
   Light = 5,
+  Camera = 6,
+};
+
+// One per-surface texture override: which material/surface index of the
+// entity's mesh, and the texture path (relative to project root when it
+// lives inside the project, otherwise absolute).
+struct SurfaceTexture {
+  uint32_t surfaceIndex = 0;
+  std::string texturePath;
 };
 
 struct SceneEntity {
@@ -55,6 +64,17 @@ struct SceneEntity {
   int lightType = 0; // 0 = Directional, 1 = Point, 2 = Spotlight
   float lightRange = 10.0f;
   float lightSpotAngle = 30.0f;
+
+  // Camera properties (active only when kind == PrimitiveKind::Camera) — v1.2
+  int camProjection = 0; // 0 = Perspective, 1 = Orthographic
+  float camFov = 60.0f;
+  float camOrthoSize = 5.0f;
+  float camNear = 0.1f;
+  float camFar = 100.0f;
+
+  // Per-surface texture bindings (v1.2). Empty for entities the user never
+  // re-textured beyond the model's own embedded textures.
+  std::vector<SurfaceTexture> surfaceTextures;
 };
 
 struct IlmeeeScene {
@@ -117,7 +137,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 1); // minor
+  detail::WriteU16(f, 2); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -135,6 +155,18 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteU32(f, (uint32_t)e.lightType);
     detail::WriteF32(f, e.lightRange);
     detail::WriteF32(f, e.lightSpotAngle);
+
+    // Version 1.2: camera params + per-surface texture bindings
+    detail::WriteU32(f, (uint32_t)e.camProjection);
+    detail::WriteF32(f, e.camFov);
+    detail::WriteF32(f, e.camOrthoSize);
+    detail::WriteF32(f, e.camNear);
+    detail::WriteF32(f, e.camFar);
+    detail::WriteU32(f, (uint32_t)e.surfaceTextures.size());
+    for (const auto &st : e.surfaceTextures) {
+      detail::WriteU32(f, st.surfaceIndex);
+      detail::WriteString(f, st.texturePath);
+    }
   }
   return f.good();
 }
@@ -191,6 +223,32 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
         return false;
       if (!detail::ReadF32(f, e.lightSpotAngle))
         return false;
+    }
+
+    // Load version 1.2 fields if available (camera + surface textures).
+    if (minor >= 2) {
+      uint32_t proj = 0;
+      if (!detail::ReadU32(f, proj))
+        return false;
+      e.camProjection = (int)proj;
+      if (!detail::ReadF32(f, e.camFov))
+        return false;
+      if (!detail::ReadF32(f, e.camOrthoSize))
+        return false;
+      if (!detail::ReadF32(f, e.camNear))
+        return false;
+      if (!detail::ReadF32(f, e.camFar))
+        return false;
+      uint32_t texCount = 0;
+      if (!detail::ReadU32(f, texCount))
+        return false;
+      e.surfaceTextures.resize(texCount);
+      for (uint32_t t = 0; t < texCount; ++t) {
+        if (!detail::ReadU32(f, e.surfaceTextures[t].surfaceIndex))
+          return false;
+        if (!detail::ReadString(f, e.surfaceTextures[t].texturePath))
+          return false;
+      }
     }
     out.entities.push_back(std::move(e));
   }

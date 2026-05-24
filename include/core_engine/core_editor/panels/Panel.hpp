@@ -8,11 +8,11 @@ namespace Ilmeee {
 // on first launch. After that, the layout is persisted by ImGui in
 // imgui.ini and the user's manual rearrangement wins.
 enum class DockHint {
-  None,    // Floating / no preference
-  Left,    // Typically hierarchy, scene tree
-  Right,   // Typically inspector, properties
-  Bottom,  // Typically console, log, asset explorer
-  Center   // Typically viewport (scene, game)
+  None,   // Floating / no preference
+  Left,   // Typically hierarchy, scene tree
+  Right,  // Typically inspector, properties
+  Bottom, // Typically console, log, asset explorer
+  Center  // Typically viewport (scene, game)
 };
 
 // Abstract editor panel. Inherit and override OnImGuiRender().

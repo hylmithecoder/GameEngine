@@ -27,11 +27,11 @@ void HandlerProject::SaveNewScene() {
   nfdchar_t *savePath;
 
   // prepare filters for the dialog
-  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
 
   // show the dialog
   nfdresult_t result =
-      NFD_SaveDialog(&savePath, filterItem, 1, NULL, "Untitled.ilmeescene");
+      NFD_SaveDialog(&savePath, filterItem, 1, NULL, "Untitled.ilmeeescene");
   if (result == NFD_OKAY) {
     // Extract just the filename from the full path
     std::string fullPath = savePath;
@@ -90,7 +90,7 @@ void HandlerProject::OpenScene() {
   NFD::UniquePath outPath;
 
   // Prepare filters for scene files
-  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeescene"}};
+  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
 
   try {
     // Show open file dialog
@@ -101,7 +101,7 @@ void HandlerProject::OpenScene() {
       std::string scenePath = outPath.get();
 
       // Validate file extension
-      if (fs::path(scenePath).extension() != ".ilmeescene") {
+      if (fs::path(scenePath).extension() != ".ilmeeescene") {
         ShowNotification("Error", "Invalid scene file format",
                          ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
         return;
@@ -574,6 +574,16 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
 
   ImGui::InvisibleButton("##ItemButton", totalSize);
   const bool itemHovered = ImGui::IsItemHovered();
+
+  // Drag source: files can be dragged out (e.g. a model dropped onto the
+  // Scene viewport to instantiate it). Payload is the file's full path.
+  if (!node.isDirectory &&
+      ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+    const std::string &fp = node.fullPath;
+    ImGui::SetDragDropPayload("ASSET_PATH", fp.c_str(), fp.size() + 1);
+    ImGui::Text("%s", node.name.c_str());
+    ImGui::EndDragDropSource();
+  }
 
   if (itemHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
     if (node.isDirectory) {
@@ -1261,7 +1271,7 @@ void HandlerProject::NewScene(const std::string &name) {
   currentSceneName = name;
   fs::create_directories(sceneFolder);
 
-  std::string fullPath = sceneFolder + "/" + name + ".ilmeescene";
+  std::string fullPath = sceneFolder + "/" + name + ".ilmeeescene";
 
   std::vector<SceneObject> defaultObjects = {
       {"Camera", 0, 0, 100, 100, 0, 1, 1, "assets/camera.png"},

@@ -14,6 +14,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <ufbx.h>
 #include <unordered_map>
 #include <vector>
 
@@ -54,6 +55,14 @@ SceneRenderer::~SceneRenderer() {
       vkDestroyPipeline(device, meshPipeline, nullptr);
     if (meshPipelineLayout != VK_NULL_HANDLE)
       vkDestroyPipelineLayout(device, meshPipelineLayout, nullptr);
+    if (meshTextureSetLayout != VK_NULL_HANDLE)
+      vkDestroyDescriptorSetLayout(device, meshTextureSetLayout, nullptr);
+    if (whiteView != VK_NULL_HANDLE)
+      vkDestroyImageView(device, whiteView, nullptr);
+    if (whiteImage != VK_NULL_HANDLE)
+      vkDestroyImage(device, whiteImage, nullptr);
+    if (whiteMemory != VK_NULL_HANDLE)
+      vkFreeMemory(device, whiteMemory, nullptr);
     if (grid3d.pipeline != VK_NULL_HANDLE)
       vkDestroyPipeline(device, grid3d.pipeline, nullptr);
     if (grid3d.layout != VK_NULL_HANDLE)
@@ -181,6 +190,11 @@ void SceneRenderer::InitVulkanResources() {
   textureManager.SetVulkanContext(device, physicalDevice, graphicsQueue,
                                   commandPool, descriptorPool,
                                   offscreen.sampler);
+
+  // 1x1 white fallback for untextured submeshes. Safe here: the ImGui
+  // Vulkan backend is already initialized (CreateOffscreenResources above
+  // registers its own descriptor the same way).
+  InitWhiteTexture();
 }
 
 void SceneRenderer::SetViewportSize(int newWidth, int newHeight) {
@@ -1021,7 +1035,7 @@ void SceneRenderer::InitMeshPipeline() {
   binding.stride = sizeof(MeshVertex);
   binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-  VkVertexInputAttributeDescription attrs[2]{};
+  VkVertexInputAttributeDescription attrs[3]{};
   attrs[0].binding = 0;
   attrs[0].location = 0;
   attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1030,12 +1044,16 @@ void SceneRenderer::InitMeshPipeline() {
   attrs[1].location = 1;
   attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
   attrs[1].offset = offsetof(MeshVertex, normal);
+  attrs[2].binding = 0;
+  attrs[2].location = 2;
+  attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+  attrs[2].offset = offsetof(MeshVertex, uv);
 
   VkPipelineVertexInputStateCreateInfo vi{};
   vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   vi.vertexBindingDescriptionCount = 1;
   vi.pVertexBindingDescriptions = &binding;
-  vi.vertexAttributeDescriptionCount = 2;
+  vi.vertexAttributeDescriptionCount = 3;
   vi.pVertexAttributeDescriptions = attrs;
 
   VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -1083,15 +1101,37 @@ void SceneRenderer::InitMeshPipeline() {
   dynState.dynamicStateCount = (uint32_t)dyn.size();
   dynState.pDynamicStates = dyn.data();
 
+  // Descriptor set 0: one combined image sampler (the albedo texture).
+  // Defined identically to ImGui's layout so TextureManager's descriptors
+  // (allocated via ImGui_ImplVulkan_AddTexture) are layout-compatible here.
+  if (meshTextureSetLayout == VK_NULL_HANDLE) {
+    VkDescriptorSetLayoutBinding texBinding{};
+    texBinding.binding = 0;
+    texBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    texBinding.descriptorCount = 1;
+    texBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslInfo.bindingCount = 1;
+    dslInfo.pBindings = &texBinding;
+    if (vkCreateDescriptorSetLayout(device, &dslInfo, nullptr,
+                                    &meshTextureSetLayout) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create mesh texture set layout");
+    }
+  }
+
   VkPushConstantRange pc{};
   pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
   pc.offset = 0;
   pc.size = sizeof(glm::mat4) * 2 +
-            sizeof(glm::vec4) * 4; // mvp + model + lightPosOrDir +
-                                   // lightColorType + lightDir + lightParams
+            sizeof(glm::vec4) * 5; // mvp + model + lightPosOrDir +
+                                   // lightColorType + lightDir + lightParams +
+                                   // material (rgb diffuse, w = hasTexture)
 
   VkPipelineLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  layoutInfo.setLayoutCount = 1;
+  layoutInfo.pSetLayouts = &meshTextureSetLayout;
   layoutInfo.pushConstantRangeCount = 1;
   layoutInfo.pPushConstantRanges = &pc;
   if (vkCreatePipelineLayout(device, &layoutInfo, nullptr,
@@ -1122,6 +1162,132 @@ void SceneRenderer::InitMeshPipeline() {
 
   vkDestroyShaderModule(device, vert, nullptr);
   vkDestroyShaderModule(device, frag, nullptr);
+}
+
+void SceneRenderer::InitWhiteTexture() {
+  if (device == VK_NULL_HANDLE || whiteDescriptor != VK_NULL_HANDLE)
+    return;
+
+  const uint32_t pixel = 0xFFFFFFFFu; // RGBA8 white
+  const VkDeviceSize imageSize = 4;
+
+  // Staging buffer
+  VkBuffer staging = VK_NULL_HANDLE;
+  VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+  VkBufferCreateInfo bi{};
+  bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bi.size = imageSize;
+  bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  vkCreateBuffer(device, &bi, nullptr, &staging);
+  VkMemoryRequirements mr;
+  vkGetBufferMemoryRequirements(device, staging, &mr);
+  VkMemoryAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  ai.allocationSize = mr.size;
+  ai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  vkAllocateMemory(device, &ai, nullptr, &stagingMem);
+  vkBindBufferMemory(device, staging, stagingMem, 0);
+  void *map = nullptr;
+  vkMapMemory(device, stagingMem, 0, imageSize, 0, &map);
+  std::memcpy(map, &pixel, (size_t)imageSize);
+  vkUnmapMemory(device, stagingMem);
+
+  // Image
+  VkImageCreateInfo ici{};
+  ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ici.imageType = VK_IMAGE_TYPE_2D;
+  ici.extent = {1, 1, 1};
+  ici.mipLevels = 1;
+  ici.arrayLayers = 1;
+  ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  ici.samples = VK_SAMPLE_COUNT_1_BIT;
+  vkCreateImage(device, &ici, nullptr, &whiteImage);
+  vkGetImageMemoryRequirements(device, whiteImage, &mr);
+  ai.allocationSize = mr.size;
+  ai.memoryTypeIndex =
+      findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  vkAllocateMemory(device, &ai, nullptr, &whiteMemory);
+  vkBindImageMemory(device, whiteImage, whiteMemory, 0);
+
+  // Upload (same UNDEFINED->TRANSFER_DST->SHADER_READ dance as TextureManager)
+  VkCommandBufferAllocateInfo cba{};
+  cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cba.commandPool = commandPool;
+  cba.commandBufferCount = 1;
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  vkAllocateCommandBuffers(device, &cba, &cmd);
+  VkCommandBufferBeginInfo cbi{};
+  cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(cmd, &cbi);
+  VkImageMemoryBarrier toDst{};
+  toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  toDst.image = whiteImage;
+  toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  toDst.subresourceRange.levelCount = 1;
+  toDst.subresourceRange.layerCount = 1;
+  toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &toDst);
+  VkBufferImageCopy region{};
+  region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  region.imageSubresource.layerCount = 1;
+  region.imageExtent = {1, 1, 1};
+  vkCmdCopyBufferToImage(cmd, staging, whiteImage,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  VkImageMemoryBarrier toShader = toDst;
+  toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &toShader);
+  vkEndCommandBuffer(cmd);
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &cmd;
+  vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+  vkQueueWaitIdle(graphicsQueue);
+  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+
+  VkImageViewCreateInfo vci{};
+  vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  vci.image = whiteImage;
+  vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  vci.subresourceRange.levelCount = 1;
+  vci.subresourceRange.layerCount = 1;
+  vkCreateImageView(device, &vci, nullptr, &whiteView);
+
+  whiteDescriptor = ImGui_ImplVulkan_AddTexture(
+      offscreen.sampler, whiteView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  vkDestroyBuffer(device, staging, nullptr);
+  vkFreeMemory(device, stagingMem, nullptr);
+}
+
+VkDescriptorSet
+SceneRenderer::ResolveTextureDescriptor(const std::string &path) {
+  if (path.empty())
+    return whiteDescriptor;
+  VkDescriptorSet ds = textureManager.GetTextureDescriptor(path);
+  return ds != VK_NULL_HANDLE ? ds : whiteDescriptor;
 }
 
 void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
@@ -1196,6 +1362,7 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
       glm::vec4 lightDir;       // xyz = spotlight forward vector, w = unused
       glm::vec4 lightParams;    // x = range, y = spotAngleRad, z = gamma, w =
                                 // spotCosOuter
+      glm::vec4 material;       // xyz = diffuse tint, w = hasTexture
     } pc;
 
     pc.mvp = mvp;
@@ -1216,15 +1383,37 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
       pc.lightParams = glm::vec4(range, spotAngleRad, gamma, spotCosOuter);
     }
 
-    vkCmdPushConstants(cmd, meshPipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT |
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PC), &pc);
-
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cmd, 0, 1, &m.vertexBuffer, offsets);
     vkCmdBindIndexBuffer(cmd, m.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, m.indexCount, 1, 0, 0, 0);
+
+    auto drawRange = [&](uint32_t indexOffset, uint32_t indexCount,
+                         const glm::vec3 &diffuse, bool hasTex,
+                         VkDescriptorSet tex) {
+      pc.material = glm::vec4(diffuse, hasTex ? 1.0f : 0.0f);
+      VkDescriptorSet ds = (tex != VK_NULL_HANDLE) ? tex : whiteDescriptor;
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              meshPipelineLayout, 0, 1, &ds, 0, nullptr);
+      vkCmdPushConstants(cmd, meshPipelineLayout,
+                         VK_SHADER_STAGE_VERTEX_BIT |
+                             VK_SHADER_STAGE_FRAGMENT_BIT,
+                         0, sizeof(PC), &pc);
+      vkCmdDrawIndexed(cmd, indexCount, 1, indexOffset, 0, 0);
+    };
+
+    // One draw per surface (submesh) so each binds its own texture. Older
+    // meshes with no submeshes fall back to a single untextured draw.
+    if (m.submeshes.empty()) {
+      drawRange(0, m.indexCount, glm::vec3(0.84f, 0.80f, 0.74f), false,
+                whiteDescriptor);
+    } else {
+      for (const auto &sm : m.submeshes) {
+        if (sm.indexCount == 0)
+          continue;
+        drawRange(sm.indexOffset, sm.indexCount, sm.diffuse, sm.hasTexture,
+                  sm.textureDescriptor);
+      }
+    }
   }
 }
 
@@ -1276,6 +1465,22 @@ bool SceneRenderer::UploadMeshBuffers(Mesh3D &mesh,
   vkUnmapMemory(device, mesh.indexMemory);
 
   mesh.indexCount = (uint32_t)indices.size();
+
+  // Default surface + pickable CPU geometry for callers that didn't set them
+  // (primitives). PMX/OBJ loaders populate these before calling, so the
+  // guards below leave their richer data intact.
+  if (mesh.submeshes.empty()) {
+    SubMesh sm;
+    sm.indexCount = (uint32_t)indices.size();
+    sm.name = "Surface";
+    mesh.submeshes.push_back(std::move(sm));
+  }
+  if (mesh.cpuPositions.empty()) {
+    mesh.cpuPositions.resize(verts.size());
+    for (size_t i = 0; i < verts.size(); ++i)
+      mesh.cpuPositions[i] = verts[i].pos;
+    mesh.cpuIndices = indices;
+  }
   return true;
 }
 
@@ -1293,21 +1498,32 @@ void SceneRenderer::DestroyMesh(Mesh3D &mesh) {
   mesh.indexBuffer = VK_NULL_HANDLE;
   mesh.indexMemory = VK_NULL_HANDLE;
   mesh.indexCount = 0;
+  // Texture descriptors are owned by TextureManager (or the white fallback),
+  // so we only drop our references here, never destroy them.
+  mesh.submeshes.clear();
+  mesh.cpuPositions.clear();
+  mesh.cpuIndices.clear();
 }
 
 namespace {
-// Pack two int32 indices into a single 64-bit key for dedup.
+// Dedup key over (position, texcoord, normal) indices so distinct UVs at a
+// shared position produce distinct vertices.
 struct VNKey {
   int32_t v;
+  int32_t t;
   int32_t n;
   bool operator==(const VNKey &o) const noexcept {
-    return v == o.v && n == o.n;
+    return v == o.v && t == o.t && n == o.n;
   }
 };
 struct VNKeyHash {
   size_t operator()(const VNKey &k) const noexcept {
-    return std::hash<uint64_t>()(((uint64_t)(uint32_t)k.v) |
-                                 (((uint64_t)(uint32_t)k.n) << 32));
+    uint64_t h = 1469598103934665603ull; // FNV-1a over the three indices
+    for (int32_t x : {k.v, k.t, k.n}) {
+      h ^= (uint64_t)(uint32_t)x;
+      h *= 1099511628211ull;
+    }
+    return (size_t)h;
   }
 };
 
@@ -1350,8 +1566,10 @@ bool SceneRenderer::LoadObjMesh(const std::string &path) {
 
   std::vector<glm::vec3> positions;
   std::vector<glm::vec3> normals;
+  std::vector<glm::vec2> texcoords;
   positions.reserve(50000);
   normals.reserve(50000);
+  texcoords.reserve(50000);
 
   std::vector<MeshVertex> outVerts;
   std::vector<uint32_t> outIndices;
@@ -1382,6 +1600,11 @@ bool SceneRenderer::LoadObjMesh(const std::string &path) {
         if (std::sscanf(line.c_str() + 3, "%f %f %f", &n.x, &n.y, &n.z) == 3) {
           normals.push_back(n);
         }
+      } else if (line[1] == 't' && line.size() > 2 && line[2] == ' ') {
+        glm::vec2 t;
+        if (std::sscanf(line.c_str() + 3, "%f %f", &t.x, &t.y) >= 2) {
+          texcoords.push_back(t);
+        }
       }
     } else if (line[0] == 'f' && line.size() > 2 && line[1] == ' ') {
       // Tokenize face entries
@@ -1403,9 +1626,11 @@ bool SceneRenderer::LoadObjMesh(const std::string &path) {
         int vIndex = (vi > 0) ? (vi - 1) : ((int)positions.size() + vi);
         int nIndex =
             (ni > 0) ? (ni - 1) : ((ni < 0) ? (int)normals.size() + ni : -1);
+        int tIndex =
+            (ti > 0) ? (ti - 1) : ((ti < 0) ? (int)texcoords.size() + ti : -1);
         if (vIndex < 0 || vIndex >= (int)positions.size())
           break;
-        VNKey k{vIndex, nIndex};
+        VNKey k{vIndex, tIndex, nIndex};
         uint32_t outIdx;
         auto it = dedup.find(k);
         if (it == dedup.end()) {
@@ -1415,6 +1640,10 @@ bool SceneRenderer::LoadObjMesh(const std::string &path) {
             mv.normal = normals[nIndex];
           else
             mv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+          if (tIndex >= 0 && tIndex < (int)texcoords.size()) {
+            // OBJ uses a bottom-left UV origin; flip V for Vulkan's top-left.
+            mv.uv = glm::vec2(texcoords[tIndex].x, 1.0f - texcoords[tIndex].y);
+          }
           outIdx = (uint32_t)outVerts.size();
           outVerts.push_back(mv);
           dedup.emplace(k, outIdx);
@@ -1476,6 +1705,18 @@ bool SceneRenderer::LoadObjMesh(const std::string &path) {
   mesh.autoFit = M;
   mesh.vertexCount = (uint32_t)outVerts.size();
 
+  // OBJ has no material grouping here yet — one surface over the whole mesh.
+  {
+    SubMesh sm;
+    sm.indexCount = (uint32_t)outIndices.size();
+    sm.name = "Surface";
+    mesh.submeshes.push_back(std::move(sm));
+  }
+  mesh.cpuPositions.resize(outVerts.size());
+  for (size_t i = 0; i < outVerts.size(); ++i)
+    mesh.cpuPositions[i] = outVerts[i].pos;
+  mesh.cpuIndices = outIndices;
+
   if (!UploadMeshBuffers(mesh, outVerts, outIndices)) {
     cout << "[OBJ] Failed to upload mesh buffers" << endl;
     DestroyMesh(mesh);
@@ -1518,10 +1759,11 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
     return false;
   }
 
-  // Convert PMX vertices to engine MeshVertex (pos + normal).
+  // Convert PMX vertices to engine MeshVertex (pos + normal + uv).
   // PMX uses a left-handed coordinate system (Y-up, Z-forward);
   // our engine is right-handed (Y-up, Z-toward-viewer). We negate Z
-  // to convert, and also reverse winding order.
+  // to convert, and also reverse winding order. PMX UVs already use the
+  // DirectX/Vulkan top-left origin, so they are kept as-is.
   std::vector<MeshVertex> outVerts(pmxModel.vertices.size());
   glm::vec3 mn(std::numeric_limits<float>::max());
   glm::vec3 mx(-std::numeric_limits<float>::max());
@@ -1532,6 +1774,7 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
     // Convert left-handed → right-handed: negate Z
     mv.pos = glm::vec3(pv.position.x, pv.position.y, -pv.position.z);
     mv.normal = glm::vec3(pv.normal.x, pv.normal.y, -pv.normal.z);
+    mv.uv = pv.uv;
     mn = glm::min(mn, mv.pos);
     mx = glm::max(mx, mv.pos);
   }
@@ -1561,6 +1804,77 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
   M = glm::translate(M, -center);
   mesh.autoFit = M;
 
+  // Build per-material surface ranges ("surfaces" the user can re-texture)
+  // and auto-load each material's diffuse texture from the .pmx directory.
+  std::string pmxDir;
+  {
+    size_t slash = path.find_last_of("/\\");
+    if (slash != std::string::npos)
+      pmxDir = path.substr(0, slash);
+  }
+  auto resolvePmxTexture = [&](int texIndex) -> std::string {
+    if (texIndex < 0 || texIndex >= (int)pmxModel.texturePaths.size())
+      return "";
+    std::string rel = pmxModel.texturePaths[texIndex];
+    // PMX stores Windows-style backslash paths; normalize for POSIX.
+    for (char &c : rel)
+      if (c == '\\')
+        c = '/';
+    if (rel.empty())
+      return "";
+    return pmxDir.empty() ? rel : (pmxDir + "/" + rel);
+  };
+
+  const uint32_t totalIndices = (uint32_t)outIndices.size();
+  uint32_t runningOffset = 0;
+  int loadedTextures = 0;
+  for (const auto &mat : pmxModel.materials) {
+    if (mat.indexCount <= 0)
+      continue;
+    SubMesh sm;
+    sm.indexOffset = runningOffset;
+    sm.indexCount = (uint32_t)mat.indexCount;
+    runningOffset += (uint32_t)mat.indexCount;
+    // Clamp draw range to the actual buffer (defensive against malformed
+    // files).
+    if (sm.indexOffset >= totalIndices) {
+      continue;
+    }
+    if (sm.indexOffset + sm.indexCount > totalIndices)
+      sm.indexCount = totalIndices - sm.indexOffset;
+    sm.name = !mat.nameEN.empty() ? mat.nameEN : mat.nameJP;
+    if (sm.name.empty())
+      sm.name = "Material " + std::to_string(mesh.submeshes.size());
+    sm.diffuse = glm::vec3(mat.diffuse);
+    std::string texPath = resolvePmxTexture(mat.textureIndex);
+    if (!texPath.empty()) {
+      VkDescriptorSet ds = textureManager.GetTextureDescriptor(texPath);
+      if (ds != VK_NULL_HANDLE) {
+        sm.texturePath = texPath;
+        sm.textureDescriptor = ds;
+        sm.hasTexture = true;
+        ++loadedTextures;
+      } else {
+        cout << "[PMX] Texture not loaded (using diffuse color): " << texPath
+             << endl;
+      }
+    }
+    mesh.submeshes.push_back(std::move(sm));
+  }
+  // Fallback: no usable materials → expose the whole buffer as one surface.
+  if (mesh.submeshes.empty()) {
+    SubMesh sm;
+    sm.indexCount = totalIndices;
+    sm.name = "Surface";
+    mesh.submeshes.push_back(std::move(sm));
+  }
+
+  // CPU copy of geometry for click-picking (indices match the GPU buffer).
+  mesh.cpuPositions.resize(outVerts.size());
+  for (size_t i = 0; i < outVerts.size(); ++i)
+    mesh.cpuPositions[i] = outVerts[i].pos;
+  mesh.cpuIndices = outIndices;
+
   if (!UploadMeshBuffers(mesh, outVerts, outIndices)) {
     cout << "[PMX] Failed to upload mesh buffers" << endl;
     DestroyMesh(mesh);
@@ -1569,7 +1883,9 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
 
   cout << "[PMX] Loaded " << path << " — verts: " << outVerts.size()
        << ", tris: " << (outIndices.size() / 3)
-       << ", bones: " << mesh.bones.size() << endl;
+       << ", bones: " << mesh.bones.size()
+       << ", surfaces: " << mesh.submeshes.size() << " (" << loadedTextures
+       << " textured)" << endl;
 
   // Derive display name from file stem
   std::string stem = path;
@@ -1580,6 +1896,231 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
   if (dot != std::string::npos)
     stem = stem.substr(0, dot);
   mesh.displayName = stem.empty() ? "PMXModel" : stem;
+  meshes3d.push_back(std::move(mesh));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// FBX model loading (via vendored ufbx)
+// ---------------------------------------------------------------------------
+
+bool SceneRenderer::LoadFbxMesh(const std::string &path) {
+  if (device == VK_NULL_HANDLE) {
+    cout << "[FBX] Vulkan context not ready, deferring load: " << path << endl;
+    return false;
+  }
+
+  ufbx_load_opts opts{};
+  // Normalize to the engine's space (right-handed, Y-up, meters) and fill in
+  // normals if the file lacks them, so downstream code needs no per-axis
+  // fixups.
+  opts.target_axes = ufbx_axes_right_handed_y_up;
+  opts.target_unit_meters = 1.0f;
+  opts.generate_missing_normals = true;
+
+  ufbx_error err;
+  ufbx_scene *scene = ufbx_load_file(path.c_str(), &opts, &err);
+  if (!scene) {
+    cout << "[FBX] Failed to load " << path << ": "
+         << std::string(err.description.data, err.description.length) << endl;
+    return false;
+  }
+
+  std::string fbxDir;
+  {
+    size_t slash = path.find_last_of("/\\");
+    if (slash != std::string::npos)
+      fbxDir = path.substr(0, slash);
+  }
+  auto fileExists = [](const std::string &p) {
+    std::ifstream f(p);
+    return f.good();
+  };
+  auto ufbxStr = [](ufbx_string s) {
+    return std::string(s.data ? s.data : "", s.length);
+  };
+  // Resolve an FBX texture reference to an on-disk path we can actually load.
+  auto resolveFbxTexture = [&](ufbx_texture *tex) -> std::string {
+    if (!tex)
+      return "";
+    std::string abs = ufbxStr(tex->absolute_filename);
+    if (!abs.empty() && fileExists(abs))
+      return abs;
+    std::string rel = ufbxStr(tex->relative_filename);
+    if (rel.empty())
+      rel = ufbxStr(tex->filename);
+    for (char &c : rel)
+      if (c == '\\')
+        c = '/';
+    if (rel.empty())
+      return "";
+    if (!fbxDir.empty() && fileExists(fbxDir + "/" + rel))
+      return fbxDir + "/" + rel;
+    // Last resort: just the basename inside the .fbx directory.
+    size_t s = rel.find_last_of('/');
+    std::string base = (s == std::string::npos) ? rel : rel.substr(s + 1);
+    if (!fbxDir.empty() && fileExists(fbxDir + "/" + base))
+      return fbxDir + "/" + base;
+    return fileExists(rel) ? rel : "";
+  };
+  auto toGlm3 = [](ufbx_vec3 v) {
+    return glm::vec3((float)v.x, (float)v.y, (float)v.z);
+  };
+
+  std::vector<MeshVertex> outVerts;
+  std::vector<uint32_t> outIndices;
+  std::vector<SubMesh> submeshes;
+  glm::vec3 mn(std::numeric_limits<float>::max());
+  glm::vec3 mx(-std::numeric_limits<float>::max());
+  int loadedTextures = 0;
+
+  for (size_t mi = 0; mi < scene->meshes.count; ++mi) {
+    ufbx_mesh *mesh = scene->meshes.data[mi];
+    if (mesh->faces.count == 0)
+      continue;
+
+    // Bake the first instance's world transform so multi-part models keep
+    // their relative placement; identity if the mesh has no node.
+    ufbx_matrix geomToWorld;
+    bool hasXform = false;
+    if (mesh->instances.count > 0) {
+      geomToWorld = mesh->instances.data[0]->geometry_to_world;
+      hasXform = true;
+    }
+
+    std::vector<uint32_t> triIdx(
+        (mesh->max_face_triangles ? mesh->max_face_triangles : 1) * 3);
+
+    // Emit one submesh from a set of face indices sharing one material.
+    auto emitPart = [&](ufbx_material *mat, const uint32_t *faces,
+                        size_t faceCount) {
+      if (faceCount == 0)
+        return;
+      SubMesh sm;
+      sm.indexOffset = (uint32_t)outIndices.size();
+      if (mat) {
+        sm.name = ufbxStr(mat->name);
+        ufbx_material_map dm = mat->fbx.diffuse_color;
+        if (dm.value_components >= 3)
+          sm.diffuse = glm::vec3((float)dm.value_vec3.x, (float)dm.value_vec3.y,
+                                 (float)dm.value_vec3.z);
+        ufbx_texture *tex =
+            dm.texture ? dm.texture : mat->pbr.base_color.texture;
+        std::string texPath = resolveFbxTexture(tex);
+        if (!texPath.empty()) {
+          VkDescriptorSet ds = textureManager.GetTextureDescriptor(texPath);
+          if (ds != VK_NULL_HANDLE) {
+            sm.texturePath = texPath;
+            sm.textureDescriptor = ds;
+            sm.hasTexture = true;
+            ++loadedTextures;
+          }
+        }
+      }
+      if (sm.name.empty())
+        sm.name = "Material " + std::to_string(submeshes.size());
+
+      for (size_t fi = 0; fi < faceCount; ++fi) {
+        ufbx_face face = mesh->faces.data[faces[fi]];
+        uint32_t numTris =
+            ufbx_triangulate_face(triIdx.data(), triIdx.size(), mesh, face);
+        for (uint32_t c = 0; c < numTris * 3; ++c) {
+          uint32_t ci = triIdx[c]; // corner index into mesh attribute streams
+          ufbx_vec3 p = ufbx_get_vertex_vec3(&mesh->vertex_position, ci);
+          if (hasXform)
+            p = ufbx_transform_position(&geomToWorld, p);
+          MeshVertex mv;
+          mv.pos = toGlm3(p);
+          mv.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+          if (mesh->vertex_normal.exists) {
+            ufbx_vec3 n = ufbx_get_vertex_vec3(&mesh->vertex_normal, ci);
+            if (hasXform)
+              n = ufbx_transform_direction(&geomToWorld, n);
+            glm::vec3 gn = toGlm3(n);
+            float len = glm::length(gn);
+            mv.normal = (len > 1e-8f) ? gn / len : glm::vec3(0, 1, 0);
+          }
+          if (mesh->vertex_uv.exists) {
+            ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, ci);
+            // FBX UV origin is bottom-left; flip V for Vulkan's top-left.
+            mv.uv = glm::vec2((float)uv.x, 1.0f - (float)uv.y);
+          }
+          mn = glm::min(mn, mv.pos);
+          mx = glm::max(mx, mv.pos);
+          outIndices.push_back((uint32_t)outVerts.size());
+          outVerts.push_back(mv);
+        }
+      }
+      sm.indexCount = (uint32_t)outIndices.size() - sm.indexOffset;
+      if (sm.indexCount > 0)
+        submeshes.push_back(std::move(sm));
+    };
+
+    if (mesh->material_parts.count > 0) {
+      for (size_t pi = 0; pi < mesh->material_parts.count; ++pi) {
+        const ufbx_mesh_part &part = mesh->material_parts.data[pi];
+        ufbx_material *mat =
+            (pi < mesh->materials.count) ? mesh->materials.data[pi] : nullptr;
+        emitPart(mat, part.face_indices.data, part.face_indices.count);
+      }
+    } else {
+      std::vector<uint32_t> allFaces(mesh->faces.count);
+      for (size_t i = 0; i < mesh->faces.count; ++i)
+        allFaces[i] = (uint32_t)i;
+      ufbx_material *mat =
+          mesh->materials.count > 0 ? mesh->materials.data[0] : nullptr;
+      emitPart(mat, allFaces.data(), allFaces.size());
+    }
+  }
+
+  ufbx_free_scene(scene);
+
+  if (outVerts.empty() || outIndices.empty()) {
+    cout << "[FBX] No geometry in " << path << endl;
+    return false;
+  }
+
+  Mesh3D mesh;
+  mesh.path = path;
+  mesh.aabbMin = mn;
+  mesh.aabbMax = mx;
+  mesh.vertexCount = (uint32_t)outVerts.size();
+  mesh.submeshes = std::move(submeshes);
+
+  // Auto-fit: center + scale longest axis to ~1.5 units (matches OBJ/PMX).
+  glm::vec3 center = (mn + mx) * 0.5f;
+  glm::vec3 extent = mx - mn;
+  float longest = std::max(extent.x, std::max(extent.y, extent.z));
+  float fitScale = (longest > 1e-6f) ? (1.5f / longest) : 1.0f;
+  glm::mat4 M(1.0f);
+  M = glm::scale(M, glm::vec3(fitScale));
+  M = glm::translate(M, -center);
+  mesh.autoFit = M;
+
+  mesh.cpuPositions.resize(outVerts.size());
+  for (size_t i = 0; i < outVerts.size(); ++i)
+    mesh.cpuPositions[i] = outVerts[i].pos;
+  mesh.cpuIndices = outIndices;
+
+  if (!UploadMeshBuffers(mesh, outVerts, outIndices)) {
+    cout << "[FBX] Failed to upload mesh buffers" << endl;
+    DestroyMesh(mesh);
+    return false;
+  }
+
+  std::string stem = path;
+  size_t slash = stem.find_last_of("/\\");
+  if (slash != std::string::npos)
+    stem = stem.substr(slash + 1);
+  size_t dot = stem.find_last_of('.');
+  if (dot != std::string::npos)
+    stem = stem.substr(0, dot);
+  mesh.displayName = stem.empty() ? "FBXModel" : stem;
+
+  cout << "[FBX] Loaded " << path << " — verts: " << outVerts.size()
+       << ", tris: " << (outIndices.size() / 3)
+       << ", surfaces: " << mesh.submeshes.size() << " (" << loadedTextures
+       << " textured)" << endl;
   meshes3d.push_back(std::move(mesh));
   return true;
 }
@@ -1691,6 +2232,166 @@ void SceneRenderer::SetMesh3DTransform(size_t i, const glm::vec3 &position,
   meshes3d[i].userPosition = position;
   meshes3d[i].userRotation = rotationEuler;
   meshes3d[i].userScale = scale;
+}
+
+// ---------------------------------------------------------------------------
+// Surfaces (submeshes) + per-surface texturing + click-picking
+// ---------------------------------------------------------------------------
+
+uint32_t SceneRenderer::GetMesh3DSubmeshCount(size_t i) const {
+  return i < meshes3d.size() ? (uint32_t)meshes3d[i].submeshes.size() : 0;
+}
+const std::string &SceneRenderer::GetMesh3DSubmeshName(size_t i,
+                                                       uint32_t sub) const {
+  static const std::string empty;
+  if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
+    return empty;
+  return meshes3d[i].submeshes[sub].name;
+}
+const std::string &SceneRenderer::GetMesh3DSubmeshTexture(size_t i,
+                                                          uint32_t sub) const {
+  static const std::string empty;
+  if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
+    return empty;
+  return meshes3d[i].submeshes[sub].texturePath;
+}
+glm::vec3 SceneRenderer::GetMesh3DSubmeshDiffuse(size_t i, uint32_t sub) const {
+  if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
+    return glm::vec3(1.0f);
+  return meshes3d[i].submeshes[sub].diffuse;
+}
+
+bool SceneRenderer::BindMesh3DSubmeshTexture(size_t i, uint32_t sub,
+                                             const std::string &path) {
+  if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
+    return false;
+  SubMesh &sm = meshes3d[i].submeshes[sub];
+  if (path.empty()) {
+    ClearMesh3DSubmeshTexture(i, sub);
+    return true;
+  }
+  VkDescriptorSet ds = textureManager.GetTextureDescriptor(path);
+  if (ds == VK_NULL_HANDLE) {
+    cout << "[Tex] Failed to bind texture: " << path << endl;
+    return false;
+  }
+  sm.texturePath = path;
+  sm.textureDescriptor = ds;
+  sm.hasTexture = true;
+  cout << "[Tex] Bound '" << path << "' to surface " << sub << " ("
+       << (sm.name.empty() ? "?" : sm.name) << ") of "
+       << meshes3d[i].displayName << endl;
+  return true;
+}
+
+void SceneRenderer::ClearMesh3DSubmeshTexture(size_t i, uint32_t sub) {
+  if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
+    return;
+  SubMesh &sm = meshes3d[i].submeshes[sub];
+  sm.texturePath.clear();
+  sm.textureDescriptor = VK_NULL_HANDLE;
+  sm.hasTexture = false;
+}
+
+bool SceneRenderer::ScreenToRay(float pxX, float pxY, glm::vec3 &outOrigin,
+                                glm::vec3 &outDir) const {
+  if (width <= 0 || height <= 0)
+    return false;
+  float aspect = (float)width / (float)height;
+  glm::vec3 forward = GetCameraForward();
+  glm::mat4 view = glm::lookAt(camera3d.position, camera3d.position + forward,
+                               glm::vec3(0.0f, 1.0f, 0.0f));
+  glm::mat4 proj = glm::perspective(glm::radians(camera3d.fovDeg), aspect,
+                                    camera3d.nearPlane, camera3d.farPlane);
+  glm::mat4 invVP = glm::inverse(proj * view);
+  // Panel pixel -> NDC (display is V-flipped, same as ScreenToGround).
+  float ndcX = 2.0f * (pxX / (float)width) - 1.0f;
+  float ndcY = 1.0f - 2.0f * (pxY / (float)height);
+  glm::vec4 nh = invVP * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+  glm::vec4 fh = invVP * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+  if (nh.w == 0.0f || fh.w == 0.0f)
+    return false;
+  glm::vec3 nw = glm::vec3(nh) / nh.w;
+  glm::vec3 fw = glm::vec3(fh) / fh.w;
+  glm::vec3 dir = fw - nw;
+  if (glm::dot(dir, dir) < 1e-12f)
+    return false;
+  outOrigin = nw;
+  outDir = glm::normalize(dir);
+  return true;
+}
+
+namespace {
+// Möller–Trumbore ray/triangle intersection (two-sided). Returns the
+// positive ray parameter t of the hit in `t`.
+bool RayTriangleMT(const glm::vec3 &o, const glm::vec3 &d, const glm::vec3 &a,
+                   const glm::vec3 &b, const glm::vec3 &c, float &t) {
+  const float EPS = 1e-7f;
+  glm::vec3 e1 = b - a, e2 = c - a;
+  glm::vec3 p = glm::cross(d, e2);
+  float det = glm::dot(e1, p);
+  if (std::fabs(det) < EPS)
+    return false;
+  float inv = 1.0f / det;
+  glm::vec3 tv = o - a;
+  float u = glm::dot(tv, p) * inv;
+  if (u < 0.0f || u > 1.0f)
+    return false;
+  glm::vec3 q = glm::cross(tv, e1);
+  float v = glm::dot(d, q) * inv;
+  if (v < 0.0f || u + v > 1.0f)
+    return false;
+  float tt = glm::dot(e2, q) * inv;
+  if (tt <= EPS)
+    return false;
+  t = tt;
+  return true;
+}
+} // namespace
+
+bool SceneRenderer::PickMesh3DSurface(float pxX, float pxY, int &outMeshIndex,
+                                      int &outSubmesh) const {
+  outMeshIndex = -1;
+  outSubmesh = -1;
+  glm::vec3 ro, rd;
+  if (!ScreenToRay(pxX, pxY, ro, rd))
+    return false;
+
+  float bestT = std::numeric_limits<float>::max();
+  for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
+    const Mesh3D &m = meshes3d[mi];
+    if (m.cpuPositions.empty() || m.cpuIndices.empty())
+      continue;
+    glm::mat4 model = m.ComputeModel();
+    for (size_t i = 0; i + 2 < m.cpuIndices.size(); i += 3) {
+      uint32_t ia = m.cpuIndices[i + 0];
+      uint32_t ib = m.cpuIndices[i + 1];
+      uint32_t ic = m.cpuIndices[i + 2];
+      if (ia >= m.cpuPositions.size() || ib >= m.cpuPositions.size() ||
+          ic >= m.cpuPositions.size())
+        continue;
+      glm::vec3 a = glm::vec3(model * glm::vec4(m.cpuPositions[ia], 1.0f));
+      glm::vec3 b = glm::vec3(model * glm::vec4(m.cpuPositions[ib], 1.0f));
+      glm::vec3 c = glm::vec3(model * glm::vec4(m.cpuPositions[ic], 1.0f));
+      float t;
+      if (RayTriangleMT(ro, rd, a, b, c, t) && t < bestT) {
+        bestT = t;
+        outMeshIndex = (int)mi;
+        // Map the hit triangle's first index to its owning surface range.
+        uint32_t firstIndex = (uint32_t)i;
+        outSubmesh = m.submeshes.empty() ? 0 : (int)(m.submeshes.size() - 1);
+        for (size_t s = 0; s < m.submeshes.size(); ++s) {
+          const SubMesh &sm = m.submeshes[s];
+          if (firstIndex >= sm.indexOffset &&
+              firstIndex < sm.indexOffset + sm.indexCount) {
+            outSubmesh = (int)s;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return outMeshIndex >= 0;
 }
 
 void SceneRenderer::DragMesh3DScreen(size_t i, float dxPx, float dyPx,

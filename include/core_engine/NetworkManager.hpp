@@ -1,16 +1,16 @@
 #pragma once
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string>
-#include <thread>
-#include <queue>
-#include <mutex>
-#include <vector>
 #include "Debugger.hpp"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <mutex>
+#include <netinet/in.h>
+#include <queue>
 #include <string.h>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
 using namespace std;
 using namespace Debug;
 // #pragma comment(lib, "ws2_32.lib")
@@ -20,192 +20,203 @@ typedef int SOCKET;
 #define SOCKET_ERROR -1
 class NetworkManager {
 public:
-    static const int PORT = 27015;
-    static const int BUFFER_SIZE = 1024;
+  static const int PORT = 27015;
+  static const int BUFFER_SIZE = 1024;
 
-    NetworkManager() : 
-        socket_(INVALID_SOCKET), 
-        isRunning_(false),
-        isConnected_(false) {
-        // WSADATA wsaData;
-        // if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        //     throw std::runtime_error("WSAStartup failed");
-        // }
+  NetworkManager()
+      : socket_(INVALID_SOCKET), isRunning_(false), isConnected_(false) {
+    // WSADATA wsaData;
+    // if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+    //     throw std::runtime_error("WSAStartup failed");
+    // }
+  }
+
+  bool startServer() {
+    socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_ == INVALID_SOCKET) {
+      Log("Failed to create server socket", Debug::LogLevel::CRASH);
+      return false;
     }
 
-    bool startServer() {
-        socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socket_ == INVALID_SOCKET) {
-            Log("Failed to create server socket", Debug::LogLevel::CRASH);
-            return false;
-        }
+    sockaddr_in service;
+    service.sin_family = AF_INET;
+    service.sin_addr.s_addr = INADDR_ANY;
+    service.sin_port = htons(PORT);
 
-        sockaddr_in service;
-        service.sin_family = AF_INET;
-        service.sin_addr.s_addr = INADDR_ANY;
-        service.sin_port = htons(PORT);
-
-        // Enable socket reuse
-        int opt = 1;
-        if (setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) == SOCKET_ERROR) {
-            Log("setsockopt failed", Debug::LogLevel::CRASH);
-            close(socket_);
-            return false;
-        }
-
-        if (bind(socket_, (struct sockaddr*)&service, sizeof(service)) == SOCKET_ERROR) {
-            Log("Bind failed", Debug::LogLevel::CRASH);
-            close(socket_);
-            return false;
-        }
-
-        if (listen(socket_, SOMAXCONN) == SOCKET_ERROR) {
-            Log("Listen failed", Debug::LogLevel::CRASH);
-            close(socket_);
-            return false;
-        }
-
-        isRunning_ = true;
-        isConnected_ = true;
-        
-        // Start listener thread
-        listenThread_ = std::thread(&NetworkManager::listenForConnections, this);
-        Log("Server started on port " + std::to_string(PORT), Debug::LogLevel::SUCCESS);
-        
-        return true;
+    // Enable socket reuse
+    int opt = 1;
+    if (setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
+                   sizeof(opt)) == SOCKET_ERROR) {
+      Log("setsockopt failed", Debug::LogLevel::CRASH);
+      close(socket_);
+      return false;
     }
 
-    bool connectToServer() {
-        socketCore_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socketCore_ == INVALID_SOCKET) {
-            Log("Failed to create client socket: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-            return false;
-        }
-
-        sockaddr_in clientService;
-        clientService.sin_family = AF_INET;
-        if (inet_pton(AF_INET, "127.0.0.1", &clientService.sin_addr) <= 0) {
-            Log("Failed to convert IP address: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-            return false;
-        }
-        clientService.sin_port = htons(27016);
-
-        try {            
-            if (connect(socketCore_, (struct sockaddr*)&clientService, sizeof(clientService)) == SOCKET_ERROR) {
-                Log("Connection failed: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-                close(socketCore_);
-                return false;
-            }
-        }
-        catch (const std::exception& e) {
-            Log("Exception occurred during connection: " + std::string(e.what()), Debug::LogLevel::CRASH);
-        }
-
-        isConnected_ = true;
-        
-        char ipStr[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(clientService.sin_addr), ipStr, INET_ADDRSTRLEN);
-        Log("Connected to server: " + std::string(ipStr) + " on port " + std::to_string(ntohs(clientService.sin_port)), Debug::LogLevel::SUCCESS);
-            
-        return true;
+    if (bind(socket_, (struct sockaddr *)&service, sizeof(service)) ==
+        SOCKET_ERROR) {
+      Log("Bind failed", Debug::LogLevel::CRASH);
+      close(socket_);
+      return false;
     }
 
-    bool sendMessage(const std::string& message) {
-        if (!isConnected_) return false;
-
-        std::lock_guard<std::mutex> lock(sendMutex_);
-        int bytesSent = send(socketCore_, message.c_str(), message.length(), 0);
-        if (bytesSent == SOCKET_ERROR) {
-            Log("Send failed: " + std::string(strerror(errno)), Debug::LogLevel::CRASH);
-            return false;
-        }
-        
-        Log("Sent to: " + std::to_string(socketCore_) + std::to_string(bytesSent) + " And Message: " + message);
-        return true;
+    if (listen(socket_, SOMAXCONN) == SOCKET_ERROR) {
+      Log("Listen failed", Debug::LogLevel::CRASH);
+      close(socket_);
+      return false;
     }
 
-    std::string receiveMessage() {
-        std::lock_guard<std::mutex> lock(receiveMutex_);
-        if (!messageQueue_.empty()) {
-            std::string msg = messageQueue_.front();
-            messageQueue_.pop();
-            Log("Menerima Pesan Dari: " + std::to_string(socket_) + " Yang Berisi: " + msg, Debug::LogLevel::SUCCESS);
-            return msg;
-        }
-        return "";
+    isRunning_ = true;
+    isConnected_ = true;
+
+    // Start listener thread
+    listenThread_ = std::thread(&NetworkManager::listenForConnections, this);
+    Log("Server started on port " + std::to_string(PORT),
+        Debug::LogLevel::SUCCESS);
+
+    return true;
+  }
+
+  bool connectToServer() {
+    socketCore_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socketCore_ == INVALID_SOCKET) {
+      Log("Failed to create client socket: " + std::string(strerror(errno)),
+          Debug::LogLevel::CRASH);
+      return false;
     }
 
-    void stop() {
-        isRunning_ = false;
-        if (socket_ != INVALID_SOCKET) {
-            close(socket_);
-        }
-        if (listenThread_.joinable()) {
-            listenThread_.join();
-        }
-        if (receiveThread_.joinable()) {
-            receiveThread_.join();
-        }
+    sockaddr_in clientService;
+    clientService.sin_family = AF_INET;
+    if (inet_pton(AF_INET, "127.0.0.1", &clientService.sin_addr) <= 0) {
+      Log("Failed to convert IP address: " + std::string(strerror(errno)),
+          Debug::LogLevel::CRASH);
+      return false;
     }
+    clientService.sin_port = htons(27016);
+
+    try {
+      if (connect(socketCore_, (struct sockaddr *)&clientService,
+                  sizeof(clientService)) == SOCKET_ERROR) {
+        Log("Connection failed: " + std::string(strerror(errno)),
+            Debug::LogLevel::CRASH);
+        close(socketCore_);
+        return false;
+      }
+    } catch (const std::exception &e) {
+      Log("Exception occurred during connection: " + std::string(e.what()),
+          Debug::LogLevel::CRASH);
+    }
+
+    isConnected_ = true;
+
+    char ipStr[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(clientService.sin_addr), ipStr, INET_ADDRSTRLEN);
+    Log("Connected to server: " + std::string(ipStr) + " on port " +
+            std::to_string(ntohs(clientService.sin_port)),
+        Debug::LogLevel::SUCCESS);
+
+    return true;
+  }
+
+  bool sendMessage(const std::string &message) {
+    if (!isConnected_)
+      return false;
+
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    int bytesSent = send(socketCore_, message.c_str(), message.length(), 0);
+    if (bytesSent == SOCKET_ERROR) {
+      Log("Send failed: " + std::string(strerror(errno)),
+          Debug::LogLevel::CRASH);
+      return false;
+    }
+
+    Log("Sent to: " + std::to_string(socketCore_) + std::to_string(bytesSent) +
+        " And Message: " + message);
+    return true;
+  }
+
+  std::string receiveMessage() {
+    std::lock_guard<std::mutex> lock(receiveMutex_);
+    if (!messageQueue_.empty()) {
+      std::string msg = messageQueue_.front();
+      messageQueue_.pop();
+      Log("Menerima Pesan Dari: " + std::to_string(socket_) +
+              " Yang Berisi: " + msg,
+          Debug::LogLevel::SUCCESS);
+      return msg;
+    }
+    return "";
+  }
+
+  void stop() {
+    isRunning_ = false;
+    if (socket_ != INVALID_SOCKET) {
+      close(socket_);
+    }
+    if (listenThread_.joinable()) {
+      listenThread_.join();
+    }
+    if (receiveThread_.joinable()) {
+      receiveThread_.join();
+    }
+  }
+
 private:
-    void listenForConnections() {
-        while (isRunning_) {
-            SOCKET clientSocket = accept(socket_, NULL, NULL);
-            if (clientSocket != INVALID_SOCKET) {
-                std::lock_guard<std::mutex> lock(clientsMutex_);
-                clientSockets_.push_back(clientSocket);
-                
-                // Start a new thread to handle this client
-                std::thread(&NetworkManager::handleClient, this, clientSocket).detach();
-                Log("New client connected", Debug::LogLevel::INFO);
-            }
-        }
-    }
+  void listenForConnections() {
+    while (isRunning_) {
+      SOCKET clientSocket = accept(socket_, NULL, NULL);
+      if (clientSocket != INVALID_SOCKET) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        clientSockets_.push_back(clientSocket);
 
-    void handleClient(SOCKET clientSocket) {
-        char buffer[BUFFER_SIZE];
-        while (isRunning_) {
-            int bytesReceived = recv(clientSocket, buffer, BUFFER_SIZE - 1, 0);
-            if (bytesReceived > 0) {
-                buffer[bytesReceived] = '\0';
-                std::lock_guard<std::mutex> lock(receiveMutex_);
-                messageQueue_.push(std::string(buffer, bytesReceived));
-                // Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
-            }
-            else if (bytesReceived == 0) {
-                Log("Client disconnected", Debug::LogLevel::WARNING);
-                break;
-            }
-            else {
-                Log("Receive failed", Debug::LogLevel::CRASH);
-                break;
-            }
-        }
-        close(clientSocket);
+        // Start a new thread to handle this client
+        std::thread(&NetworkManager::handleClient, this, clientSocket).detach();
+        Log("New client connected", Debug::LogLevel::INFO);
+      }
     }
+  }
 
-    void handleMessages() {
-        char buffer[BUFFER_SIZE];
-        while (isRunning_) {
-            int bytesReceived = recv(socket_, buffer, BUFFER_SIZE - 1, 0);
-            if (bytesReceived > 0) {
-                buffer[bytesReceived] = '\0';
-                std::lock_guard<std::mutex> lock(receiveMutex_);
-                messageQueue_.push(std::string(buffer, bytesReceived));
-                Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
-            }
-        }
+  void handleClient(SOCKET clientSocket) {
+    char buffer[BUFFER_SIZE];
+    while (isRunning_) {
+      int bytesReceived = recv(clientSocket, buffer, BUFFER_SIZE - 1, 0);
+      if (bytesReceived > 0) {
+        buffer[bytesReceived] = '\0';
+        std::lock_guard<std::mutex> lock(receiveMutex_);
+        messageQueue_.push(std::string(buffer, bytesReceived));
+        // Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
+      } else if (bytesReceived == 0) {
+        DEBUG_LOGF("Client disconnected", Debug::LogLevel::WARNING);
+        break;
+      } else {
+        Log("Receive failed", Debug::LogLevel::CRASH);
+        break;
+      }
     }
+    close(clientSocket);
+  }
 
-    SOCKET socketCore_;
-    SOCKET socket_;
-    bool isRunning_;
-    bool isConnected_;
-    std::thread listenThread_;
-    std::thread receiveThread_;
-    std::vector<SOCKET> clientSockets_;
-    std::queue<std::string> messageQueue_;
-    std::mutex sendMutex_;
-    std::mutex receiveMutex_;
-    std::mutex clientsMutex_;
+  void handleMessages() {
+    char buffer[BUFFER_SIZE];
+    while (isRunning_) {
+      int bytesReceived = recv(socket_, buffer, BUFFER_SIZE - 1, 0);
+      if (bytesReceived > 0) {
+        buffer[bytesReceived] = '\0';
+        std::lock_guard<std::mutex> lock(receiveMutex_);
+        messageQueue_.push(std::string(buffer, bytesReceived));
+        Log("Received: " + std::string(buffer), Debug::LogLevel::INFO);
+      }
+    }
+  }
+
+  SOCKET socketCore_;
+  SOCKET socket_;
+  bool isRunning_;
+  bool isConnected_;
+  std::thread listenThread_;
+  std::thread receiveThread_;
+  std::vector<SOCKET> clientSockets_;
+  std::queue<std::string> messageQueue_;
+  std::mutex sendMutex_;
+  std::mutex receiveMutex_;
+  std::mutex clientsMutex_;
 };

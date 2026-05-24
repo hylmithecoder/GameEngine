@@ -9,6 +9,10 @@ layout(location = 2) in vec4 vLightPosOrDir;  // xyz = position/direction, w = i
 layout(location = 3) in vec4 vLightColorType; // xyz = color, w = type (special -1.0 = emissive/unlit)
 layout(location = 4) in vec4 vLightDir;       // xyz = spotlight forward vector, w = unused
 layout(location = 5) in vec4 vLightParams;    // x = range, y = spotAngleRad, z = gamma, w = spotCosOuter
+layout(location = 6) in vec2 vUV;
+layout(location = 7) in vec4 vMaterial;       // xyz = diffuse tint, w = hasTexture
+
+layout(set = 0, binding = 0) uniform sampler2D albedoTex;
 
 layout(location = 0) out vec4 outColor;
 
@@ -68,7 +72,14 @@ void main() {
     vec3 fillColor = vec3(0.55, 0.65, 0.85);
     vec3 backColor = vec3(0.30, 0.30, 0.40);
     vec3 ambient   = vec3(0.16, 0.17, 0.20);
-    vec3 baseColor = vec3(0.84, 0.80, 0.74);
+    // Per-surface albedo: diffuse tint, multiplied by the bound texture when
+    // this submesh has one (w >= 0.5). Untextured surfaces fall back to the
+    // diffuse color alone.
+    vec3 baseColor = vMaterial.xyz;
+    if (vMaterial.w >= 0.5) {
+        vec4 tex = texture(albedoTex, vUV);
+        baseColor *= tex.rgb;
+    }
     vec3 rimColor  = vec3(0.85, 0.92, 1.00);
 
     float fill = max(dot(N, fillDir), 0.0);

@@ -2,7 +2,10 @@
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <nfd.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -316,6 +319,62 @@ void MainWindow::RenderInspectorWindow() {
       if (boneCount > 0) {
         Text("Bones: %u", boneCount);
       }
+
+      // --- Surfaces (materials) → per-surface texture binding ---
+      // Surfaces are auto-detected from the model's materials (PMX) or a
+      // single whole-mesh surface (OBJ/primitives). Click a surface in the
+      // viewport to target it, or pick it from this list, then bind a texture.
+      uint32_t surfaceCount =
+          sceneRenderer->GetMesh3DSubmeshCount((size_t)meshIdx);
+      if (surfaceCount > 0) {
+        Separator();
+        Text("Surfaces: %u", surfaceCount);
+        TextDisabled("Click a surface in the viewport, or select below.");
+        if (selectedSurface < 0 || selectedSurface >= (int)surfaceCount)
+          selectedSurface = 0;
+
+        float rows = surfaceCount < 6u ? (float)surfaceCount : 6.0f;
+        ImVec2 listSize(0.0f, rows * GetTextLineHeightWithSpacing() + 8.0f);
+        if (BeginChild("##surfacelist", listSize, true)) {
+          for (uint32_t s = 0; s < surfaceCount; ++s) {
+            const std::string &sname =
+                sceneRenderer->GetMesh3DSubmeshName((size_t)meshIdx, s);
+            const std::string &stex =
+                sceneRenderer->GetMesh3DSubmeshTexture((size_t)meshIdx, s);
+            char label[192];
+            std::snprintf(label, sizeof(label), "%u  %s%s", s,
+                          sname.empty() ? "(surface)" : sname.c_str(),
+                          stex.empty() ? "" : "   [textured]");
+            if (Selectable(label, selectedSurface == (int)s))
+              selectedSurface = (int)s;
+          }
+        }
+        EndChild();
+
+        const std::string &curTex = sceneRenderer->GetMesh3DSubmeshTexture(
+            (size_t)meshIdx, (uint32_t)selectedSurface);
+        TextWrapped("Texture: %s",
+                    curTex.empty() ? "(none — diffuse color)" : curTex.c_str());
+        if (Button("Bind Texture...")) {
+          NFD_Init();
+          nfdchar_t *outPath = nullptr;
+          nfdfilteritem_t filters[1] = {{"Image", "png,jpg,jpeg,bmp,tga,gif,psd"}};
+          if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
+              outPath) {
+            sceneRenderer->BindMesh3DSubmeshTexture(
+                (size_t)meshIdx, (uint32_t)selectedSurface, outPath);
+            NFD_FreePath(outPath);
+          }
+          NFD_Quit();
+        }
+        SameLine();
+        if (Button("Clear Texture")) {
+          sceneRenderer->ClearMesh3DSubmeshTexture((size_t)meshIdx,
+                                                   (uint32_t)selectedSurface);
+        }
+        Separator();
+      }
+
       static bool s_gridVisible = true;
       if (Checkbox("Show 3D Grid", &s_gridVisible)) {
         sceneRenderer->SetGrid3DVisible(s_gridVisible);
@@ -729,9 +788,12 @@ void MainWindow::RenderSceneWindow() {
           case ilmeee::PrimitiveKind::ExternalObj: {
             fs::path full = fs::path(activeProject) / e.externalPath;
             std::string ext = full.extension().string();
-            // Auto-detect: .pmx → PMX loader, otherwise OBJ
-            if (ext == ".pmx" || ext == ".PMX")
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            // Auto-detect by extension: .pmx → PMX, .fbx → FBX, else OBJ.
+            if (ext == ".pmx")
               ok = sceneRenderer->LoadPMXMesh(full.string());
+            else if (ext == ".fbx")
+              ok = sceneRenderer->LoadFbxMesh(full.string());
             else
               ok = sceneRenderer->LoadObjMesh(full.string());
             break;
@@ -747,11 +809,29 @@ void MainWindow::RenderSceneWindow() {
                                           e.lightSpotAngle, e.lightGamma);
             break;
           }
+          case ilmeee::PrimitiveKind::Camera: {
+            ok = sceneRenderer->LoadCamera(e.name, e.camProjection, e.camFov,
+                                           e.camOrthoSize, e.camNear, e.camFar);
+            break;
+          }
           }
           if (ok) {
             size_t idx = sceneRenderer->GetMesh3DCount() - 1;
             sceneRenderer->SetMesh3DTransform(idx, e.position, e.rotationEuler,
                                               e.scale);
+            // Re-apply per-surface texture bindings saved in the scene.
+            // Paths stored relative to the project resolve against it;
+            // absolute paths (textures outside the project) load as-is.
+            for (const auto &st : e.surfaceTextures) {
+              if (st.texturePath.empty())
+                continue;
+              fs::path tp(st.texturePath);
+              std::string full =
+                  tp.is_absolute() ? st.texturePath
+                                   : (fs::path(activeProject) / tp).string();
+              sceneRenderer->BindMesh3DSubmeshTexture(idx, st.surfaceIndex,
+                                                      full);
+            }
           }
         }
         s_loadedForProject = desired;
@@ -811,6 +891,77 @@ void MainWindow::RenderSceneWindow() {
     VkDescriptorSet sceneDesc = sceneRenderer->GetViewportDescriptorSet();
     if (sceneDesc != VK_NULL_HANDLE && contentSize.x > 0 && contentSize.y > 0) {
       Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1), ImVec2(1, 0));
+
+      // Drop target: drag a file from the Explorer onto the viewport. Models
+      // (.obj/.pmx/.fbx) spawn at the drop point projected onto the ground;
+      // images bind as the texture of the surface under the cursor.
+      if (BeginDragDropTarget()) {
+        if (const ImGuiPayload *pl = AcceptDragDropPayload("ASSET_PATH")) {
+          std::string assetPath((const char *)pl->Data);
+          const ImVec2 dmin = GetItemRectMin();
+          const ImVec2 mp = GetMousePos();
+          const float lx = mp.x - dmin.x, ly = mp.y - dmin.y;
+
+          std::string ext =
+              std::filesystem::path(assetPath).extension().string();
+          std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+          const std::string fname =
+              std::filesystem::path(assetPath).filename().string();
+
+          const bool isModel = (ext == ".obj" || ext == ".pmx" || ext == ".fbx");
+          const bool isImage = (ext == ".png" || ext == ".jpg" ||
+                                ext == ".jpeg" || ext == ".bmp" ||
+                                ext == ".tga" || ext == ".gif" || ext == ".psd");
+          const bool isVideo = (ext == ".mp4" || ext == ".mkv" ||
+                                ext == ".avi" || ext == ".mov" || ext == ".webm");
+
+          if (isModel) {
+            bool ok = (ext == ".pmx")   ? sceneRenderer->LoadPMXMesh(assetPath)
+                      : (ext == ".fbx") ? sceneRenderer->LoadFbxMesh(assetPath)
+                                        : sceneRenderer->LoadObjMesh(assetPath);
+            if (ok && sceneRenderer->GetMesh3DCount() > 0) {
+              size_t idx = sceneRenderer->GetMesh3DCount() - 1;
+              glm::vec3 world(0.0f);
+              if (sceneRenderer->ScreenToGround(lx, ly, world))
+                sceneRenderer->SetMesh3DTransform(idx, world, glm::vec3(0.0f),
+                                                  glm::vec3(1.0f));
+              std::snprintf(objectName, sizeof(objectName), "%s",
+                            sceneRenderer->GetMesh3DName(idx).c_str());
+              projectHandler.ShowNotification("Model added", fname,
+                                              ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            } else {
+              projectHandler.ShowNotification("Load failed", fname,
+                                              ImVec4(1.0f, 0.4f, 0.2f, 1.0f));
+            }
+          } else if (isImage) {
+            int hm = -1, hs = -1;
+            if (sceneRenderer->PickMesh3DSurface(lx, ly, hm, hs) && hm >= 0) {
+              sceneRenderer->BindMesh3DSubmeshTexture((size_t)hm, (uint32_t)hs,
+                                                      assetPath);
+              std::snprintf(objectName, sizeof(objectName), "%s",
+                            sceneRenderer->GetMesh3DName((size_t)hm).c_str());
+              selectedSurface = hs;
+              projectHandler.ShowNotification(
+                  "Texture bound", fname + " → surface " + std::to_string(hs),
+                  ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            } else {
+              projectHandler.ShowNotification(
+                  "Drop on a surface",
+                  "Hover a model surface to bind the image",
+                  ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+            }
+          } else if (isVideo) {
+            projectHandler.ShowNotification(
+                "Video texture", "Video-as-texture is coming next",
+                ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+          } else {
+            projectHandler.ShowNotification("Unsupported",
+                                            "Can't drop " + ext + " here",
+                                            ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+          }
+        }
+        EndDragDropTarget();
+      }
 
       // Dynamic 2D grid overlay. Drawn via ImDrawList on top of the
       // viewport image so it instantly tracks pan/zoom without needing
@@ -883,13 +1034,20 @@ void MainWindow::RenderSceneWindow() {
         dl->PopClipRect();
       }
 
-      // LMB click on the viewport selects the first 3D mesh as a
-      // hardcoded fallback until proper ray-picking lands. Populates
-      // the Inspector Name field and highlights the matching Hierarchy
-      // row by name match.
+      // LMB click on the viewport ray-picks the mesh + surface under the
+      // cursor. Populates the Inspector Name field (which drives the
+      // Hierarchy highlight) and records the hit surface so the Inspector
+      // can target it for texturing.
       if (IsItemClicked(ImGuiMouseButton_Left) && sceneRenderer->HasMesh3D()) {
-        const std::string &firstName = sceneRenderer->GetMesh3DName(0);
-        std::snprintf(objectName, sizeof(objectName), "%s", firstName.c_str());
+        const ImVec2 pickMin = GetItemRectMin();
+        ImVec2 mp = GetMousePos();
+        int hitMesh = -1, hitSurface = -1;
+        if (sceneRenderer->PickMesh3DSurface(mp.x - pickMin.x, mp.y - pickMin.y,
+                                             hitMesh, hitSurface)) {
+          const std::string &nm = sceneRenderer->GetMesh3DName((size_t)hitMesh);
+          std::snprintf(objectName, sizeof(objectName), "%s", nm.c_str());
+          selectedSurface = hitSurface;
+        }
       }
       // LMB drag → move the currently-selected mesh in screen plane.
       int selIdx = -1;
@@ -922,8 +1080,12 @@ void MainWindow::RenderSceneWindow() {
         ImVec2 m = GetMousePos();
         s_rmbAnchor = ImVec2(m.x - imgMin.x, m.y - imgMin.y);
       }
-      if (BeginPopupContextItem("SceneAddMenu",
-                                ImGuiPopupFlags_MouseButtonRight)) {
+      PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f));
+      PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 5.0f));
+      PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 5.0f));
+      bool open = BeginPopupContextItem("SceneAddMenu",
+                                        ImGuiPopupFlags_MouseButtonRight);
+      if (open) {
         if (BeginMenu("Add")) {
           // 0 = Cube (default), 1 = Sphere, 2 = Plane
           auto spawn = [&](int kind) {
@@ -994,6 +1156,7 @@ void MainWindow::RenderSceneWindow() {
         }
         EndPopup();
       }
+      PopStyleVar(3);
     }
 
     // Render toolbar di atas viewport
@@ -1679,29 +1842,54 @@ void MainWindow::Save3DScene() {
       e.lightType = sceneRenderer->GetMesh3DLightType(i);
       e.lightRange = sceneRenderer->GetMesh3DLightRange(i);
       e.lightSpotAngle = sceneRenderer->GetMesh3DLightSpotAngle(i);
+    } else if (sceneRenderer->IsMesh3DCamera(i)) {
+      e.kind = ilmeee::PrimitiveKind::Camera;
+      e.camProjection = sceneRenderer->GetMesh3DCameraProjection(i);
+      e.camFov = sceneRenderer->GetMesh3DCameraFov(i);
+      e.camOrthoSize = sceneRenderer->GetMesh3DCameraOrthoSize(i);
+      e.camNear = sceneRenderer->GetMesh3DCameraNear(i);
+      e.camFar = sceneRenderer->GetMesh3DCameraFar(i);
     } else {
       std::string path = sceneRenderer->GetMesh3DPath(i);
-      if (path.empty()) {
-        if (e.name.find("Cube") != std::string::npos) {
-          e.kind = ilmeee::PrimitiveKind::Cube;
-        } else if (e.name.find("Sphere") != std::string::npos) {
+      // Primitives carry a synthetic "<primitive:kind>" path — the reliable
+      // way to recover their kind (name can be renamed by the user).
+      if (path.rfind("<primitive:", 0) == 0) {
+        if (path.find("sphere") != std::string::npos)
           e.kind = ilmeee::PrimitiveKind::Sphere;
-        } else if (e.name.find("Plane") != std::string::npos) {
+        else if (path.find("plane") != std::string::npos)
           e.kind = ilmeee::PrimitiveKind::Plane;
-        } else {
+        else
           e.kind = ilmeee::PrimitiveKind::Cube;
-        }
+      } else if (path.empty()) {
+        e.kind = ilmeee::PrimitiveKind::Cube; // unknown mesh → safe default
       } else {
         fs::path absPath = path;
         std::error_code ec;
         fs::path rel = fs::relative(absPath, activeProject, ec);
         e.externalPath = ec ? path : rel.string();
         std::string ext = absPath.extension().string();
-        if (ext == ".pmx" || ext == ".PMX") {
+        if (ext == ".pmx" || ext == ".PMX")
           e.kind = ilmeee::PrimitiveKind::ExternalPmx;
-        } else {
+        else
           e.kind = ilmeee::PrimitiveKind::ExternalObj;
-        }
+      }
+
+      // Capture per-surface texture bindings so re-textured surfaces
+      // survive a save/load round-trip. Paths under the project are stored
+      // relative; textures elsewhere are stored absolute.
+      uint32_t sc = sceneRenderer->GetMesh3DSubmeshCount(i);
+      for (uint32_t s = 0; s < sc; ++s) {
+        const std::string &tex = sceneRenderer->GetMesh3DSubmeshTexture(i, s);
+        if (tex.empty())
+          continue;
+        ilmeee::SurfaceTexture st;
+        st.surfaceIndex = s;
+        std::error_code ec2;
+        fs::path rel = fs::relative(fs::path(tex), activeProject, ec2);
+        std::string relStr = ec2 ? std::string() : rel.string();
+        st.texturePath =
+            (!relStr.empty() && relStr.rfind("..", 0) != 0) ? relStr : tex;
+        e.surfaceTextures.push_back(std::move(st));
       }
     }
     scene.entities.push_back(std::move(e));
