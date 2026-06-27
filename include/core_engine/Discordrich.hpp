@@ -10,6 +10,7 @@
 #define DISCORDAPP_IMPLEMENTATION
 #include <discord_game_sdk.h>
 
+namespace Ilmeee {
 class DiscordRichPresence {
 public:
   DiscordRichPresence() = default;
@@ -53,3 +54,4 @@ private:
   std::chrono::system_clock::time_point startTimestamp;
   std::chrono::steady_clock::time_point lastReconnectAttempt;
 };
+} // namespace Ilmeee

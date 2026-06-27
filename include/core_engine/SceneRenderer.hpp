@@ -154,6 +154,7 @@ private:
     VkDeviceMemory memory = VK_NULL_HANDLE;
   } quadBuffer, gridBuffer;
 
+public:
   struct MeshVertex {
     glm::vec3 pos;
     glm::vec3 normal;
@@ -225,9 +226,31 @@ private:
     float camNear = 0.1f;
     float camFar = 100.0f;
 
+    // Physics specific properties
+    bool hasPhysics = false;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float mass = 1.0f;
+    float drag = 0.0f;
+    float gravityY = -9.81f;
+    glm::vec3 velocity = glm::vec3(0.0f);
+
+    // Audio specific properties
+    bool hasAudio = false;
+    std::string audioPath = "";
+    bool isPlaying = false;
+
+    // Optional source location for the call site that spawned this mesh.
+    // Populated via SetMesh3DDebugSource() and surfaced by Inspect Mode
+    // (--debug overlay) when hovering the object in the viewport.
+    std::string debugSrcFile;
+    int debugSrcLine = 0;
+
     glm::mat4 ComputeModel() const;
   };
   std::vector<Mesh3D> meshes3d;
+
+private:
 
   // Infinite ground grid drawn on the XZ plane (Y=0). Rendered as one
   // fullscreen triangle whose fragment shader raycasts the plane, so it
@@ -361,6 +384,14 @@ public:
   void SetMesh3DTransform(size_t i, const glm::vec3 &position,
                           const glm::vec3 &rotationEuler,
                           const glm::vec3 &scale);
+
+  // --- Inspect Mode source tracking ---
+  // Attach the file:line of the call site that spawned mesh i. Called by
+  // scene bootstrap / spawn UI so the --debug overlay can report where a
+  // hovered scene object was created. Safe to call with a stale index.
+  void SetMesh3DDebugSource(size_t i, const char *file, int line);
+  const std::string &GetMesh3DDebugSrcFile(size_t i) const;
+  int GetMesh3DDebugSrcLine(size_t i) const;
 
   // --- Surfaces (submeshes) and per-surface texturing ---
   // A "surface" is one material range of the mesh. For PMX these are the

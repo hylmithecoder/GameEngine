@@ -1,9 +1,10 @@
+#include "../core_engine/Builder.hpp"
 #include "../core_engine/NetworkManager.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
-#include "IconsFontAwesome6.h"
+#include "SvgIconManager.hpp"
 #include "VideoPlayer.hpp"
 #include "assets.hpp"
 #include "imgui.h"
@@ -92,6 +93,8 @@ public:
   // members are still rendered directly; over time they should be
   // migrated to Panel subclasses and registered here.
   Ilmeee::PanelManager panelManager;
+  Ilmeee::Builder builder;
+  SvgIconManager svgIcons;
   TextureData backgroundTexture;
   Color backgroundColor;
   SwrContext *swrContext = nullptr;

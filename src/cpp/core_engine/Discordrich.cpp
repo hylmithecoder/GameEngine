@@ -3,6 +3,8 @@
 #include <cstring>
 #include <iostream>
 
+using namespace Ilmeee;
+
 namespace {
 constexpr DiscordClientId kClientId = 1410567823054475325;
 constexpr auto kReconnectInterval = std::chrono::seconds(10);

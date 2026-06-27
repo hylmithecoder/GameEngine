@@ -149,16 +149,16 @@ public:
   IconInfo LoadCachedTexture(const string &pathIcon);
 
   IconInfo GetIconForFile(const AssetFile &node) {
-    string path = "assets/images/fileicons/";
+    string path = "assets/icons/svg/";
     if (node.isDirectory) {
-      path += "folder.png";
+      path += "folder.svg";
     } else {
       string ext = fs::path(node.name).extension().string();
       if (ext == ".cpp" || ext == ".hpp")
-        path += "c-.png";
+        path += "code.svg";
       else if (ext == ".png" || ext == ".jpg" || ext == ".webp" ||
                ext == ".jpeg")
-        path = node.fullPath;
+        path = node.fullPath; // Show actual image thumbnail
       else if (ext == ".mp4" || ext == ".avi" || ext == ".mov" ||
                ext == ".mkv") {
         // Generate thumbnail for video files
@@ -169,14 +169,18 @@ public:
         IconInfo thumbnail = GenerateVideoThumbnail(node.fullPath);
         iconCacheInfo[node.fullPath] = thumbnail;
         return thumbnail;
-      } else if (ext == ".fbx" || ext == ".obj")
-        path += "file.png";
-      else if (ext == ".prefab")
-        path += "file.png";
-      else if (ext == ".ilmeeescene" || ext == ".unity")
-        path += "file.png";
+      } else if (ext == ".fbx" || ext == ".obj" || ext == ".pmx")
+        path += "box.svg";
+      else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" ||
+               ext == ".flac")
+        path += "music.svg";
+      else if (ext == ".glsl" || ext == ".vert" || ext == ".frag" ||
+               ext == ".spv")
+        path += "shader.svg";
+      else if (ext == ".prefab" || ext == ".ilmeeescene" || ext == ".unity")
+        path += "file.svg";
       else
-        path += "file.png";
+        path += "file.svg";
     }
 
     return LoadCachedTexture(path);
@@ -311,7 +315,9 @@ public:
   void SaveAsScene();
 
   void SetVulkanHandler(VulkanHandler *handler) { vulkanHandler = handler; }
+  void SetSvgIconManager(class SvgIconManager *mgr) { svgIcons_ = mgr; }
 
 private:
   VulkanHandler *vulkanHandler = nullptr;
+  class SvgIconManager *svgIcons_ = nullptr;
 };

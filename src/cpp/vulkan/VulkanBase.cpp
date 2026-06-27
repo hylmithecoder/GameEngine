@@ -506,6 +506,133 @@ void VulkanBase::DrawFrame() {
   ImGui_ImplSDL3_NewFrame();
   ImGui::NewFrame();
 
+  {
+    ImGuiIO &io = ImGui::GetIO();
+    static bool warpedLastFrameX = false;
+    static bool warpedLastFrameY = false;
+    static float warpedToX = 0.0f;
+    static float warpedToY = 0.0f;
+
+    // 1. Correct the delta if warped last frame to avoid value jumping
+    // Since this runs after ImGui::NewFrame(), ImGui has already processed
+    // events and calculated MouseDelta. We overwrite it here so widgets read
+    // the corrected delta.
+    if (warpedLastFrameX) {
+      io.MouseDelta.x = io.MousePos.x - warpedToX;
+      warpedLastFrameX = false;
+    }
+    if (warpedLastFrameY) {
+      io.MouseDelta.y = io.MousePos.y - warpedToY;
+      warpedLastFrameY = false;
+    }
+
+    // 2. Wrap mouse cursor if active and dragging
+    if (ImGui::IsAnyItemActive() && ImGui::IsMouseDragging(0)) {
+      int w = 0, h = 0;
+      SDL_GetWindowSize(window, &w, &h);
+      if (w > 0 && h > 0) {
+        const float margin = 10.0f;
+        bool needWarpX = false;
+        bool needWarpY = false;
+        float nextX = io.MousePos.x;
+        float nextY = io.MousePos.y;
+
+        if (io.MousePos.x <= margin) {
+          nextX = (float)w - margin - 5.0f;
+          needWarpX = true;
+        } else if (io.MousePos.x >= (float)w - margin) {
+          nextX = margin + 5.0f;
+          needWarpX = true;
+        }
+
+        if (io.MousePos.y <= margin) {
+          nextY = (float)h - margin - 5.0f;
+          needWarpY = true;
+        } else if (io.MousePos.y >= (float)h - margin) {
+          nextY = margin + 5.0f;
+          needWarpY = true;
+        }
+
+        if (needWarpX || needWarpY) {
+          SDL_WarpMouseInWindow(window, nextX, nextY);
+          if (needWarpX) {
+            warpedLastFrameX = true;
+            warpedToX = nextX;
+          }
+          if (needWarpY) {
+            warpedLastFrameY = true;
+            warpedToY = nextY;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Render Debug Labels Overlay if debug mode is active
+  if (Debug::g_DebugMode) {
+    auto &labels = Debug::GetDebugLabels();
+    double now = Debug::GetTimeSeconds();
+
+    // Prune labels older than 5.0 seconds
+    labels.erase(std::remove_if(labels.begin(), labels.end(),
+                                [now](const Debug::DebugLabel &l) {
+                                  return (now - l.timestamp) > 5.0;
+                                }),
+                 labels.end());
+
+    if (!labels.empty()) {
+      ImGui::SetNextWindowBgAlpha(0.7f); // Sleek translucent glassmorphic look
+      ImGuiWindowFlags overlay_flags =
+          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+          ImGuiWindowFlags_NoSavedSettings |
+          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+      // Position in the bottom-right corner of the window
+      ImVec2 window_pos((float)windowWidth - 20.0f,
+                        (float)windowHeight - 20.0f);
+      ImVec2 window_pos_pivot(1.0f, 1.0f);
+      ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+      ImGui::PushStyleColor(
+          ImGuiCol_Border,
+          ImVec4(0.2f, 0.4f, 0.8f, 0.5f)); // Vibrant blue debug border
+
+      if (ImGui::Begin("##DebugLabelOverlay", nullptr, overlay_flags)) {
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f),
+                           "DEBUG TRACE OVERLAY");
+        ImGui::Separator();
+
+        for (const auto &l : labels) {
+          std::string filepath = l.file;
+          size_t lastSlash = filepath.find_last_of("/\\");
+          std::string filename = (lastSlash != std::string::npos)
+                                     ? filepath.substr(lastSlash + 1)
+                                     : filepath;
+
+          ImGui::PushID(l.file.c_str());
+          ImGui::Text("%s", l.message.c_str());
+          ImGui::SameLine();
+          ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "-> %s:%d",
+                             filename.c_str(), l.line);
+
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("File: %s\nLine: %d\nClick to copy location",
+                              l.file.c_str(), l.line);
+            if (ImGui::IsItemClicked()) {
+              std::string loc = l.file + ":" + std::to_string(l.line);
+              ImGui::SetClipboardText(loc.c_str());
+            }
+          }
+          ImGui::PopID();
+        }
+      }
+      ImGui::End();
+      ImGui::PopStyleColor();
+      ImGui::PopStyleVar();
+    }
+  }
+
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

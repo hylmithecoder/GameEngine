@@ -1,14 +1,16 @@
 add_subdirectory(core_engine)
 add_subdirectory(ui)
 add_subdirectory(vulkan)
+add_subdirectory(optimizer)
 
 file(GLOB_RECURSE CPP_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-set(SOURCES_CPP ${CPP_FILES} ${SOURCES_CORE_ENGINE} ${SOURCES_UI} ${SOURCES_VULKAN} PARENT_SCOPE)
+set(SOURCES_CPP ${CPP_FILES} ${SOURCES_CORE_ENGINE} ${SOURCES_UI} ${SOURCES_VULKAN} ${OPTIMIZER} PARENT_SCOPE)
 
 set(SOURCE_CORE ${SOURCES_CORE} PARENT_SCOPE)
 set(SOURCE_CORE_ENGINE ${SOURCES_CORE_ENGINE} PARENT_SCOPE)
 set(SOURCE_UI ${SOURCES_UI} PARENT_SCOPE)
 set(SOURCE_VULKAN ${SOURCES_VULKAN} PARENT_SCOPE)
+set(SOURCE_OPTIMIZER ${OPTIMIZER} PARENT_SCOPE)
 
 set(HANDLER_ENGINE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core/Launcher.cpp 
@@ -29,14 +31,17 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Discordrich.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PMXLoader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/SvgIconManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorDockSpace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorTheme.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/panels/PanelManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/panels/VideoPlayerPanel.cpp
+    ${OPTIMIZER}
     ${SOURCES_VULKAN}
     PARENT_SCOPE
 )

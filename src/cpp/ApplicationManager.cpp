@@ -8,8 +8,9 @@ ApplicationManager::ApplicationManager() {
 
   // Register cleanup tasks in reverse order of initialization
   RegisterCleanupTask([this]() { CleanupWindow(); });
-  RegisterCleanupTask([this]() { 
-    if (discordRich) discordRich->Shutdown(); 
+  RegisterCleanupTask([this]() {
+    if (discordRich)
+      discordRich->Shutdown();
   });
   RegisterCleanupTask([this]() { CleanupNetwork(); });
   RegisterCleanupTask([this]() { CleanupEngine(); });

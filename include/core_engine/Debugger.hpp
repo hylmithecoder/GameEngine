@@ -1,9 +1,11 @@
 #pragma once
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <iostream>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #ifdef __linux__
 #include <gtk/gtk.h>
@@ -557,6 +559,51 @@ static void _msgbox_pump_events() {
     NotifyNotification *notif =                                                \
         notify_notification_new(title, _notif_msg, NULL);                      \
     notify_notification_show(notif, NULL);                                     \
-    g_object_unref(notif);                                                     \
   } while (0)
+
+inline bool g_DebugMode = false;
+
+// Interactive Debug Overlay ("Inspect Mode") — see InspectMode.hpp.
+// Enabled at launch by --debug, runtime-toggled with F2. Lives here so
+// non-UI translation units can read/set it without dragging ImGui in.
+inline bool g_InspectModeActive = false;
+
+struct DebugLabel {
+  std::string message;
+  std::string file;
+  int line;
+  double timestamp;
+};
+
+inline std::vector<DebugLabel> &GetDebugLabels() {
+  static std::vector<DebugLabel> labels;
+  return labels;
+}
+
+inline double GetTimeSeconds() {
+  auto now = std::chrono::steady_clock::now();
+  auto duration = now.time_since_epoch();
+  return std::chrono::duration<double>(duration).count();
+}
+
+inline void AddDebugLabel(const std::string &msg, const char *file, int line) {
+  auto &labels = GetDebugLabels();
+  double now = GetTimeSeconds();
+  for (auto &l : labels) {
+    if (l.file == file && l.line == line) {
+      l.message = msg;
+      l.timestamp = now;
+      return;
+    }
+  }
+  labels.push_back({msg, file, line, now});
+}
+
+#define DEBUG_LABEL(msg)                                                       \
+  do {                                                                         \
+    if (Debug::g_DebugMode) {                                                  \
+      Debug::AddDebugLabel((msg), __FILE__, __LINE__);                         \
+    }                                                                          \
+  } while (0)
+
 } // namespace Debug

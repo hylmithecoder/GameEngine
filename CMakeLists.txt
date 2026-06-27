@@ -46,8 +46,6 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
-
 set(SOURCE_HANDLER
     src/cpp/core_engine/core/Launcher.cpp 
     src/cpp/core_engine/core/HandlerLauncher.cpp
@@ -82,11 +80,11 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 find_package(glfw3 REQUIRED)
-find_package(SDL2_ttf REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(Ktx REQUIRED)
+find_package(OpenCL REQUIRED)
 pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 pkg_check_modules(LIBNOTIFY REQUIRED libnotify)
 pkg_check_modules(XCB REQUIRED xcb)
@@ -192,10 +190,13 @@ find_package(Vulkan REQUIRED)
 # find_package(GLFW3 REQUIRED)
 # set(Vulkan_DIR "${VULKAN_SDK}/lib/cmake/VulkanLoader")
 
+# Global Include directory
+include_directories(${OpenCL_INCLUDE_DIRS})
+
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
     # Project directories
-    ${CMAKE_SOURCE_DIR}/vendor/icons
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
     # Custom/third-party libraries
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -206,6 +207,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include/vulkan
     ${LIBNOTIFY_INCLUDE_DIRS}
     ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
     ${STB_INCLUDE_DIRS}
     /usr/include/discord
@@ -268,7 +270,7 @@ target_include_directories(TestBackground PRIVATE
 )
 
 target_include_directories(TestGLSL PRIVATE
-    ${ICON_DIR}
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/include/ui
@@ -291,7 +293,7 @@ target_include_directories(IlmeeeEngine PUBLIC
 
 target_include_directories(IlmeeeEditor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/core_engine/core_editor>
-    $<BUILD_INTERFACE:${ICON_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/nanosvg>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/ui>
@@ -311,7 +313,7 @@ target_include_directories(IlmeeeEditor PUBLIC
 )
 
 target_include_directories(IlmeeeHub PRIVATE
-    ${ICON_DIR}
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/include/ui
@@ -492,6 +494,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glfw
     ${GTK3_LIBRARIES}
     glm::glm
+    OpenCL::OpenCL
     dl
     pthread
     discord-gamesdk

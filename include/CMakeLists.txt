@@ -15,6 +15,8 @@ set(HEADERS_MAIN_PROJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Debugger.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NetworkManager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Builder.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/Application.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/Optimizer.hpp
     PARENT_SCOPE
 )

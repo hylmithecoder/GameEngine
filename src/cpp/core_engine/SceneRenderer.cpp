@@ -2234,6 +2234,24 @@ void SceneRenderer::SetMesh3DTransform(size_t i, const glm::vec3 &position,
   meshes3d[i].userScale = scale;
 }
 
+void SceneRenderer::SetMesh3DDebugSource(size_t i, const char *file, int line) {
+  if (i >= meshes3d.size())
+    return;
+  meshes3d[i].debugSrcFile = file ? file : "";
+  meshes3d[i].debugSrcLine = line;
+}
+const std::string &SceneRenderer::GetMesh3DDebugSrcFile(size_t i) const {
+  static const std::string empty;
+  if (i >= meshes3d.size())
+    return empty;
+  return meshes3d[i].debugSrcFile;
+}
+int SceneRenderer::GetMesh3DDebugSrcLine(size_t i) const {
+  if (i >= meshes3d.size())
+    return 0;
+  return meshes3d[i].debugSrcLine;
+}
+
 // ---------------------------------------------------------------------------
 // Surfaces (submeshes) + per-surface texturing + click-picking
 // ---------------------------------------------------------------------------

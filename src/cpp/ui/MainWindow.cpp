@@ -1,6 +1,7 @@
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/audio/FFmpegWrapper.hpp"
 #include "../../../include/core_engine/Debugger.hpp"
+#include "../../../include/core_engine/InspectMode.hpp"
 #include "../../../include/core_engine/core_editor/EditorDockSpace.hpp"
 #include "../../../include/core_engine/core_editor/EditorTheme.hpp"
 #include "../../../include/core_engine/core_editor/panels/VideoPlayerPanel.hpp"
@@ -59,6 +60,13 @@ void MainWindow::OnInit() {
   // Link VulkanHandler to ProjectHandler
   projectHandler.SetVulkanHandler(&vulkanHandler);
 
+  // Initialize SVG icon manager for the editor UI
+  svgIcons.Init(&vulkanHandler);
+  projectHandler.SetSvgIconManager(&svgIcons);
+
+  // Initialize Builder for Play/Pause/Stop controls
+  builder.Init(sceneRenderer);
+
   networkManager = std::make_unique<NetworkManager>();
   networkManager->connectToServer();
 
@@ -91,12 +99,22 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
     Save3DScene();
   }
 
+  // F2 toggles Inspect Mode. Honored even when --debug wasn't passed so
+  // a running session can flip the overlay on for ad-hoc UI archaeology.
+  if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+    Debug::g_InspectModeActive = !Debug::g_InspectModeActive;
+    ::Log(Debug::g_InspectModeActive ? "Inspect Mode: ON" : "Inspect Mode: OFF",
+          Debug::LogLevel::INFO);
+  }
+  Debug::Inspect::BeginFrame();
+
   // Fullscreen dockspace wraps every panel below. RenderMenuBar() must
   // stay outside the host window so the OS-style menubar sits at the
   // top of the actual main viewport, not inside a docked window.
   RenderMenuBar();
+  RenderPlayMenu();
 
-  Ilmeee::EditorDockSpace::Begin();
+  Ilmeee::EditorDockSpace::Begin("IlmeeeDockSpace", 32.0f);
 
   if (showMainView)
     RenderMainViewWindow();
@@ -118,6 +136,10 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
   panelManager.RenderAll();
 
   Ilmeee::EditorDockSpace::End();
+
+  // Top-most overlay: outline + tooltip for whatever the user is hovering.
+  // Must come after all panels so the trace registry is fully populated.
+  Debug::Inspect::RenderHoverOverlay();
 }
 
 void MainWindow::OnCleanup() {

@@ -186,7 +186,19 @@ int main(int argc, char *argv[]) {
       cliDebug2D = true;
     } else if (a.rfind("--2d=", 0) == 0) {
       cliDebug2D = parseBoolFlag(a.substr(strlen("--2d=")));
+    } else if (a == "--debug") {
+      Debug::g_DebugMode = true;
+    } else if (a.rfind("--debug=", 0) == 0) {
+      Debug::g_DebugMode = parseBoolFlag(a.substr(strlen("--debug=")));
     }
+  }
+  if (Debug::g_DebugMode) {
+    // --debug starts the editor in Inspect Mode (hover-to-source).
+    // The user can still toggle it at runtime with F2.
+    Debug::g_InspectModeActive = true;
+    Log("Interactive Debug Overlay enabled (F2 toggles at runtime, "
+        "Ctrl+C copies file:line).",
+        Debug::LogLevel::SUCCESS);
   }
   if (!cliProjectPath.empty()) {
     Log("CLI project path: " + cliProjectPath, Debug::LogLevel::SUCCESS);

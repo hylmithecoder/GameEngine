@@ -43,6 +43,10 @@ class VulkanHandler {
 public:
   VkDescriptorSet LoadImage(const char *filename);
 
+  // Public accessors for Vulkan device handles (used by SvgIconManager)
+  VkDevice GetDevice() const { return currentDevice; }
+  VkPhysicalDevice GetPhysicalDevice() const { return currentPhysicalDevice; }
+
   string currentFile;
 
   array<VkFence, MAX_CONCURRENT_FRAMES> waitFences;

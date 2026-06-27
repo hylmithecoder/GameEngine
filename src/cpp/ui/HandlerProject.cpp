@@ -1,5 +1,6 @@
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/ui/MainWindow.hpp"
+#include "../../../include/ui/SvgIconManager.hpp"
 using namespace Debug;
 namespace fs = std::filesystem;
 
@@ -299,7 +300,9 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
 
     // Atur warna folder dan tampilkan ikon folder
     ImGui::PushStyleColor(ImGuiCol_Text, folderColor);
-    DrawIconFromImage("assets/images/fileicons/folder.png", 20, 20);
+    if (svgIcons_) {
+      svgIcons_->DrawIcon("assets/icons/svg/folder.svg", 20);
+    }
     ImGui::SameLine();
     std::string label = node.name;
 
@@ -384,33 +387,33 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
 
     // Start group for the selectable item with icon
     ImGui::BeginGroup();
-    // DrawIconFromImage("assets/images/fileicons/folder.png");
-    // Choose appropriate icon and color based on file type
-    const char *icon = ICON_FA_FILE;
+    // Choose appropriate SVG icon based on file type
+    std::string svgIcon = "assets/icons/svg/file.svg";
     ImVec4 fileColor = defaultFileColor;
 
     if (isCpp) {
-      DrawIconFromImage("assets/images/fileicons/c-.png", 20, 20);
-      icon = ICON_FA_CODE;
+      svgIcon = "assets/icons/svg/code.svg";
       fileColor = cppColor;
     } else if (isHpp) {
-      DrawIconFromImage("assets/images/fileicons/c-.png", 20, 20);
-      icon = ICON_FA_CODE;
+      svgIcon = "assets/icons/svg/code.svg";
       fileColor = hppColor;
     } else if (isVideo) {
-      DrawIconFromImage("assets/images/fileicons/video.png", 20, 20);
-      icon = ICON_FA_FILM;
+      svgIcon = "assets/icons/svg/video.svg";
       fileColor = videoColor;
     } else if (isImage) {
-      DrawIconFromImage("assets/images/fileicons/image.png", 20, 20);
-      icon = ICON_FA_IMAGE;
-      fileColor = ImVec4(0.4f, 0.8f, 0.4f, 1.0f); // Green
+      svgIcon = "assets/icons/svg/image.svg";
+      fileColor = ImVec4(0.4f, 0.8f, 0.4f, 1.0f);
     } else if (isAudio) {
-      icon = ICON_FA_MUSIC;
-      fileColor = ImVec4(0.8f, 0.4f, 0.8f, 1.0f); // Purple
+      svgIcon = "assets/icons/svg/music.svg";
+      fileColor = ImVec4(0.8f, 0.4f, 0.8f, 1.0f);
     } else if (isShader) {
-      icon = ICON_FA_MICROCHIP;
-      fileColor = ImVec4(0.4f, 0.8f, 0.8f, 1.0f); // Cyan
+      svgIcon = "assets/icons/svg/shader.svg";
+      fileColor = ImVec4(0.4f, 0.8f, 0.8f, 1.0f);
+    }
+
+    // Draw SVG icon inline
+    if (svgIcons_) {
+      svgIcons_->DrawIcon(svgIcon, 20);
     }
 
     // Push color for the icon and text
@@ -987,11 +990,28 @@ void HandlerProject::DrawIconFromImage(const char *iconPath, int width,
 
 HandlerProject::IconInfo
 HandlerProject::LoadCachedTexture(const std::string &path) {
-  // Sudah ada di cache? Return langsung
+  // Already cached? Return directly
   auto it = iconCacheInfo.find(path);
   if (it != iconCacheInfo.end())
     return it->second;
 
+  // SVG files: route through SvgIconManager
+  if (path.size() >= 4 && path.substr(path.size() - 4) == ".svg") {
+    if (svgIcons_) {
+      ImTextureID tex = svgIcons_->GetIcon(path, 64);
+      if (tex) {
+        IconInfo info;
+        info.textureId = tex;
+        info.width = 64;
+        info.height = 64;
+        iconCacheInfo[path] = info;
+        return info;
+      }
+    }
+    return {(ImTextureID)0, 0, 0};
+  }
+
+  // PNG/JPG: use stbi + VulkanHandler
   if (vulkanHandler) {
     int width, height, channels;
     if (!stbi_info(path.c_str(), &width, &height, &channels)) {

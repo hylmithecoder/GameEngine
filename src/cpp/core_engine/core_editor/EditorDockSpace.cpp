@@ -9,10 +9,14 @@ bool EditorDockSpace::s_LayoutResetRequested = false;
 
 void EditorDockSpace::ResetLayout() { s_LayoutResetRequested = true; }
 
-void EditorDockSpace::Begin(const char *dockspaceId) {
+void EditorDockSpace::Begin(const char *dockspaceId, float topOffset) {
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
+  ImVec2 pos = viewport->WorkPos;
+  pos.y += topOffset;
+  ImVec2 size = viewport->WorkSize;
+  size.y -= topOffset;
+  ImGui::SetNextWindowPos(pos);
+  ImGui::SetNextWindowSize(size);
   ImGui::SetNextWindowViewport(viewport->ID);
 
   ImGuiWindowFlags hostFlags =

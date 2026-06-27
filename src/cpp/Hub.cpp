@@ -52,6 +52,11 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 // ---------------------------------------------------------------------------
+// Global debug mode flag
+// ---------------------------------------------------------------------------
+static bool g_DebugMode = false;
+
+// ---------------------------------------------------------------------------
 // Data model
 // ---------------------------------------------------------------------------
 
@@ -341,8 +346,13 @@ public:
       // show nothing until the child terminates.
       setvbuf(stdout, nullptr, _IOLBF, 0);
       setvbuf(stderr, nullptr, _IOLBF, 0);
-      execlp("./GameEngineSDL", "GameEngineSDL", "--project",
-             projectPath.c_str(), (char *)nullptr);
+      if (g_DebugMode) {
+        execlp("./GameEngineSDL", "GameEngineSDL", "--project",
+               projectPath.c_str(), "--debug", (char *)nullptr);
+      } else {
+        execlp("./GameEngineSDL", "GameEngineSDL", "--project",
+               projectPath.c_str(), (char *)nullptr);
+      }
       // exec failed:
       std::fprintf(stderr, "execlp failed: %s\n", std::strerror(errno));
       _exit(127);
@@ -1004,7 +1014,12 @@ private:
   }
 };
 
-int main(int, char *[]) {
+int main(int argc, char *argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--debug") == 0) {
+      g_DebugMode = true;
+    }
+  }
   HubApplication app;
   if (!app.Initialize()) {
     std::cerr << "IlmeeeHub failed to initialize.\n";

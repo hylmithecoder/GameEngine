@@ -1,46 +1,57 @@
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/InspectMode.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <nfd.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <nfd.h>
 
 void MainWindow::RenderHierarchyWindow() {
   Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
+  DEBUG_TRACE_PANEL("Hierarchy panel");
   ImGuiTreeNodeFlags nodeFlags =
       ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
 
-  // Hardcoded scene graph for verification — mirrors the mockup the
-  // user is iterating against. Real-scene wiring (driven by
-  // projectHandler.currentScene) will replace this once the 3D pipeline
-  // settles.
-  struct SceneElement {
-    string name;
-    vector<string> properties;
-  };
-  vector<SceneElement> elements = {{"Main Camera", {"Properties"}},
-                                   {"Player", {"Sprite", "Collider"}},
-                                   {"Enemy", {"AI Controller"}}};
+  // Base Template: Ensure there is always a camera in the scene renderer!
+  if (sceneRenderer && !sceneRenderer->HasPlayerCamera()) {
+    sceneRenderer->LoadCamera("Main Camera");
+  }
 
   if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
-    projectHandler.DrawIconFromImage("assets/images/fileicons/box.png", 20, 20);
-
-    // Surface every loaded 3D mesh as a hierarchy entry so clicking
-    // either here or in the Scene viewport selects the right entity.
     if (sceneRenderer) {
       for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
         const std::string &meshName = sceneRenderer->GetMesh3DName(i);
+        bool isCamera = sceneRenderer->IsMesh3DCamera(i);
+        bool isLight = sceneRenderer->IsMesh3DLight(i);
+
+        // Pick SVG icon and label prefix
+        std::string svgPath = "assets/icons/svg/box.svg";
+        std::string prefix = "";
+        if (isCamera) {
+          svgPath = "assets/icons/svg/file.svg";
+          prefix = "[Cam] ";
+        } else if (isLight) {
+          svgPath = "assets/icons/svg/file.svg";
+          prefix = "[Light] ";
+        }
+
+        // Draw icon
+        svgIcons.DrawIcon(svgPath, 16);
+
         ImGuiTreeNodeFlags leafFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf;
         bool selected = (meshName == objectName);
         if (selected)
           leafFlags |= ImGuiTreeNodeFlags_Selected;
+
         PushID((int)i);
-        if (TreeNodeEx(meshName.c_str(), leafFlags)) {
+        std::string label = prefix + meshName;
+        if (TreeNodeEx(label.c_str(), leafFlags)) {
+          DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
           if (IsItemClicked()) {
             std::snprintf(objectName, sizeof(objectName), "%s",
                           meshName.c_str());
@@ -48,23 +59,6 @@ void MainWindow::RenderHierarchyWindow() {
           TreePop();
         }
         PopID();
-      }
-    }
-
-    for (const auto &element : elements) {
-      bool selected = std::string(objectName) == element.name;
-      ImGuiTreeNodeFlags rowFlags = nodeFlags;
-      if (selected)
-        rowFlags |= ImGuiTreeNodeFlags_Selected;
-      if (TreeNodeEx(element.name.c_str(), rowFlags)) {
-        if (IsItemClicked()) {
-          std::snprintf(objectName, sizeof(objectName), "%s",
-                        element.name.c_str());
-        }
-        for (const auto &prop : element.properties) {
-          TextColored(ImVec4(0.8f, 0.5f, 0.5f, 1.0f), "%s", prop.c_str());
-        }
-        TreePop();
       }
     }
     TreePop();
@@ -77,6 +71,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
                                       const string &assetPath,
                                       bool firstOpenProject) {
   Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
+  DEBUG_TRACE_PANEL("Explorer panel");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(
@@ -209,6 +204,7 @@ void MainWindow::RenderInspectorWindow() {
   currentScriptName[sizeof(currentScriptName) - 1] =
       '\0'; // Ensure null-termination
   Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
+  DEBUG_TRACE_PANEL("Inspector panel");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
@@ -290,10 +286,14 @@ void MainWindow::RenderInspectorWindow() {
   }
 
   if (CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+    DEBUG_TRACE_ITEM("Inspector: Transform header");
     bool changed = false;
     changed |= DragFloat3("Position", position, 0.02f);
+    DEBUG_TRACE_ITEM("Inspector: Position drag");
     changed |= DragFloat3("Rotation", rotation, 0.5f);
+    DEBUG_TRACE_ITEM("Inspector: Rotation drag");
     changed |= DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
+    DEBUG_TRACE_ITEM("Inspector: Scale drag");
     if (meshSelected && changed) {
       sceneRenderer->SetMesh3DTransform(
           (size_t)meshIdx, glm::vec3(position[0], position[1], position[2]),
@@ -358,7 +358,8 @@ void MainWindow::RenderInspectorWindow() {
         if (Button("Bind Texture...")) {
           NFD_Init();
           nfdchar_t *outPath = nullptr;
-          nfdfilteritem_t filters[1] = {{"Image", "png,jpg,jpeg,bmp,tga,gif,psd"}};
+          nfdfilteritem_t filters[1] = {
+              {"Image", "png,jpg,jpeg,bmp,tga,gif,psd"}};
           if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
               outPath) {
             sceneRenderer->BindMesh3DSubmeshTexture(
@@ -480,42 +481,83 @@ void MainWindow::RenderInspectorWindow() {
       SliderFloat("Metallic", &metallic, 0.0f, 1.0f);
       SliderFloat("Smoothness", &smoothness, 0.0f, 1.0f);
     }
+  }
 
+  // Physics component (if attached)
+  if (meshSelected && sceneRenderer->meshes3d[meshIdx].hasPhysics) {
     if (CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
-      // Defaults: gravity on, kinematic off, mass 1, drag 0 — Unity-ish
-      // sensible defaults so a freshly-added object falls under gravity
-      // unless explicitly held static.
-      static bool useGravity = true;
-      static bool isKinematic = false;
-      static float mass = 1.0f;
-      static float drag = 0.0f;
-      static float gravityY = -9.81f;
+      Checkbox("Use Gravity", &sceneRenderer->meshes3d[meshIdx].useGravity);
+      Checkbox("Is Kinematic", &sceneRenderer->meshes3d[meshIdx].isKinematic);
+      InputFloat("Mass", &sceneRenderer->meshes3d[meshIdx].mass, 0.1f);
+      InputFloat("Drag", &sceneRenderer->meshes3d[meshIdx].drag, 0.01f);
+      InputFloat("Gravity Y", &sceneRenderer->meshes3d[meshIdx].gravityY, 0.1f);
+    }
+  }
 
-      Checkbox("Use Gravity", &useGravity);
+  // Audio Source component (if attached)
+  if (meshSelected && sceneRenderer->meshes3d[meshIdx].hasAudio) {
+    if (CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+      TextWrapped("Audio File: %s",
+                  sceneRenderer->meshes3d[meshIdx].audioPath.empty()
+                      ? "(none)"
+                      : sceneRenderer->meshes3d[meshIdx].audioPath.c_str());
+      if (Button("Browse Audio...")) {
+        NFD_Init();
+        nfdchar_t *outPath = nullptr;
+        nfdfilteritem_t filters[1] = {{"Audio", "mp3,wav,ogg,flac,aac"}};
+        if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
+            outPath) {
+          sceneRenderer->meshes3d[meshIdx].audioPath = outPath;
+          NFD_FreePath(outPath);
+        }
+        NFD_Quit();
+      }
       SameLine();
-      TextDisabled("(default)");
-      Checkbox("Is Kinematic", &isKinematic);
-      InputFloat("Mass", &mass, 0.1f);
-      InputFloat("Drag", &drag, 0.01f);
-      InputFloat("Gravity Y", &gravityY, 0.1f);
+      if (Button("Play/Pause")) {
+        sceneRenderer->meshes3d[meshIdx].isPlaying =
+            !sceneRenderer->meshes3d[meshIdx].isPlaying;
+      }
+      SameLine();
+      if (Button("Clear")) {
+        sceneRenderer->meshes3d[meshIdx].audioPath = "";
+        sceneRenderer->meshes3d[meshIdx].isPlaying = false;
+      }
+      if (sceneRenderer->meshes3d[meshIdx].isPlaying) {
+        TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Playing...");
+      } else {
+        TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Stopped");
+      }
     }
   }
 
   if (Button("Add Component", ImVec2(-1, 0))) {
     OpenPopup("AddComponentPopup");
   }
+  DEBUG_TRACE_ITEM("Inspector: Add Component button");
 
   if (BeginPopup("AddComponentPopup")) {
     Text("Components");
-    if (Selectable("Mesh Renderer")) {
+    if (Selectable("Physics Body")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].hasPhysics = true;
+      }
     }
     if (Selectable("Audio Source")) {
-    }
-    if (Selectable("Collider")) {
-    }
-    if (Selectable("Particle System")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].hasAudio = true;
+      }
     }
     if (Selectable("Light")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].isLight = true;
+        sceneRenderer->meshes3d[meshIdx].isCamera = false;
+      }
+    }
+    if (Selectable("Camera")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].isCamera = true;
+        sceneRenderer->meshes3d[meshIdx].isLight = false;
+      }
     }
 
     // Script creation section
@@ -595,6 +637,7 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
   PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
   // Begin floating toolbar
   if (Begin("Scene Toolbar", nullptr, toolbar_flags)) {
+    DEBUG_TRACE_PANEL("Scene Toolbar (Reset/Zoom/Grid/Snap)");
     // Reset View Button
     if (Button("Reset View")) {
       ::Log("Resetting camera view", Debug::LogLevel::INFO);
@@ -700,6 +743,7 @@ void MainWindow::RenderSceneWindow() {
   // PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
   if (Begin("Scene", &showScene, window_flags)) {
+    DEBUG_TRACE_PANEL("Scene viewport panel");
     ImVec2 windowPos = GetWindowPos();
     ImVec2 windowSize = GetWindowSize();
     ImVec2 contentSize = GetContentRegionAvail();
@@ -753,6 +797,8 @@ void MainWindow::RenderSceneWindow() {
           if (!loaded)
             loaded = sceneRenderer->LoadObjMesh("assets/3dmodels/belle.obj");
           if (loaded) {
+            sceneRenderer->SetMesh3DDebugSource(
+                sceneRenderer->GetMesh3DCount() - 1, __FILE__, __LINE__);
             s_loadedForProject = desired;
           }
         }
@@ -819,6 +865,9 @@ void MainWindow::RenderSceneWindow() {
             size_t idx = sceneRenderer->GetMesh3DCount() - 1;
             sceneRenderer->SetMesh3DTransform(idx, e.position, e.rotationEuler,
                                               e.scale);
+            // Inspect Mode: every scene-bootstrap-spawned object remembers
+            // this loop so hover-to-source lands users on the deserializer.
+            sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
             // Re-apply per-surface texture bindings saved in the scene.
             // Paths stored relative to the project resolve against it;
             // absolute paths (textures outside the project) load as-is.
@@ -826,9 +875,9 @@ void MainWindow::RenderSceneWindow() {
               if (st.texturePath.empty())
                 continue;
               fs::path tp(st.texturePath);
-              std::string full =
-                  tp.is_absolute() ? st.texturePath
-                                   : (fs::path(activeProject) / tp).string();
+              std::string full = tp.is_absolute()
+                                     ? st.texturePath
+                                     : (fs::path(activeProject) / tp).string();
               sceneRenderer->BindMesh3DSubmeshTexture(idx, st.surfaceIndex,
                                                       full);
             }
@@ -892,6 +941,44 @@ void MainWindow::RenderSceneWindow() {
     if (sceneDesc != VK_NULL_HANDLE && contentSize.x > 0 && contentSize.y > 0) {
       Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1), ImVec2(1, 0));
 
+      // Inspect Mode: raycast the cursor against the loaded meshes and
+      // register the hit object as a trace region. The hover overlay
+      // (rendered at the end of OnRender) will outline the viewport and
+      // print "<mesh-name>\n<spawn-file>:<line>" on top.
+      if (Debug::g_InspectModeActive && IsItemHovered()) {
+        const ImVec2 imgMin = GetItemRectMin();
+        const ImVec2 imgMax = GetItemRectMax();
+        const ImVec2 mp = GetMousePos();
+        const float lx = mp.x - imgMin.x;
+        const float ly = mp.y - imgMin.y;
+        int hitMesh = -1, hitSub = -1;
+        if (sceneRenderer->PickMesh3DSurface(lx, ly, hitMesh, hitSub) &&
+            hitMesh >= 0) {
+          const std::string &srcFile =
+              sceneRenderer->GetMesh3DDebugSrcFile((size_t)hitMesh);
+          const int srcLine =
+              sceneRenderer->GetMesh3DDebugSrcLine((size_t)hitMesh);
+          const std::string &mname =
+              sceneRenderer->GetMesh3DName((size_t)hitMesh);
+          char label[256];
+          std::snprintf(label, sizeof(label), "Scene object: %s",
+                        mname.empty() ? "(unnamed)" : mname.c_str());
+          if (!srcFile.empty() && srcLine > 0) {
+            DEBUG_TRACE_RECT(label, imgMin, imgMax);
+            // Patch the just-pushed region with the mesh's actual source.
+            auto &regs = Debug::Inspect::GetTraceRegions();
+            if (!regs.empty()) {
+              regs.back().file = srcFile;
+              regs.back().line = srcLine;
+            }
+          } else {
+            // No recorded spawn site — still outline so users know we picked
+            // something, and point them at the loader.
+            DEBUG_TRACE_RECT(label, imgMin, imgMax);
+          }
+        }
+      }
+
       // Drop target: drag a file from the Explorer onto the viewport. Models
       // (.obj/.pmx/.fbx) spawn at the drop point projected onto the ground;
       // images bind as the texture of the surface under the cursor.
@@ -908,12 +995,15 @@ void MainWindow::RenderSceneWindow() {
           const std::string fname =
               std::filesystem::path(assetPath).filename().string();
 
-          const bool isModel = (ext == ".obj" || ext == ".pmx" || ext == ".fbx");
-          const bool isImage = (ext == ".png" || ext == ".jpg" ||
-                                ext == ".jpeg" || ext == ".bmp" ||
-                                ext == ".tga" || ext == ".gif" || ext == ".psd");
-          const bool isVideo = (ext == ".mp4" || ext == ".mkv" ||
-                                ext == ".avi" || ext == ".mov" || ext == ".webm");
+          const bool isModel =
+              (ext == ".obj" || ext == ".pmx" || ext == ".fbx");
+          const bool isImage =
+              (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+               ext == ".bmp" || ext == ".tga" || ext == ".gif" ||
+               ext == ".psd");
+          const bool isVideo =
+              (ext == ".mp4" || ext == ".mkv" || ext == ".avi" ||
+               ext == ".mov" || ext == ".webm");
 
           if (isModel) {
             bool ok = (ext == ".pmx")   ? sceneRenderer->LoadPMXMesh(assetPath)
@@ -951,9 +1041,9 @@ void MainWindow::RenderSceneWindow() {
                   ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
             }
           } else if (isVideo) {
-            projectHandler.ShowNotification(
-                "Video texture", "Video-as-texture is coming next",
-                ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+            projectHandler.ShowNotification("Video texture",
+                                            "Video-as-texture is coming next",
+                                            ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
           } else {
             projectHandler.ShowNotification("Unsupported",
                                             "Can't drop " + ext + " here",
@@ -1139,6 +1229,9 @@ void MainWindow::RenderSceneWindow() {
               size_t idx = sceneRenderer->GetMesh3DCount() - 1;
               sceneRenderer->SetMesh3DTransform(idx, world, glm::vec3(0.0f),
                                                 glm::vec3(1.0f));
+              // Record where this object was spawned so Inspect Mode (F2)
+              // can answer "which line created this thing?" on hover.
+              sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
               std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
             }
           };
@@ -1206,6 +1299,7 @@ void MainWindow::RenderMainViewWindow() {
     return;
 
   Begin("Main View", &showMainView, ImGuiWindowFlags_NoCollapse);
+  DEBUG_TRACE_PANEL("Main View panel (tabs)");
 
   if (BeginTabBar("MainTabs")) {
     if (BeginTabItem("Viewport")) {
@@ -1376,6 +1470,7 @@ void MainWindow::RenderConsoleWindow() {
     return;
   // Set window properties
   Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
+  DEBUG_TRACE_PANEL("Console panel (output/build tabs)");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
@@ -1470,6 +1565,7 @@ void MainWindow::RenderConsoleWindow() {
 
 void MainWindow::RenderMenuBar() {
   if (BeginMainMenuBar()) {
+    DEBUG_TRACE_PANEL("Main menu bar");
     if (BeginMenu("File")) {
       if (MenuItem("New Scene", "Ctrl+N")) {
         projectHandler.SaveNewScene();
@@ -1725,8 +1821,8 @@ void MainWindow::HandleSearch() {
 
 void MainWindow::RenderPlayMenu() {
   ImVec2 viewportSize = GetMainViewport()->Size;
-  float buttonHeight = 20.0f;
-  float toolbarHeight = buttonHeight; // Tinggi window sama dengan tombol
+  float buttonHeight = 24.0f;
+  float toolbarHeight = buttonHeight + 8.0f;
 
   float menuBarHeight = GetFrameHeight();
   SetNextWindowPos(ImVec2(0, menuBarHeight));
@@ -1738,60 +1834,86 @@ void MainWindow::RenderPlayMenu() {
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
       ImGuiWindowFlags_NoNavFocus;
 
-  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+  PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
   PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
   PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-  PushStyleColor(ImGuiCol_WindowBg,
-                 ImVec4(0.1f, 0.1f, 0.1f, 0.0f)); // Semi-transparent background
+  PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
 
   if (Begin("PlayControlsToolbar", nullptr, toolbar_flags)) {
-    ImVec2 buttonSize(30, buttonHeight);
-    float spacing = 5.0f;
-    float totalWidth = (buttonSize.x * 3) + (spacing * 2);
+    int iconSize = 16;
+    float spacing = 4.0f;
+    float totalWidth = (iconSize + 8) * 3 + spacing * 2;
     float startX = (viewportSize.x - totalWidth) * 0.5f;
 
     SetCursorPosX(startX);
 
-    // Play
-    PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.6f, 0.1f, 1.0f));
-    if (Button("##Play", buttonSize)) {
-      ::Log("Starting game...", Debug::LogLevel::INFO);
+    // Play / Resume button
+    bool isPlaying = builder.IsPlaying();
+    bool isPaused = builder.IsPaused();
+
+    ImVec4 playBg = isPlaying ? ImVec4(0.15f, 0.45f, 0.15f, 1.0f)
+                              : ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
+    ImVec4 playTint = isPlaying ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
+                                : ImVec4(0.7f, 0.9f, 0.7f, 1.0f);
+
+    if (svgIcons.DrawIconButton("##Play", "assets/icons/svg/play.svg", iconSize,
+                                playBg, playTint)) {
+      if (builder.IsStopped()) {
+        builder.Play();
+      } else if (isPaused) {
+        builder.Resume();
+      }
     }
     if (IsItemHovered())
       SetTooltip("Play (Ctrl+P)");
-    PopStyleColor(3);
 
-    // Pause
+    // Pause button
     SameLine(0, spacing);
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.7f, 0.2f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.1f, 1.0f));
-    if (Button("##Pause", buttonSize)) {
-      ::Log("Pausing game...", Debug::LogLevel::INFO);
+    ImVec4 pauseBg = isPaused ? ImVec4(0.45f, 0.40f, 0.12f, 1.0f)
+                              : ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
+    ImVec4 pauseTint = isPaused ? ImVec4(1.0f, 0.9f, 0.3f, 1.0f)
+                                : ImVec4(0.9f, 0.9f, 0.6f, 1.0f);
+
+    if (svgIcons.DrawIconButton("##Pause", "assets/icons/svg/pause.svg",
+                                iconSize, pauseBg, pauseTint)) {
+      if (isPlaying) {
+        builder.Pause();
+      }
     }
     if (IsItemHovered())
       SetTooltip("Pause (Ctrl+Shift+P)");
-    PopStyleColor(3);
 
-    // Stop
+    // Stop button
     SameLine(0, spacing);
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-    if (Button("##Stop", buttonSize)) {
-      ::Log("Stopping game...", Debug::LogLevel::INFO);
+    bool isStopped = builder.IsStopped();
+    ImVec4 stopBg = ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
+    ImVec4 stopTint = isStopped ? ImVec4(0.5f, 0.5f, 0.5f, 1.0f)
+                                : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+
+    if (svgIcons.DrawIconButton("##Stop", "assets/icons/svg/stop.svg", iconSize,
+                                stopBg, stopTint)) {
+      builder.Stop();
     }
     if (IsItemHovered())
-      SetTooltip("Stop (Ctrl+S)");
-    PopStyleColor(3);
-    PopStyleVar(1);
+      SetTooltip("Stop (Ctrl+Q)");
+
+    // Keyboard shortcuts
+    if (GetIO().KeyCtrl && !GetIO().KeyShift &&
+        IsKeyPressed(ImGuiKey_P, false)) {
+      if (builder.IsStopped())
+        builder.Play();
+      else if (isPaused)
+        builder.Resume();
+    }
+    if (GetIO().KeyCtrl && GetIO().KeyShift &&
+        IsKeyPressed(ImGuiKey_P, false)) {
+      if (isPlaying)
+        builder.Pause();
+    }
   }
   End();
-  PopStyleColor(1); // Pop background color
+  PopStyleColor(1);
   PopStyleVar(4);
 }
 

@@ -28,7 +28,8 @@ namespace Ilmeee {
 // default map floats and the user can dock it manually.
 class EditorDockSpace {
 public:
-  static void Begin(const char *dockspaceId = "IlmeeeDockSpace");
+  static void Begin(const char *dockspaceId = "IlmeeeDockSpace",
+                    float topOffset = 0.0f);
   static void End();
 
   // Force-rebuild the default layout next frame (e.g. "Reset Layout"
