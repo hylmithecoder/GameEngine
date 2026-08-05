@@ -4,6 +4,7 @@ project(GameEngineSDL VERSION 1.0.0)
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(__cpp_lib_constexpr_exceptions=0)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 # Set output directories specifically for library targets
@@ -122,7 +123,7 @@ if(WIN32)
     target_link_options(TestBackground PRIVATE -mconsole)
 endif()
 
-add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES})
+# add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES})
 # target_link_options(TestGLSL PRIVATE -mconsole)
 
 add_library(IlmeeeEngine SHARED res/IlmeeeEngine.rc ${SOURCES_CORE})
@@ -269,16 +270,16 @@ target_include_directories(TestBackground PRIVATE
     
 )
 
-target_include_directories(TestGLSL PRIVATE
-    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/include/ui
-    ${CMAKE_SOURCE_DIR}/include/core_engine
-    ${NFD_INCLUDE_DIR}
-    ${JSON_DIR}
-    ${GLAD_4_DIR}/include
-)
+# target_include_directories(TestGLSL PRIVATE
+#     ${CMAKE_SOURCE_DIR}/vendor/nanosvg
+#     ${IMGUI_DIR}
+#     ${IMGUI_DIR}/backends
+#     ${CMAKE_SOURCE_DIR}/include/ui
+#     ${CMAKE_SOURCE_DIR}/include/core_engine
+#     ${NFD_INCLUDE_DIR}
+#     ${JSON_DIR}
+#     ${GLAD_4_DIR}/include
+# )
 
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     # ${DLFCN}/src
@@ -511,13 +512,13 @@ target_link_libraries(TestBackground PRIVATE
     pthread
 )
 
-target_link_libraries(TestGLSL PRIVATE
-    PkgConfig::SDL3
-    Vulkan::Vulkan
-    OpenGL::GL
-    ${FFMPEG_LIBRARIES}
-    glfw
-)
+# target_link_libraries(TestGLSL PRIVATE
+#     PkgConfig::SDL3
+#     Vulkan::Vulkan
+#     OpenGL::GL
+#     ${FFMPEG_LIBRARIES}
+#     glfw
+# )
 
 target_link_libraries(ViewPort3D PRIVATE
     PkgConfig::SDL3

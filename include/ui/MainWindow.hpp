@@ -1,4 +1,5 @@
 #include "../core_engine/Builder.hpp"
+#include "../core_engine/EditorSessionHistory.hpp"
 #include "../core_engine/NetworkManager.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
@@ -58,6 +59,9 @@ private:
   // Surface (submesh) clicked in the viewport, targeted by the Inspector's
   // per-surface texture binding. -1 = none yet.
   int selectedSurface = -1;
+  EditorSessionHistory editorSessionHistory;
+  bool viewportDragHistoryActive = false;
+  bool viewportCameraHistoryActive = false;
   static constexpr float MIN_PANEL_WIDTH = 100.0f;
   float explorerSplitPosition = 200.0f;
 
@@ -163,6 +167,12 @@ public:
   void RenderSceneWindow();
   void RenderHierarchyWindow();
   void Save3DScene();
+  EditorSessionHistory::Snapshot CaptureEditorSnapshot() const;
+  void StartEditorSession();
+  void RecordEditorHistory();
+  void ApplyEditorSnapshot(const EditorSessionHistory::Snapshot &snapshot);
+  void UndoEditor();
+  void RedoEditor();
   void RenderSceneToolbarView(ImVec2 viewportPos, ImVec2 viewportSize);
   void RenderPlayMenu();
   void PushMessage(const std::string &message);

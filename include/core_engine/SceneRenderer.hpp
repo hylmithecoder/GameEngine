@@ -477,6 +477,12 @@ public:
   // dedicated Vulkan grid pipeline.
   float GetGridSize() const { return gridSize; }
   bool IsGridVisible() const { return gridVisible; }
+  glm::vec4 GetGridColor() const {
+    return glm::vec4(gridColor.x, gridColor.y, gridColor.z, gridColor.w);
+  }
+  glm::vec4 GetBackgroundColor() const {
+    return glm::vec4(bgColor.x, bgColor.y, bgColor.z, bgColor.w);
+  }
 
   // Unity-style directional sun light. Direction points *toward* the
   // light source (i.e. the shader computes max(dot(N, sunDir), 0)).
@@ -499,6 +505,68 @@ public:
     float moveSpeed = 2.5f;
     float mouseSensitivity = 0.12f;
   } camera3d;
+
+  // Logical editor state used by the per-engine-session undo history. GPU
+  // handles and decoded vertex data deliberately stay out of this snapshot;
+  // RestoreEditorSnapshot recreates those resources from the asset paths.
+  struct EditorEntitySnapshot {
+    std::string name;
+    std::string path;
+    glm::vec3 position{0.0f};
+    glm::vec3 rotation{0.0f};
+    glm::vec3 scale{1.0f};
+
+    bool isLight = false;
+    float lightGamma = 1.05f;
+    glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+    float lightIntensity = 1.0f;
+    int lightType = 0;
+    float lightRange = 10.0f;
+    float lightSpotAngle = 30.0f;
+
+    bool isCamera = false;
+    int camProjection = 0;
+    float camFov = 60.0f;
+    float camOrthoSize = 5.0f;
+    float camNear = 0.1f;
+    float camFar = 100.0f;
+
+    bool hasPhysics = false;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float mass = 1.0f;
+    float drag = 0.0f;
+    float gravityY = -9.81f;
+    glm::vec3 velocity{0.0f};
+
+    bool hasAudio = false;
+    std::string audioPath;
+    bool isPlaying = false;
+
+    std::string debugSrcFile;
+    int debugSrcLine = 0;
+    std::vector<std::string> submeshTextures;
+  };
+
+  struct EditorSnapshot {
+    std::vector<EditorEntitySnapshot> entities;
+    glm::vec2 cameraPosition{0.0f};
+    float cameraZoom = 1.0f;
+    float zoom = 1.0f;
+    float gridSize = 50.0f;
+    glm::vec4 gridColor{0.7f, 0.7f, 0.7f, 1.0f};
+    glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
+    int editMode = 0;
+    bool gridVisible = true;
+    bool snapToGrid = false;
+    bool grid3dVisible = true;
+    bool sunVisible = true;
+    Camera3D camera3d;
+    SunLight sunLight;
+  };
+
+  EditorSnapshot CaptureEditorSnapshot() const;
+  bool RestoreEditorSnapshot(const EditorSnapshot &snapshot);
 
   // One-frame snapshot of input collected by the Scene window. Only the
   // panel that owns mouse/keyboard focus should populate this; the

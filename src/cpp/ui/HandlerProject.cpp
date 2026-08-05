@@ -4,6 +4,77 @@
 using namespace Debug;
 namespace fs = std::filesystem;
 
+namespace {
+
+fs::path AbsoluteNormalizedPath(const fs::path &path) {
+  std::error_code ec;
+  const fs::path absolutePath = fs::absolute(path, ec);
+  return ec ? path.lexically_normal() : absolutePath.lexically_normal();
+}
+
+bool IsPathInside(const fs::path &parent, const fs::path &candidate) {
+  std::error_code ec;
+  const fs::path relativePath = fs::relative(candidate, parent, ec);
+  if (ec || relativePath.empty() || relativePath == ".") {
+    return false;
+  }
+
+  const auto firstComponent = relativePath.begin();
+  return firstComponent != relativePath.end() &&
+         *firstComponent != fs::path("..");
+}
+
+fs::path MakeUniqueCopyPath(const fs::path &sourcePath,
+                            const fs::path &targetDirectory) {
+  const fs::path originalTarget = targetDirectory / sourcePath.filename();
+  if (!fs::exists(originalTarget)) {
+    return originalTarget;
+  }
+
+  const bool isRegularFile = fs::is_regular_file(sourcePath);
+  const std::string originalName = sourcePath.filename().string();
+  const std::string extension =
+      isRegularFile ? sourcePath.extension().string() : std::string();
+  const std::string baseName =
+      (isRegularFile && !sourcePath.stem().string().empty())
+          ? sourcePath.stem().string()
+          : originalName;
+
+  for (std::size_t copyIndex = 1;; ++copyIndex) {
+    std::string copyName = baseName + "_copy";
+    if (copyIndex > 1) {
+      copyName += "_" + std::to_string(copyIndex);
+    }
+    copyName += extension;
+
+    const fs::path candidate = targetDirectory / copyName;
+    if (!fs::exists(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+bool CopyPath(const fs::path &sourcePath, const fs::path &targetPath,
+              std::error_code &ec) {
+  ec.clear();
+  const fs::file_status sourceStatus = fs::status(sourcePath, ec);
+  if (ec) {
+    return false;
+  }
+
+  if (fs::is_directory(sourceStatus)) {
+    fs::copy(sourcePath, targetPath, fs::copy_options::recursive, ec);
+  } else if (fs::is_regular_file(sourceStatus)) {
+    fs::copy_file(sourcePath, targetPath, fs::copy_options::none, ec);
+  } else {
+    ec = std::make_error_code(std::errc::operation_not_supported);
+  }
+
+  return !ec;
+}
+
+} // namespace
+
 void HandlerProject::OpenFolder() {
   NFD::Guard nfdGuard;
 
@@ -149,55 +220,57 @@ void HandlerProject::OpenFile() {
                                    {"Audio", "mp3,wav,ogg"},
                                    {"Video", "mp4,mkv,avi,mov"}};
 
-  // Show the dialog with filters for multiple selection
-  nfdresult_t result = NFD::OpenDialogMultiple(outPaths, filterItem, 4);
+  // Show the dialog with filters for multiple selection.  Start in the folder
+  // currently open in the engine so imported files follow the user's target.
+  const char *defaultPath =
+      currentDirectory.empty() ? nullptr : currentDirectory.c_str();
+  nfdresult_t result =
+      NFD::OpenDialogMultiple(outPaths, filterItem, 4, defaultPath);
 
   if (result == NFD_OKAY) {
     nfdpathsetsize_t numPaths;
     NFD::PathSet::Count(outPaths, numPaths);
+    std::size_t importedCount = 0;
 
     for (nfdpathsetsize_t i = 0; i < numPaths; ++i) {
       NFD::UniquePathSetPath path;
-      NFD::PathSet::GetPath(outPaths, i, path);
+      if (NFD::PathSet::GetPath(outPaths, i, path) != NFD_OKAY ||
+          !path) {
+        continue;
+      }
 
       std::string currentFile = path.get();
       std::cout << "Selected file " << i + 1 << ": " << currentFile
                 << std::endl;
 
-      // Store the current file path
+      // Every selected file is copied into the folder currently open in the
+      // Explorer.  The previous implementation routed files by extension,
+      // which made Import Files ignore the folder the user was looking at.
       fileTargetImport = currentFile;
 
-      // Determine appropriate subfolder based on file extension
-      std::string ext = fs::path(currentFile).extension().string();
-      std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-      std::string targetFolder;
-      if (ext == ".cpp" || ext == ".h" || ext == ".hpp") {
-        targetFolder = projectPath + "/assets/scripts";
-      } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                 ext == ".gif" || ext == ".bmp") {
-        targetFolder = projectPath + "/assets/textures";
-      } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg") {
-        targetFolder = projectPath + "/assets/audio";
-      } else if (ext == ".mp4" || ext == ".mkv" || ext == ".avi" ||
-                 ext == ".mov") {
-        targetFolder = projectPath + "/assets/video";
-      } else {
-        targetFolder = projectPath + "/assets"; // Default to main assets folder
+      std::string targetFolder = currentDirectory;
+      if (targetFolder.empty() || !fs::is_directory(targetFolder)) {
+        targetFolder = (fs::path(projectPath) / "assets").string();
       }
 
       // Create target folder if it doesn't exist
       fs::create_directories(targetFolder);
 
       // Import the current file
-      HandleImport(targetFolder);
+      if (HandleImport(targetFolder)) {
+        ++importedCount;
+      }
     }
 
     // Show summary notification
-    if (numPaths > 0) {
+    if (importedCount > 0) {
       ShowNotification("Import Complete",
-                       "Imported " + std::to_string(numPaths) + " file(s)",
+                       "Imported " + std::to_string(importedCount) +
+                           " file(s)",
                        ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+    } else if (numPaths > 0) {
+      ShowNotification("Import Failed", "No selected files could be imported.",
+                       ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     }
 
   } else if (result == NFD_CANCEL) {
@@ -205,6 +278,48 @@ void HandlerProject::OpenFile() {
   } else {
     std::cout << "Error: " << NFD::GetError() << std::endl;
     ShowNotification("Error", "Failed to open file dialog",
+                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+  }
+}
+
+void HandlerProject::ImportFolder() {
+  NFD::Guard nfdGuard;
+  NFD::UniquePath outPath;
+
+  const char *defaultPath = currentDirectory.empty()
+                                ? nullptr
+                                : currentDirectory.c_str();
+  const nfdresult_t result = NFD::PickFolder(outPath, defaultPath);
+
+  if (result == NFD_OKAY && outPath.get() != nullptr) {
+    const std::string selectedFolder = outPath.get();
+    std::error_code ec;
+    if (selectedFolder.empty() ||
+        !fs::is_directory(fs::path(selectedFolder), ec)) {
+      ShowNotification("Import Folder Failed",
+                       "The selected path is not a folder.",
+                       ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+      return;
+    }
+
+    std::string targetFolder = currentDirectory;
+    ec.clear();
+    if (targetFolder.empty() ||
+        !fs::is_directory(fs::path(targetFolder), ec)) {
+      targetFolder = (fs::path(projectPath) / "assets").string();
+    }
+
+    // HandleImport uses the same recursive copy and collision-safe naming as
+    // the Explorer clipboard, so an imported folder is copied as one folder
+    // with all of its contents preserved.
+    fileTargetImport = selectedFolder;
+    HandleImport(targetFolder);
+  } else if (result == NFD_CANCEL) {
+    // Cancellation is expected and needs no notification.
+  } else {
+    ShowNotification("Import Folder Failed",
+                     "Could not choose a folder: " +
+                         std::string(NFD::GetError()),
                      ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
   }
 }
@@ -324,7 +439,8 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
           HandleCopy(node);
         }
 
-        if (ImGui::MenuItem(" Paste")) {
+        if (ImGui::MenuItem(" Paste", nullptr, false,
+                            !fileExplorerCopyTargets.empty())) {
           HandlePaste(node.fullPath);
         }
 
@@ -392,10 +508,10 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
     ImVec4 fileColor = defaultFileColor;
 
     if (isCpp) {
-      svgIcon = "assets/icons/svg/code.svg";
+      svgIcon = "assets/icons/svg/cpp.svg";
       fileColor = cppColor;
     } else if (isHpp) {
-      svgIcon = "assets/icons/svg/code.svg";
+      svgIcon = "assets/icons/svg/cpp.svg";
       fileColor = hppColor;
     } else if (isVideo) {
       svgIcon = "assets/icons/svg/video.svg";
@@ -465,8 +581,10 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
           HandleCopy(node);
         }
 
-        if (ImGui::MenuItem(" Paste")) {
-          HandlePaste(fileExplorerCopyTarget);
+        if (ImGui::MenuItem(" Paste", nullptr, false,
+                            !fileExplorerCopyTargets.empty())) {
+          // A file is not a paste destination; use its containing folder.
+          HandlePaste(fs::path(node.fullPath).parent_path().string());
         }
 
         if (ImGui::MenuItem(" Delete")) {
@@ -561,11 +679,8 @@ void HandlerProject::HandleRenameFileOrFolder(const AssetFile &node) {
 }
 
 void HandlerProject::DrawFileExplorer(AssetFile &node) {
-  static string localPath = "";
-  // `filteredFiles` is rebuilt every frame from disk, so any timing
-  // state on AssetFile itself is wiped each frame — that's why the old
-  // manual double-click detection never fired for folders. Use ImGui's
-  // own double-click timing instead, which lives in IO state.
+  // The grid entries are rebuilt from disk every frame, so selection must live
+  // in the handler rather than in the temporary AssetFile value.
   ImGui::PushID(node.fullPath.c_str());
 
   float itemWidth = thumbnailSize.x + itemSpacing * 2;
@@ -589,10 +704,17 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
   }
 
   if (itemHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    if (!fileExplorerSelectedPaths.contains(node.fullPath)) {
+      if (!ImGui::GetIO().KeyCtrl) {
+        fileExplorerSelectedPaths.clear();
+      }
+      fileExplorerSelectedPaths.insert(node.fullPath);
+    }
+
     if (node.isDirectory) {
       currentDirectory = node.fullPath;
       selectedAsset = nullptr;
-      localPath = "";
+      fileExplorerSelectedPaths.clear();
       ::Log("Opened folder: " + currentDirectory, Debug::LogLevel::SUCCESS);
       ShowNotification("Opening folder: " + node.name, "Explorer",
                        ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
@@ -605,13 +727,31 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
         onFileClicked(node);
     }
   } else if (itemHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    // Single click selects without leaving the directory.
-    selectedAsset = nullptr;
-    localPath = node.fullPath;
+    // Ctrl-click keeps the existing selection and toggles this item. A normal
+    // click starts a new selection, matching file-manager behavior.
+    if (ImGui::GetIO().KeyCtrl) {
+      if (fileExplorerSelectedPaths.contains(node.fullPath)) {
+        fileExplorerSelectedPaths.erase(node.fullPath);
+      } else {
+        fileExplorerSelectedPaths.insert(node.fullPath);
+      }
+    } else {
+      fileExplorerSelectedPaths.clear();
+      fileExplorerSelectedPaths.insert(node.fullPath);
+    }
+    selectedAsset = node.isDirectory ? nullptr : &node;
   }
 
-  // Highlight jika terpilih
-  if (node.fullPath == localPath) {
+  // Right-clicking an unselected item makes it the only selected item. If it
+  // is already selected, preserve the other selected items for multi-copy.
+  if (itemHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+      !fileExplorerSelectedPaths.contains(node.fullPath)) {
+    fileExplorerSelectedPaths.clear();
+    fileExplorerSelectedPaths.insert(node.fullPath);
+  }
+
+  // Highlight selected items.
+  if (fileExplorerSelectedPaths.contains(node.fullPath)) {
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(
         cursorPos, ImVec2(cursorPos.x + itemWidth, cursorPos.y + itemHeight),
@@ -670,14 +810,24 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
         // }
       }
 
+      ImGui::Separator();
       if (!node.isDirectory) {
-        ImGui::Separator();
         if (ImGui::MenuItem("Open")) {
           HandlerOpenFileWithExtensionName(const_cast<AssetFile &>(node));
         }
-        if (ImGui::MenuItem("Copy")) {
-          HandleCopy(node);
-        }
+      }
+
+      // Folders are first-class clipboard items too.  A paste on a file uses
+      // its containing directory; a paste on a folder uses that folder.
+      if (ImGui::MenuItem("Copy")) {
+        HandleCopy(node);
+      }
+      if (ImGui::MenuItem("Paste", nullptr, false,
+                          !fileExplorerCopyTargets.empty())) {
+        const std::string targetFolder =
+            node.isDirectory ? node.fullPath
+                             : fs::path(node.fullPath).parent_path().string();
+        HandlePaste(targetFolder);
       }
 
       ImGui::EndPopup();
@@ -698,8 +848,10 @@ void HandlerProject::DrawFolderGridView() {
   // Gunakan currentDirectory yang sudah di-update dari double-click
   std::vector<AssetFile> localFiles = GetFilesInDirectory(currentDirectory);
 
-  // Define rootDirectory as the initial projectPath or another appropriate root
-  std::string rootDirectory = projectPath + "\\assets";
+  // Use filesystem paths for comparisons so the Explorer behaves the same on
+  // Windows and POSIX systems.
+  const std::string rootDirectory =
+      (fs::path(projectPath) / "assets").lexically_normal().string();
 
   ImGui::SetNextItemWidth(100);
   // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
@@ -747,7 +899,9 @@ void HandlerProject::DrawFolderGridView() {
                                        ImGuiPopupFlags_MouseButtonRight |
                                            ImGuiPopupFlags_NoOpenOverItems)) {
 
-      bool isInRootDirectory = (currentDirectory == projectPath + "\\assets");
+      const bool isInRootDirectory =
+          fs::path(currentDirectory).lexically_normal() ==
+          fs::path(rootDirectory).lexically_normal();
 
       if (ImGui::BeginMenu("Create New")) {
         if (ImGui::MenuItem("Folder")) {
@@ -771,12 +925,16 @@ void HandlerProject::DrawFolderGridView() {
       }
 
       if (ImGui::MenuItem("Paste", nullptr, false,
-                          !fileExplorerCopyTarget.empty())) {
+                          !fileExplorerCopyTargets.empty())) {
         HandlePaste(currentDirectory);
       }
 
       if (ImGui::MenuItem("Import Files...")) {
         OpenFile();
+      }
+
+      if (ImGui::MenuItem("Import Folder...")) {
+        ImportFolder();
       }
 
       if (!isInRootDirectory) {
@@ -1523,72 +1681,168 @@ void HandlerProject::HandleRenameFolder(const AssetFile &node) {
 }
 
 void HandlerProject::HandleCopy(const AssetFile &node) {
-  fileExplorerCopyTarget = node.fullPath;
-  ShowNotification("Copy", "Copied: " + node.name,
-                   ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+  std::vector<std::string> selectedPaths;
+
+  // A context menu opened on one of several selected items copies the whole
+  // selection.  A tree-menu copy (or a normal single selection) copies only
+  // the item that opened the menu.
+  if (fileExplorerSelectedPaths.contains(node.fullPath)) {
+    selectedPaths.assign(fileExplorerSelectedPaths.begin(),
+                         fileExplorerSelectedPaths.end());
+  } else {
+    selectedPaths.push_back(node.fullPath);
+  }
+
+  std::sort(selectedPaths.begin(), selectedPaths.end());
+  fileExplorerCopyTargets = std::move(selectedPaths);
+
+  if (fileExplorerCopyTargets.size() == 1) {
+    ShowNotification("Copy", "Copied: " + node.name,
+                     ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+  } else {
+    ShowNotification(
+        "Copy",
+        "Copied " + std::to_string(fileExplorerCopyTargets.size()) + " items",
+        ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+  }
 }
 
 void HandlerProject::HandlePaste(const std::string &targetFolder) {
-  if (fileExplorerCopyTarget.empty()) {
+  if (fileExplorerCopyTargets.empty()) {
     ShowNotification("Paste Failed", "No item in clipboard!",
                      ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     return;
   }
 
   try {
-    fs::path sourcePath = fileExplorerCopyTarget;
-    fs::path targetPath = fs::path(targetFolder) / sourcePath.filename();
-
-    // Check if target already exists
-    if (fs::exists(targetPath)) {
-      string newName = sourcePath.stem().string() + "_copy" +
-                       sourcePath.extension().string();
-      targetPath = fs::path(targetFolder) / newName;
+    std::error_code ec;
+    const fs::path destinationDirectory =
+        AbsoluteNormalizedPath(fs::path(targetFolder));
+    if (!fs::exists(destinationDirectory, ec) ||
+        !fs::is_directory(destinationDirectory, ec)) {
+      ShowNotification("Paste Failed",
+                       "The current Explorer location is not a folder.",
+                       ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+      return;
     }
 
-    if (fs::is_directory(sourcePath)) {
-      // Copy directory recursively
-      fs::copy(sourcePath, targetPath, fs::copy_options::recursive);
+    // Sort by path depth so a selected folder covers any selected child file.
+    // This avoids copying the same child twice when the user Ctrl-clicks both.
+    std::vector<fs::path> sourcePaths;
+    for (const std::string &source : fileExplorerCopyTargets) {
+      const fs::path sourcePath = AbsoluteNormalizedPath(fs::path(source));
+      ec.clear();
+      if (!fs::exists(sourcePath, ec)) {
+        continue;
+      }
+      sourcePaths.push_back(sourcePath);
+    }
+    std::sort(sourcePaths.begin(), sourcePaths.end(),
+              [](const fs::path &left, const fs::path &right) {
+                return left.string().size() < right.string().size();
+              });
+
+    std::vector<fs::path> pathsToCopy;
+    for (const fs::path &sourcePath : sourcePaths) {
+      if (std::find(pathsToCopy.begin(), pathsToCopy.end(), sourcePath) !=
+          pathsToCopy.end()) {
+        continue;
+      }
+
+      const bool sourceIsDirectory = fs::is_directory(sourcePath, ec);
+      ec.clear();
+      if (sourcePath == destinationDirectory ||
+          (sourceIsDirectory &&
+           IsPathInside(sourcePath, destinationDirectory))) {
+        continue;
+      }
+
+      bool coveredByFolder = false;
+      for (const fs::path &parentPath : pathsToCopy) {
+        if (fs::is_directory(parentPath, ec) &&
+            IsPathInside(parentPath, sourcePath)) {
+          coveredByFolder = true;
+          break;
+        }
+        ec.clear();
+      }
+      if (!coveredByFolder) {
+        pathsToCopy.push_back(sourcePath);
+      }
+    }
+
+    std::size_t copiedCount = 0;
+    std::vector<std::string> failures;
+    for (const fs::path &sourcePath : pathsToCopy) {
+      const fs::path targetPath =
+          MakeUniqueCopyPath(sourcePath, destinationDirectory);
+      ec.clear();
+      if (CopyPath(sourcePath, targetPath, ec)) {
+        ++copiedCount;
+      } else {
+        failures.push_back(sourcePath.filename().string() + ": " +
+                           ec.message());
+      }
+    }
+
+    if (copiedCount > 0) {
+      fileExplorerCopyTargets.clear();
+      rootAsset = BuildAssetTree(projectPath);
+      isOpenedProject = true;
+    }
+
+    if (copiedCount == 0) {
+      ShowNotification("Paste Failed",
+                       failures.empty() ? "No valid items could be pasted here."
+                                        : failures.front(),
+                       ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    } else if (failures.empty()) {
+      ShowNotification("Paste Complete",
+                       "Pasted " + std::to_string(copiedCount) + " item(s)",
+                       ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
     } else {
-      // Copy file
-      fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
+      ShowNotification("Paste Partially Complete",
+                       "Pasted " + std::to_string(copiedCount) + " item(s); " +
+                           std::to_string(failures.size()) + " failed",
+                       ImVec4(1.0f, 0.7f, 0.2f, 1.0f));
     }
-
-    ShowNotification("Paste Complete",
-                     "Pasted: " + targetPath.filename().string(),
-                     ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-
-    // Clear copy target after successful paste
-    fileExplorerCopyTarget.clear();
-
-    // Refresh project
-    isOpenedProject = true;
-
   } catch (const fs::filesystem_error &e) {
     ShowNotification("Paste Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
   }
 }
 
-void HandlerProject::HandleImport(const std::string &targetFolder) {
+bool HandlerProject::HandleImport(const std::string &targetFolder) {
   if (fileTargetImport.empty()) {
     ShowNotification("Import Failed", "No file selected!",
                      ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-    return;
+    return false;
   }
 
   try {
-    fs::path sourcePath = fileTargetImport;
-    fs::path targetPath = fs::path(targetFolder) / sourcePath.filename();
-
-    // Check if target already exists
-    if (fs::exists(targetPath)) {
-      string newName = sourcePath.stem().string() + "_copy" +
-                       sourcePath.extension().string();
-      targetPath = fs::path(targetFolder) / newName;
+    const fs::path sourcePath = AbsoluteNormalizedPath(fileTargetImport);
+    const fs::path destinationDirectory =
+        AbsoluteNormalizedPath(fs::path(targetFolder));
+    if (!fs::is_directory(destinationDirectory)) {
+      throw fs::filesystem_error(
+          "Import target is not a directory", destinationDirectory,
+          std::make_error_code(std::errc::not_a_directory));
     }
 
-    // Copy file
-    fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
+    if (sourcePath == destinationDirectory ||
+        (fs::is_directory(sourcePath) &&
+         IsPathInside(sourcePath, destinationDirectory))) {
+      throw fs::filesystem_error(
+          "Cannot copy a folder into itself", sourcePath,
+          std::make_error_code(std::errc::invalid_argument));
+    }
+
+    const fs::path targetPath =
+        MakeUniqueCopyPath(sourcePath, destinationDirectory);
+    std::error_code ec;
+    if (!CopyPath(sourcePath, targetPath, ec)) {
+      throw fs::filesystem_error("Unable to copy imported item", sourcePath,
+                                 targetPath, ec);
+    }
 
     ShowNotification("Import Successful",
                      "Imported: " + sourcePath.filename().string() +
@@ -1598,11 +1852,13 @@ void HandlerProject::HandleImport(const std::string &targetFolder) {
     // Clear import target
     fileTargetImport.clear();
 
-    // Refresh project
+    rootAsset = BuildAssetTree(projectPath);
     isOpenedProject = true;
+    return true;
 
   } catch (const fs::filesystem_error &e) {
     ShowNotification("Import Failed", e.what(), ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    return false;
   }
 }
 

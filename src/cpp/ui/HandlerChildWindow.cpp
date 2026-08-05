@@ -19,7 +19,8 @@ void MainWindow::RenderHierarchyWindow() {
 
   // Base Template: Ensure there is always a camera in the scene renderer!
   if (sceneRenderer && !sceneRenderer->HasPlayerCamera()) {
-    sceneRenderer->LoadCamera("Main Camera");
+    if (sceneRenderer->LoadCamera("Main Camera"))
+      RecordEditorHistory();
   }
 
   if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -33,10 +34,10 @@ void MainWindow::RenderHierarchyWindow() {
         std::string svgPath = "assets/icons/svg/box.svg";
         std::string prefix = "";
         if (isCamera) {
-          svgPath = "assets/icons/svg/file.svg";
+          svgPath = "assets/icons/svg/camera.svg";
           prefix = "[Cam] ";
         } else if (isLight) {
-          svgPath = "assets/icons/svg/file.svg";
+          svgPath = "assets/icons/svg/flash.svg";
           prefix = "[Light] ";
         }
 
@@ -118,8 +119,11 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
     SameLine();
 
     // Back button - disabled if in root directory
-    string rootPath = projectHandler.projectPath + "\\assets";
-    bool isInRootDirectory = (projectHandler.currentDirectory == rootPath);
+    const std::filesystem::path rootPath =
+        std::filesystem::path(projectHandler.projectPath) / "assets";
+    const bool isInRootDirectory =
+        std::filesystem::path(projectHandler.currentDirectory)
+            .lexically_normal() == rootPath.lexically_normal();
 
     // Disable button if in root directory
     if (isInRootDirectory) {
@@ -140,6 +144,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
               projectHandler.currentDirectory.substr(0, lastSlash);
           projectHandler.selectedAsset =
               nullptr; // Reset selection when navigating
+          projectHandler.fileExplorerSelectedPaths.clear();
         }
       }
 
@@ -288,11 +293,15 @@ void MainWindow::RenderInspectorWindow() {
   if (CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
     DEBUG_TRACE_ITEM("Inspector: Transform header");
     bool changed = false;
+    bool editFinished = false;
     changed |= DragFloat3("Position", position, 0.02f);
+    editFinished |= IsItemDeactivatedAfterEdit();
     DEBUG_TRACE_ITEM("Inspector: Position drag");
     changed |= DragFloat3("Rotation", rotation, 0.5f);
+    editFinished |= IsItemDeactivatedAfterEdit();
     DEBUG_TRACE_ITEM("Inspector: Rotation drag");
     changed |= DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
+    editFinished |= IsItemDeactivatedAfterEdit();
     DEBUG_TRACE_ITEM("Inspector: Scale drag");
     if (meshSelected && changed) {
       sceneRenderer->SetMesh3DTransform(
@@ -300,6 +309,8 @@ void MainWindow::RenderInspectorWindow() {
           glm::vec3(rotation[0], rotation[1], rotation[2]),
           glm::vec3(scale[0], scale[1], scale[2]));
     }
+    if (meshSelected && editFinished)
+      RecordEditorHistory();
   }
 
   const bool isLight =
@@ -362,8 +373,10 @@ void MainWindow::RenderInspectorWindow() {
               {"Image", "png,jpg,jpeg,bmp,tga,gif,psd"}};
           if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
               outPath) {
-            sceneRenderer->BindMesh3DSubmeshTexture(
+            const bool bound = sceneRenderer->BindMesh3DSubmeshTexture(
                 (size_t)meshIdx, (uint32_t)selectedSurface, outPath);
+            if (bound)
+              RecordEditorHistory();
             NFD_FreePath(outPath);
           }
           NFD_Quit();
@@ -372,17 +385,21 @@ void MainWindow::RenderInspectorWindow() {
         if (Button("Clear Texture")) {
           sceneRenderer->ClearMesh3DSubmeshTexture((size_t)meshIdx,
                                                    (uint32_t)selectedSurface);
+          RecordEditorHistory();
         }
         Separator();
       }
 
       static bool s_gridVisible = true;
+      s_gridVisible = sceneRenderer->IsGrid3DVisible();
       if (Checkbox("Show 3D Grid", &s_gridVisible)) {
         sceneRenderer->SetGrid3DVisible(s_gridVisible);
+        RecordEditorHistory();
       }
       if (Button("Reset Transform")) {
         sceneRenderer->SetMesh3DTransform((size_t)meshIdx, glm::vec3(0.0f),
                                           glm::vec3(0.0f), glm::vec3(1.0f));
+        RecordEditorHistory();
       }
     }
   }
@@ -396,37 +413,46 @@ void MainWindow::RenderInspectorWindow() {
       float intensity = sceneRenderer->GetMesh3DLightIntensity((size_t)meshIdx);
       float range = sceneRenderer->GetMesh3DLightRange((size_t)meshIdx);
       float spotAngle = sceneRenderer->GetMesh3DLightSpotAngle((size_t)meshIdx);
+      bool propertyFinished = false;
 
       const char *types[] = {"Directional", "Point", "Spotlight (Senter)"};
       if (Combo("Light Type", &type, types, IM_ARRAYSIZE(types))) {
         sceneRenderer->SetMesh3DLightType((size_t)meshIdx, type);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
 
       float col[3] = {color.x, color.y, color.z};
       if (ColorEdit3("Color", col)) {
         sceneRenderer->SetMesh3DLightColor((size_t)meshIdx,
                                            glm::vec3(col[0], col[1], col[2]));
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
 
       if (DragFloat("Intensity", &intensity, 0.05f, 0.0f, 20.0f, "%.2f")) {
         sceneRenderer->SetMesh3DLightIntensity((size_t)meshIdx, intensity);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
 
       if (type > 0) { // Point or Spotlight
         if (DragFloat("Range", &range, 0.1f, 0.1f, 1000.0f, "%.1f")) {
           sceneRenderer->SetMesh3DLightRange((size_t)meshIdx, range);
         }
+        propertyFinished |= IsItemDeactivatedAfterEdit();
       }
 
       if (type == 2) { // Spotlight (Senter)
         if (SliderFloat("Spot Angle", &spotAngle, 1.0f, 179.0f, "%.1f deg")) {
           sceneRenderer->SetMesh3DLightSpotAngle((size_t)meshIdx, spotAngle);
         }
+        propertyFinished |= IsItemDeactivatedAfterEdit();
       }
 
       if (SliderFloat("Lighting Gamma", &gamma, 0.2f, 4.0f, "%.2f")) {
         sceneRenderer->SetMesh3DLightGamma((size_t)meshIdx, gamma);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
+      if (propertyFinished)
+        RecordEditorHistory();
     }
   }
 
@@ -441,26 +467,34 @@ void MainWindow::RenderInspectorWindow() {
       float farP = sceneRenderer->GetMesh3DCameraFar((size_t)meshIdx);
 
       const char *projections[] = {"Perspective", "Orthographic"};
+      bool propertyFinished = false;
       if (Combo("Projection", &proj, projections, IM_ARRAYSIZE(projections))) {
         sceneRenderer->SetMesh3DCameraProjection((size_t)meshIdx, proj);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
 
       if (proj == 0) { // Perspective
         if (SliderFloat("FOV", &fov, 10.0f, 120.0f, "%.0f deg")) {
           sceneRenderer->SetMesh3DCameraFov((size_t)meshIdx, fov);
         }
+        propertyFinished |= IsItemDeactivatedAfterEdit();
       } else { // Orthographic
         if (DragFloat("Ortho Size", &orthoSize, 0.1f, 0.1f, 500.0f, "%.2f")) {
           sceneRenderer->SetMesh3DCameraOrthoSize((size_t)meshIdx, orthoSize);
         }
+        propertyFinished |= IsItemDeactivatedAfterEdit();
       }
 
       if (DragFloat("Near", &nearP, 0.01f, 0.001f, farP - 0.01f, "%.3f")) {
         sceneRenderer->SetMesh3DCameraNear((size_t)meshIdx, nearP);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
       if (DragFloat("Far", &farP, 0.5f, nearP + 0.01f, 5000.0f, "%.1f")) {
         sceneRenderer->SetMesh3DCameraFar((size_t)meshIdx, farP);
       }
+      propertyFinished |= IsItemDeactivatedAfterEdit();
+      if (propertyFinished)
+        RecordEditorHistory();
 
       TextDisabled("Aim with the object's Rotation. See the cyan");
       TextDisabled("frustum gizmo + the Camera Preview window.");
@@ -486,11 +520,19 @@ void MainWindow::RenderInspectorWindow() {
   // Physics component (if attached)
   if (meshSelected && sceneRenderer->meshes3d[meshIdx].hasPhysics) {
     if (CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
-      Checkbox("Use Gravity", &sceneRenderer->meshes3d[meshIdx].useGravity);
-      Checkbox("Is Kinematic", &sceneRenderer->meshes3d[meshIdx].isKinematic);
+      if (Checkbox("Use Gravity", &sceneRenderer->meshes3d[meshIdx].useGravity))
+        RecordEditorHistory();
+      if (Checkbox("Is Kinematic",
+                   &sceneRenderer->meshes3d[meshIdx].isKinematic))
+        RecordEditorHistory();
       InputFloat("Mass", &sceneRenderer->meshes3d[meshIdx].mass, 0.1f);
+      const bool massFinished = IsItemDeactivatedAfterEdit();
       InputFloat("Drag", &sceneRenderer->meshes3d[meshIdx].drag, 0.01f);
+      const bool dragFinished = IsItemDeactivatedAfterEdit();
       InputFloat("Gravity Y", &sceneRenderer->meshes3d[meshIdx].gravityY, 0.1f);
+      const bool gravityFinished = IsItemDeactivatedAfterEdit();
+      if (massFinished || dragFinished || gravityFinished)
+        RecordEditorHistory();
     }
   }
 
@@ -508,6 +550,7 @@ void MainWindow::RenderInspectorWindow() {
         if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
             outPath) {
           sceneRenderer->meshes3d[meshIdx].audioPath = outPath;
+          RecordEditorHistory();
           NFD_FreePath(outPath);
         }
         NFD_Quit();
@@ -516,11 +559,13 @@ void MainWindow::RenderInspectorWindow() {
       if (Button("Play/Pause")) {
         sceneRenderer->meshes3d[meshIdx].isPlaying =
             !sceneRenderer->meshes3d[meshIdx].isPlaying;
+        RecordEditorHistory();
       }
       SameLine();
       if (Button("Clear")) {
         sceneRenderer->meshes3d[meshIdx].audioPath = "";
         sceneRenderer->meshes3d[meshIdx].isPlaying = false;
+        RecordEditorHistory();
       }
       if (sceneRenderer->meshes3d[meshIdx].isPlaying) {
         TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Playing...");
@@ -540,23 +585,27 @@ void MainWindow::RenderInspectorWindow() {
     if (Selectable("Physics Body")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].hasPhysics = true;
+        RecordEditorHistory();
       }
     }
     if (Selectable("Audio Source")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].hasAudio = true;
+        RecordEditorHistory();
       }
     }
     if (Selectable("Light")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].isLight = true;
         sceneRenderer->meshes3d[meshIdx].isCamera = false;
+        RecordEditorHistory();
       }
     }
     if (Selectable("Camera")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].isCamera = true;
         sceneRenderer->meshes3d[meshIdx].isLight = false;
+        RecordEditorHistory();
       }
     }
 
@@ -642,6 +691,7 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
     if (Button("Reset View")) {
       ::Log("Resetting camera view", Debug::LogLevel::INFO);
       sceneRenderer->ResetCamera();
+      RecordEditorHistory();
     }
 
     SameLine();
@@ -652,6 +702,8 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
     if (SliderFloat("##Zoom", &sceneRenderer->zoom, 1.0f, 10.0f, "%.2fx")) {
       sceneRenderer->SetCameraZoom(sceneRenderer->zoom);
     }
+    if (IsItemDeactivatedAfterEdit())
+      RecordEditorHistory();
 
     SameLine();
     Text("Zoom");
@@ -661,10 +713,13 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
 
     // Grid size control
     static float gridSize = 50.0f;
+    gridSize = sceneRenderer->GetGridSize();
     SetNextItemWidth(80);
     if (DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
       sceneRenderer->SetGridSize(gridSize);
     }
+    if (IsItemDeactivatedAfterEdit())
+      RecordEditorHistory();
 
     SameLine();
     Text("Grid Size");
@@ -674,6 +729,10 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
 
     // Grid color picker (compact)
     static float gridColor[3] = {0.5f, 0.5f, 0.5f};
+    const glm::vec4 currentGridColor = sceneRenderer->GetGridColor();
+    gridColor[0] = currentGridColor.x;
+    gridColor[1] = currentGridColor.y;
+    gridColor[2] = currentGridColor.z;
     SetNextItemWidth(60);
     if (ColorEdit3("##GridColor", gridColor,
                    ImGuiColorEditFlags_NoInputs |
@@ -681,6 +740,8 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
       sceneRenderer->SetGridColor(gridColor[0], gridColor[1], gridColor[2],
                                   1.0f);
     }
+    if (IsItemDeactivatedAfterEdit())
+      RecordEditorHistory();
 
     SameLine();
     Text("Grid");
@@ -689,6 +750,11 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
 
     // Background color picker (compact)
     static float bgColor[3] = {0.2f, 0.2f, 0.2f};
+    const glm::vec4 currentBackgroundColor =
+        sceneRenderer->GetBackgroundColor();
+    bgColor[0] = currentBackgroundColor.x;
+    bgColor[1] = currentBackgroundColor.y;
+    bgColor[2] = currentBackgroundColor.z;
     SetNextItemWidth(60);
     if (ColorEdit3("##BgColor", bgColor,
                    ImGuiColorEditFlags_NoInputs |
@@ -698,6 +764,8 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
                                         1.0f); // You'll need to implement this
                                                // }
     }
+    if (IsItemDeactivatedAfterEdit())
+      RecordEditorHistory();
 
     SameLine();
     Text("Background");
@@ -705,8 +773,10 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
     // Snap to grid toggle
     NewLine();
     static bool snapToGrid = false;
+    snapToGrid = sceneRenderer->IsSnapToGrid();
     if (Checkbox("Snap to Grid", &snapToGrid)) {
       sceneRenderer->SetSnapToGrid(snapToGrid);
+      RecordEditorHistory();
     }
 
     SameLine();
@@ -885,6 +955,11 @@ void MainWindow::RenderSceneWindow() {
         }
         s_loadedForProject = desired;
       }
+
+      // A project switch (or the first standalone bootstrap) starts a fresh
+      // in-memory history and a fresh YAML file for this engine session.
+      if (s_loadedForProject == desired)
+        StartEditorSession();
     }
 
     // Resize the offscreen target to match the panel so the 3D viewport
@@ -923,12 +998,31 @@ void MainWindow::RenderSceneWindow() {
       if (vpIn.hovered && vpIn.rmbDown &&
           (vpIn.mouseDeltaX != 0.0f || vpIn.mouseDeltaY != 0.0f)) {
         sceneRenderer->HandleDrag(vpIn.mouseDeltaX, vpIn.mouseDeltaY);
+        viewportCameraHistoryActive = true;
       }
       if (vpIn.hovered && vpIn.scroll != 0.0f) {
         sceneRenderer->HandleZoom(vpIn.scroll);
+        if (!viewportCameraHistoryActive)
+          RecordEditorHistory();
+      }
+      if (!vpIn.rmbDown && viewportCameraHistoryActive) {
+        viewportCameraHistoryActive = false;
+        RecordEditorHistory();
       }
     } else {
       sceneRenderer->UpdateCamera3D(vpIn);
+      const bool cameraContinuousInput =
+          vpIn.hovered &&
+          (vpIn.rmbDown || vpIn.wDown || vpIn.aDown || vpIn.sDown ||
+           vpIn.dDown || vpIn.qDown || vpIn.eDown);
+      if (cameraContinuousInput)
+        viewportCameraHistoryActive = true;
+      else if (viewportCameraHistoryActive) {
+        viewportCameraHistoryActive = false;
+        RecordEditorHistory();
+      } else if (vpIn.hovered && vpIn.scroll != 0.0f) {
+        RecordEditorHistory();
+      }
     }
 
     // Render scene dengan ukuran penuh
@@ -1019,6 +1113,7 @@ void MainWindow::RenderSceneWindow() {
                             sceneRenderer->GetMesh3DName(idx).c_str());
               projectHandler.ShowNotification("Model added", fname,
                                               ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+              RecordEditorHistory();
             } else {
               projectHandler.ShowNotification("Load failed", fname,
                                               ImVec4(1.0f, 0.4f, 0.2f, 1.0f));
@@ -1026,14 +1121,20 @@ void MainWindow::RenderSceneWindow() {
           } else if (isImage) {
             int hm = -1, hs = -1;
             if (sceneRenderer->PickMesh3DSurface(lx, ly, hm, hs) && hm >= 0) {
-              sceneRenderer->BindMesh3DSubmeshTexture((size_t)hm, (uint32_t)hs,
-                                                      assetPath);
-              std::snprintf(objectName, sizeof(objectName), "%s",
-                            sceneRenderer->GetMesh3DName((size_t)hm).c_str());
-              selectedSurface = hs;
-              projectHandler.ShowNotification(
-                  "Texture bound", fname + " → surface " + std::to_string(hs),
-                  ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+              const bool bound = sceneRenderer->BindMesh3DSubmeshTexture(
+                  (size_t)hm, (uint32_t)hs, assetPath);
+              if (bound) {
+                std::snprintf(objectName, sizeof(objectName), "%s",
+                              sceneRenderer->GetMesh3DName((size_t)hm).c_str());
+                selectedSurface = hs;
+                projectHandler.ShowNotification(
+                    "Texture bound", fname + " → surface " + std::to_string(hs),
+                    ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                RecordEditorHistory();
+              } else {
+                projectHandler.ShowNotification("Texture failed", fname,
+                                                ImVec4(1.0f, 0.4f, 0.2f, 1.0f));
+              }
             } else {
               projectHandler.ShowNotification(
                   "Drop on a surface",
@@ -1151,11 +1252,15 @@ void MainWindow::RenderSceneWindow() {
                             IsMouseDragging(ImGuiMouseButton_Left) &&
                             !IsMouseDown(ImGuiMouseButton_Right) && selIdx >= 0;
       if (dragging) {
+        viewportDragHistoryActive = true;
         ImVec2 md = GetIO().MouseDelta;
         if (md.x != 0.0f || md.y != 0.0f) {
           sceneRenderer->DragMesh3DScreen((size_t)selIdx, md.x, md.y,
                                           (int)contentSize.y);
         }
+      } else if (viewportDragHistoryActive) {
+        viewportDragHistoryActive = false;
+        RecordEditorHistory();
       }
 
       // Right-click WITHOUT drag opens an "Add" menu and instances a
@@ -1233,6 +1338,7 @@ void MainWindow::RenderSceneWindow() {
               // can answer "which line created this thing?" on hover.
               sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
               std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
+              RecordEditorHistory();
             }
           };
           if (MenuItem("Cube"))
@@ -1592,8 +1698,10 @@ void MainWindow::RenderMenuBar() {
 
     if (BeginMenu("Edit")) {
       if (MenuItem("Undo", "Ctrl+Z")) {
+        UndoEditor();
       }
       if (MenuItem("Redo", "Ctrl+Y")) {
+        RedoEditor();
       }
       Separator();
       if (MenuItem("Cut", "Ctrl+X")) {

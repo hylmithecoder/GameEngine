@@ -30,7 +30,13 @@ int main(int argc, char *argv[]) {
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-  io.Fonts->AddFontFromFileTTF("assets/fonts/zh-cn.ttf", 16.0f);
+  ImFontConfig fontCfg;
+  fontCfg.MergeMode = false;
+  io.Fonts->AddFontFromFileTTF("assets/fonts/MiSansLatin-Regular.ttf", 16.0f, &fontCfg);
+  fontCfg.MergeMode = true;
+  fontCfg.GlyphOffset.y = 1.0f;
+  io.Fonts->AddFontFromFileTTF("assets/fonts/zh-cn.ttf", 16.0f, &fontCfg,
+                               io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
   ImGui::StyleColorsDark();
 
   ImGui_ImplSDL3_InitForVulkan(window);

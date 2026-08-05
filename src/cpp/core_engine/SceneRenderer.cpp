@@ -3,10 +3,12 @@
 #include "../../../include/core_engine/PMXLoader.hpp"
 #include <VkTools.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -2994,6 +2996,171 @@ void SceneRenderer::ClearMeshes3D() {
   for (auto &m : meshes3d)
     DestroyMesh(m);
   meshes3d.clear();
+}
+
+SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
+  EditorSnapshot snapshot;
+  snapshot.cameraPosition = cameraPosition;
+  snapshot.cameraZoom = cameraZoom;
+  snapshot.zoom = zoom;
+  snapshot.gridSize = gridSize;
+  snapshot.gridColor = glm::vec4(gridColor.x, gridColor.y, gridColor.z,
+                                 gridColor.w);
+  snapshot.backgroundColor =
+      glm::vec4(bgColor.x, bgColor.y, bgColor.z, bgColor.w);
+  snapshot.editMode = static_cast<int>(currentMode);
+  snapshot.gridVisible = gridVisible;
+  snapshot.snapToGrid = snapToGrid;
+  snapshot.grid3dVisible = grid3dVisible;
+  snapshot.sunVisible = sunVisible;
+  snapshot.camera3d = camera3d;
+  snapshot.sunLight = sunLight;
+  snapshot.entities.reserve(meshes3d.size());
+
+  for (const Mesh3D &mesh : meshes3d) {
+    EditorEntitySnapshot entity;
+    entity.name = mesh.displayName;
+    entity.path = mesh.path;
+    entity.position = mesh.userPosition;
+    entity.rotation = mesh.userRotation;
+    entity.scale = mesh.userScale;
+
+    entity.isLight = mesh.isLight;
+    entity.lightGamma = mesh.lightGamma;
+    entity.lightColor = mesh.lightColor;
+    entity.lightIntensity = mesh.lightIntensity;
+    entity.lightType = mesh.lightType;
+    entity.lightRange = mesh.lightRange;
+    entity.lightSpotAngle = mesh.lightSpotAngle;
+
+    entity.isCamera = mesh.isCamera;
+    entity.camProjection = mesh.camProjection;
+    entity.camFov = mesh.camFov;
+    entity.camOrthoSize = mesh.camOrthoSize;
+    entity.camNear = mesh.camNear;
+    entity.camFar = mesh.camFar;
+
+    entity.hasPhysics = mesh.hasPhysics;
+    entity.useGravity = mesh.useGravity;
+    entity.isKinematic = mesh.isKinematic;
+    entity.mass = mesh.mass;
+    entity.drag = mesh.drag;
+    entity.gravityY = mesh.gravityY;
+    entity.velocity = mesh.velocity;
+
+    entity.hasAudio = mesh.hasAudio;
+    entity.audioPath = mesh.audioPath;
+    entity.isPlaying = mesh.isPlaying;
+
+    entity.debugSrcFile = mesh.debugSrcFile;
+    entity.debugSrcLine = mesh.debugSrcLine;
+    entity.submeshTextures.reserve(mesh.submeshes.size());
+    for (const SubMesh &submesh : mesh.submeshes)
+      entity.submeshTextures.push_back(submesh.texturePath);
+
+    snapshot.entities.push_back(std::move(entity));
+  }
+  return snapshot;
+}
+
+bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
+  cameraPosition = snapshot.cameraPosition;
+  cameraZoom = snapshot.cameraZoom;
+  zoom = snapshot.zoom;
+  gridSize = snapshot.gridSize;
+  gridColor = ImVec4(snapshot.gridColor.r, snapshot.gridColor.g,
+                     snapshot.gridColor.b, snapshot.gridColor.a);
+  bgColor = ImVec4(snapshot.backgroundColor.r, snapshot.backgroundColor.g,
+                   snapshot.backgroundColor.b, snapshot.backgroundColor.a);
+  if (snapshot.editMode >= static_cast<int>(EditMode::SELECT) &&
+      snapshot.editMode <= static_cast<int>(EditMode::SCALE)) {
+    currentMode = static_cast<EditMode>(snapshot.editMode);
+  }
+  gridVisible = snapshot.gridVisible;
+  snapToGrid = snapshot.snapToGrid;
+  grid3dVisible = snapshot.grid3dVisible;
+  sunVisible = snapshot.sunVisible;
+  camera3d = snapshot.camera3d;
+  sunLight = snapshot.sunLight;
+
+  ClearMeshes3D();
+  bool allLoaded = true;
+
+  for (const EditorEntitySnapshot &entity : snapshot.entities) {
+    bool loaded = false;
+    if (entity.isLight) {
+      loaded = LoadLight(entity.name, entity.lightType, entity.lightColor,
+                         entity.lightIntensity, entity.lightRange,
+                         entity.lightSpotAngle, entity.lightGamma);
+    } else if (entity.isCamera) {
+      loaded = LoadCamera(entity.name, entity.camProjection, entity.camFov,
+                          entity.camOrthoSize, entity.camNear, entity.camFar);
+    } else if (entity.path.rfind("<primitive:", 0) == 0) {
+      if (entity.path.find("sphere") != std::string::npos)
+        loaded = LoadSphere(entity.name);
+      else if (entity.path.find("plane") != std::string::npos)
+        loaded = LoadPlane(entity.name);
+      else
+        loaded = LoadCube(entity.name);
+    } else if (!entity.path.empty()) {
+      std::string ext = std::filesystem::path(entity.path).extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return (char)std::tolower(c); });
+      if (ext == ".pmx")
+        loaded = LoadPMXMesh(entity.path);
+      else if (ext == ".fbx")
+        loaded = LoadFbxMesh(entity.path);
+      else
+        loaded = LoadObjMesh(entity.path);
+    } else {
+      // A nameless non-light/camera mesh cannot be reconstructed without an
+      // asset path. Keep the history operation deterministic and report it
+      // to the caller instead of silently inventing a different object.
+      allLoaded = false;
+      continue;
+    }
+
+    if (!loaded || meshes3d.empty()) {
+      allLoaded = false;
+      continue;
+    }
+
+    const size_t index = meshes3d.size() - 1;
+    // External loaders derive a display name from the filename. The editor
+    // snapshot must win so undo/redo also preserves the hierarchy label.
+    meshes3d[index].displayName = entity.name;
+    SetMesh3DTransform(index, entity.position, entity.rotation,
+                       entity.scale);
+    SetMesh3DDebugSource(index, entity.debugSrcFile.c_str(),
+                         entity.debugSrcLine);
+
+    Mesh3D &mesh = meshes3d[index];
+    mesh.hasPhysics = entity.hasPhysics;
+    mesh.useGravity = entity.useGravity;
+    mesh.isKinematic = entity.isKinematic;
+    mesh.mass = entity.mass;
+    mesh.drag = entity.drag;
+    mesh.gravityY = entity.gravityY;
+    mesh.velocity = entity.velocity;
+    mesh.hasAudio = entity.hasAudio;
+    mesh.audioPath = entity.audioPath;
+    mesh.isPlaying = entity.isPlaying;
+
+    // Loaders may auto-bind the model's original textures. Clear every
+    // surface first so an undo to a deliberately cleared surface is exact.
+    for (uint32_t sub = 0; sub < mesh.submeshes.size(); ++sub) {
+      const std::string texture =
+          sub < entity.submeshTextures.size()
+              ? entity.submeshTextures[sub]
+              : std::string();
+      if (texture.empty())
+        ClearMesh3DSubmeshTexture(index, sub);
+      else if (!BindMesh3DSubmeshTexture(index, sub, texture))
+        allLoaded = false;
+    }
+  }
+
+  return allLoaded;
 }
 
 const std::string &SceneRenderer::GetMesh3DName(size_t i) const {

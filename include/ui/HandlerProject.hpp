@@ -25,6 +25,7 @@
 #include <stb/stb_image.h>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #ifdef _WIN32
 #include <shellapi.h>
 #include <windows.h>
@@ -270,10 +271,14 @@ public:
   bool fileExplorerIsRenaming = false;
   bool fileExplorerRenameBufferSet =
       false; // Add this variable to fix the issue
-  string fileExplorerCopyTarget = "";
+  // Internal Explorer clipboard.  Keeping a collection here allows Ctrl-click
+  // multi-selection to be copied together, including directories.
+  vector<string> fileExplorerCopyTargets;
+  unordered_set<string> fileExplorerSelectedPaths;
   string fileTargetImport = "";
 
   void OpenFile();
+  void ImportFolder();
   void OpenFolder();
   void OpenProject(const char *folderPath);
   void DrawAssetTree(const AssetFile &node);
@@ -304,7 +309,7 @@ public:
   void HandleRenameFolder(const AssetFile &node);
   void HandleCopy(const AssetFile &node);
   void HandlePaste(const string &targetFolder);
-  void HandleImport(const string &targetFile);
+  bool HandleImport(const string &targetFile);
   void SaveNewScene();
   void OpenScene();
   // Hint tanda "&" itu ngambil dari referensi

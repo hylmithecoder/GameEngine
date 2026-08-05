@@ -30,6 +30,75 @@ MainWindow::~MainWindow() {
   }
 }
 
+EditorSessionHistory::Snapshot MainWindow::CaptureEditorSnapshot() const {
+  EditorSessionHistory::Snapshot snapshot;
+  if (sceneRenderer)
+    snapshot.renderer = sceneRenderer->CaptureEditorSnapshot();
+  snapshot.selectedName = objectName;
+  snapshot.selectedSurface = selectedSurface;
+  snapshot.sceneName = projectHandler.currentScene.sceneName;
+  snapshot.sceneObjects = projectHandler.currentScene.objects;
+  return snapshot;
+}
+
+void MainWindow::StartEditorSession() {
+  const std::string project = projectHandler.projectPath.empty()
+                                  ? std::string("standalone")
+                                  : projectHandler.projectPath;
+  editorSessionHistory.Start(project, CaptureEditorSnapshot());
+  viewportDragHistoryActive = false;
+  viewportCameraHistoryActive = false;
+  ::Log("Editor session history: " +
+            editorSessionHistory.FilePath().string(),
+        Debug::LogLevel::INFO);
+}
+
+void MainWindow::RecordEditorHistory() {
+  if (sceneRenderer && editorSessionHistory.IsActive())
+    editorSessionHistory.Push(CaptureEditorSnapshot());
+}
+
+void MainWindow::ApplyEditorSnapshot(
+    const EditorSessionHistory::Snapshot &snapshot) {
+  if (!sceneRenderer)
+    return;
+
+  const bool restored = sceneRenderer->RestoreEditorSnapshot(snapshot.renderer);
+  projectHandler.currentScene.sceneName = snapshot.sceneName;
+  projectHandler.currentScene.objects = snapshot.sceneObjects;
+  sceneRenderer->currentScene = projectHandler.currentScene;
+
+  std::snprintf(objectName, sizeof(objectName), "%s",
+                snapshot.selectedName.c_str());
+  selectedSurface = snapshot.selectedSurface;
+
+  if (!restored) {
+    ::Log("Some editor session assets could not be restored.",
+          Debug::LogLevel::WARNING);
+    projectHandler.ShowNotification(
+        "Undo/Redo Warning", "One or more assets could not be restored",
+        ImVec4(1.0f, 0.7f, 0.2f, 1.0f));
+  }
+}
+
+void MainWindow::UndoEditor() {
+  EditorSessionHistory::Snapshot snapshot;
+  if (editorSessionHistory.Undo(snapshot)) {
+    ApplyEditorSnapshot(snapshot);
+    projectHandler.ShowNotification("Undo", "Viewport state restored",
+                                    ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+  }
+}
+
+void MainWindow::RedoEditor() {
+  EditorSessionHistory::Snapshot snapshot;
+  if (editorSessionHistory.Redo(snapshot)) {
+    ApplyEditorSnapshot(snapshot);
+    projectHandler.ShowNotification("Redo", "Viewport state restored",
+                                    ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+  }
+}
+
 void MainWindow::OnInit() {
   ::Log("MainWindow::OnInit - Initializing Project Specific Resources");
 
@@ -39,8 +108,15 @@ void MainWindow::OnInit() {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-  string fontPath = "assets/fonts/zh-cn.ttf";
-  io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 13.0f);
+  ImFontConfig fontCfg;
+  fontCfg.MergeMode = false;
+  io.Fonts->AddFontFromFileTTF("assets/fonts/MiSansLatin-Regular.ttf", 16.0f,
+                               &fontCfg);
+  fontCfg.MergeMode = true;
+  fontCfg.GlyphOffset.y = 1.0f;
+  io.Fonts->AddFontFromFileTTF(
+      "assets/fonts/zh-cn.ttf", 13.0f, &fontCfg,
+      io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 
   Ilmeee::EditorTheme::Apply(darkTheme ? Ilmeee::EditorTheme::Variant::Dark
                                        : Ilmeee::EditorTheme::Variant::Light);
@@ -94,8 +170,23 @@ void MainWindow::OnUpdate(float deltaTime) {
 }
 
 void MainWindow::OnRender(VkCommandBuffer cmd) {
+  ImGuiIO &io = ImGui::GetIO();
+
+  // Keep text fields' native Ctrl+Z behavior intact. Outside text input,
+  // Ctrl+Z/Ctrl+Y operate on the current editor session history.
+  if (!io.WantTextInput && io.KeyCtrl) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+      if (io.KeyShift)
+        RedoEditor();
+      else
+        UndoEditor();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
+      RedoEditor();
+    }
+  }
+
   // Check for Ctrl+S keyboard shortcut
-  if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
     Save3DScene();
   }
 

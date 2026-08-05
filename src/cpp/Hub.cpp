@@ -942,10 +942,23 @@ public:
         (ilmeee::IlmeeeDir() / "imgui_hub.ini").string();
     io.IniFilename = imguiHubPath.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // Try to load CJK font if present; otherwise fall back to default.
-    const std::string fontPath = "assets/fonts/zh-cn.ttf";
-    if (fs::exists(fontPath))
-      io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 14.0f);
+    // Load MiSansLatin as base font, merge zh-cn.ttf for CJK support
+    const std::string latinFontPath = "assets/fonts/MiSansLatin-Regular.ttf";
+    const std::string cjkFontPath = "assets/fonts/zh-cn.ttf";
+    if (fs::exists(latinFontPath)) {
+      ImFontConfig fontCfg;
+      fontCfg.MergeMode = false;
+      io.Fonts->AddFontFromFileTTF(latinFontPath.c_str(), 14.0f, &fontCfg);
+      if (fs::exists(cjkFontPath)) {
+        fontCfg.MergeMode = true;
+        fontCfg.GlyphOffset.y = 1.0f;
+        io.Fonts->AddFontFromFileTTF(
+            cjkFontPath.c_str(), 14.0f, &fontCfg,
+            io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+      }
+    } else if (fs::exists(cjkFontPath)) {
+      io.Fonts->AddFontFromFileTTF(cjkFontPath.c_str(), 14.0f);
+    }
 
     ImGui_ImplSDL3_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 330");
