@@ -8,6 +8,7 @@
 #include <imgui.h>
 #include <string>
 #include <unordered_map>
+#include <functional>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -193,6 +194,10 @@ public:
     glm::vec3 userScale = glm::vec3(1.0f);
     std::string path;
     std::string displayName;
+    // Scene hierarchy: index of the parent in meshes3d, -1 for a root.
+    // user* transform fields are local to the parent. Kept consistent by
+    // SetMesh3DParent / RemoveMesh3D — never assign it directly.
+    int parent = -1;
     // PMX bone hierarchy (empty for OBJ meshes / primitives)
     std::vector<pmx::PMXBone> bones;
 
@@ -246,6 +251,10 @@ public:
     std::string debugSrcFile;
     int debugSrcLine = 0;
 
+    // Local transform only (no parent, no autoFit).
+    glm::mat4 ComputeLocal() const;
+    // Local transform with autoFit — what a root mesh is drawn with. For
+    // anything that may have a parent use GetMesh3DWorldModel().
     glm::mat4 ComputeModel() const;
   };
   std::vector<Mesh3D> meshes3d;
@@ -300,7 +309,10 @@ private:
 
   // Mesh pipeline helpers
   void InitMeshPipeline();
-  void DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+  // drawMarkers: also draw the stand-in meshes of lights and cameras (editor
+  // only — a game never shows them).
+  void DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
+                  bool drawMarkers);
   bool UploadMeshBuffers(Mesh3D &mesh, const std::vector<MeshVertex> &verts,
                          const std::vector<uint32_t> &indices);
   void DestroyMesh(Mesh3D &mesh);
@@ -326,10 +338,18 @@ private:
   // Preview (player-camera) helpers
   void CreatePreviewResources();
   void DestroyPreviewResources();
-  // Record the 3D world (sun, grid, meshes, optional gizmos) for the given
-  // camera matrices into an already-open render pass.
+  // Editor: sun, grid, light/camera markers and gizmos (each per its
+  // toggle). Game: the scene's meshes only — what a built game shows, and
+  // what the Camera Preview mirrors.
+  enum class WorldView { Editor, Game };
+  // Record the 3D world for the given camera matrices into an already-open
+  // render pass.
   void RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
-                   const glm::mat4 &proj3d, bool drawGizmos);
+                   const glm::mat4 &proj3d, WorldView viewKind);
+  // Begin `target`'s render pass at w x h, clear to the background colour,
+  // run `record`, then submit and wait.
+  void SubmitOffscreenPass(const Offscreen &target, int w, int h,
+                           const std::function<void(VkCommandBuffer)> &record);
   // Compute the player camera's view/proj for the given aspect ratio.
   // Returns false if there is no camera object in the scene.
   bool ComputePlayerCameraMatrices(float aspect, glm::mat4 &view,
@@ -381,6 +401,26 @@ public:
   uint32_t GetMesh3DVertexCount(size_t i) const;
   uint32_t GetMesh3DTriangleCount(size_t i) const;
   uint32_t GetMesh3DBoneCount(size_t i) const;
+  // ---- hierarchy ----------------------------------------------------------
+  int GetMesh3DParent(size_t i) const;
+  // True if `i` is `ancestor` or sits anywhere below it.
+  bool IsMesh3DInSubtree(size_t i, size_t ancestor) const;
+  // Reparent `child` under `parent` (-1 = root). With keepWorld the object
+  // stays where it is on screen (its local transform is recomputed);
+  // otherwise its local values are kept and it moves with the new parent.
+  // Refuses self-parenting and cycles.
+  bool SetMesh3DParent(size_t child, int parent, bool keepWorld = true);
+  // Removes the mesh and its whole subtree, freeing GPU resources, and
+  // renumbers the remaining parent links. Returns how many were removed.
+  size_t RemoveMesh3D(size_t i);
+  // Parent chain composed, without autoFit (what children inherit).
+  glm::mat4 GetMesh3DWorldTRS(size_t i) const;
+  // What mesh `i` is drawn and picked with: world TRS * autoFit.
+  glm::mat4 GetMesh3DWorldModel(size_t i) const;
+  glm::vec3 GetMesh3DWorldPosition(size_t i) const;
+  // Rotates a local-space direction of mesh `i` by its parents' rotation.
+  glm::vec3 Mesh3DLocalDirToWorld(size_t i, const glm::vec3 &localDir) const;
+
   void SetMesh3DTransform(size_t i, const glm::vec3 &position,
                           const glm::vec3 &rotationEuler,
                           const glm::vec3 &scale);
@@ -448,6 +488,15 @@ public:
   bool HasPlayerCamera() const;
   void RenderPlayerCameraPreview();
   VkDescriptorSet GetPlayerCameraPreviewDescriptor() const;
+  // Render the whole viewport target (size set by SetViewportSize) from the
+  // player camera in Game view — the runtime player's frame. Show it with
+  // GetViewportDescriptorSet(), V flipped like the editor viewport. Returns
+  // false (nothing rendered) when the scene has no camera.
+  bool RenderGameView();
+  // Copy the viewport target back to the CPU as tightly packed RGBA8, top
+  // row first. For screenshots and automated checks; stalls the GPU.
+  bool ReadbackViewport(std::vector<uint8_t> &rgba, int &outWidth,
+                        int &outHeight);
   int GetPreviewWidth() const { return previewWidth; }
   int GetPreviewHeight() const { return previewHeight; }
   // Translate the i-th mesh in the camera's screen plane by (dxPx, dyPx)
@@ -512,6 +561,7 @@ public:
   struct EditorEntitySnapshot {
     std::string name;
     std::string path;
+    int parent = -1; // index into EditorSnapshot::entities
     glm::vec3 position{0.0f};
     glm::vec3 rotation{0.0f};
     glm::vec3 scale{1.0f};

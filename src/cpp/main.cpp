@@ -3,11 +3,13 @@
 #include "../../include/core_engine/TextureManager.hpp"
 #include "../../include/ui/Application.hpp"
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_platform.h>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -86,10 +88,47 @@ bool IsRunningInTerminal() {
   return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
 }
 
+// Get Linux distribution name from /etc/os-release or /usr/lib/os-release
+string GetLinuxDistro() {
+  ifstream file("/etc/os-release");
+  if (!file.is_open()) {
+    file.open("/usr/lib/os-release");
+  }
+  if (!file.is_open()) {
+    return "Unknown Linux";
+  }
+
+  string line;
+  string fallbackName;
+  while (getline(file, line)) {
+    if (line.rfind("PRETTY_NAME=", 0) == 0) {
+      string val = line.substr(12);
+      if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') ||
+                              (val.front() == '\'' && val.back() == '\''))) {
+        val = val.substr(1, val.size() - 2);
+      }
+      return val;
+    } else if (line.rfind("NAME=", 0) == 0 && fallbackName.empty()) {
+      string val = line.substr(5);
+      if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') ||
+                              (val.front() == '\'' && val.back() == '\''))) {
+        val = val.substr(1, val.size() - 2);
+      }
+      fallbackName = val;
+    }
+  }
+
+  return fallbackName.empty() ? "Unknown Linux" : fallbackName;
+}
+
 // Print startup information
 void PrintStartupInfo() {
   Log("=== Ilmee Editor Starting ===");
-  Log("Platform: Linux");
+  string getPlatform = SDL_GetPlatform();
+  Log("Platform: " + getPlatform);
+  if (getPlatform == "Linux") {
+    Log("Distro: " + GetLinuxDistro());
+  }
   Log("Terminal: " + string(IsRunningInTerminal() ? "Yes" : "No"));
 
   // Get process ID

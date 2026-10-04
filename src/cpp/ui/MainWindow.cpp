@@ -143,9 +143,6 @@ void MainWindow::OnInit() {
   // Initialize Builder for Play/Pause/Stop controls
   builder.Init(sceneRenderer);
 
-  networkManager = std::make_unique<NetworkManager>();
-  networkManager->connectToServer();
-
   projectHandler.fileWatcherRunning = false;
   projectHandler.fileWatcherInterval = std::chrono::milliseconds(1000);
   projectHandler.fileChangesDetected = false;
@@ -160,6 +157,12 @@ void MainWindow::OnInit() {
 }
 
 void MainWindow::OnUpdate(float deltaTime) {
+  // Engine IPC handlers run here, on the main thread, because they touch
+  // scene and UI state.
+  if (ipcBus)
+    ipcBus->Poll();
+  PollGameBuild();
+
   if (projectHandler.fileChangesDetected) {
     projectHandler.fileChangesDetected = false;
   }
@@ -189,6 +192,11 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
   if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
     Save3DScene();
   }
+
+  // Ctrl+B builds the game, Ctrl+Shift+B builds and runs it.
+  if (!io.WantTextInput && io.KeyCtrl &&
+      ImGui::IsKeyPressed(ImGuiKey_B, false))
+    StartGameBuild(io.KeyShift);
 
   // F2 toggles Inspect Mode. Honored even when --debug wasn't passed so
   // a running session can flip the overlay on for ad-hoc UI archaeology.
@@ -236,6 +244,11 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 void MainWindow::OnCleanup() {
   ::Log("MainWindow::OnCleanup");
   projectHandler.StopFileWatcher();
+
+  // A build still copying files finishes first: it holds `this`. A running
+  // game is left alone — it is a separate program.
+  if (gameBuildThread.joinable())
+    gameBuildThread.join();
 
   if (sceneRenderer) {
     delete sceneRenderer;

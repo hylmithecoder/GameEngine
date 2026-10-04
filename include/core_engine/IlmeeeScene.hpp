@@ -16,6 +16,11 @@
 //     float32 position[3]
 //     float32 rotationEulerDeg[3]
 //     float32 scale[3]
+//     -- v1.1 light, v1.2 camera + surface textures (see SaveScene) --
+//     int32   parent      (v1.3) index of the parent entity, -1 = root;
+//                         position/rotation/scale are then parent-local
+//   -- after all entities, v1.4 environment --
+//   float32 backgroundColor[4]   clear colour the scene is shown against
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -75,10 +80,15 @@ struct SceneEntity {
   // Per-surface texture bindings (v1.2). Empty for entities the user never
   // re-textured beyond the model's own embedded textures.
   std::vector<SurfaceTexture> surfaceTextures;
+
+  // Index of the parent in IlmeeeScene::entities, -1 for a root (v1.3).
+  int32_t parent = -1;
 };
 
 struct IlmeeeScene {
   std::vector<SceneEntity> entities;
+  // v1.4. Default matches SceneRenderer's, so older files look unchanged.
+  glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
 };
 
 namespace detail {
@@ -137,7 +147,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 2); // minor
+  detail::WriteU16(f, 4); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -167,7 +177,14 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
       detail::WriteU32(f, st.surfaceIndex);
       detail::WriteString(f, st.texturePath);
     }
+
+    // Version 1.3: hierarchy
+    detail::WriteU32(f, (uint32_t)e.parent);
   }
+
+  // Version 1.4: environment
+  for (int c = 0; c < 4; ++c)
+    detail::WriteF32(f, scene.backgroundColor[c]);
   return f.good();
 }
 
@@ -250,7 +267,41 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
           return false;
       }
     }
+
+    // Load version 1.3 fields if available (hierarchy).
+    if (minor >= 3) {
+      uint32_t parent = 0;
+      if (!detail::ReadU32(f, parent))
+        return false;
+      e.parent = (int32_t)parent;
+    }
     out.entities.push_back(std::move(e));
+  }
+
+  out.backgroundColor = IlmeeeScene().backgroundColor;
+  if (minor >= 4) {
+    for (int c = 0; c < 4; ++c)
+      if (!detail::ReadF32(f, out.backgroundColor[c]))
+        return false;
+  }
+
+  // A link that points outside the file, at itself, or into a loop would
+  // hang or confuse the hierarchy; demote such entities to roots.
+  const int32_t n = (int32_t)out.entities.size();
+  for (int32_t i = 0; i < n; ++i) {
+    int32_t p = out.entities[i].parent;
+    if (p < -1 || p >= n || p == i) {
+      out.entities[i].parent = -1;
+      continue;
+    }
+    int32_t cur = p;
+    for (int32_t steps = 0; cur >= 0 && steps <= n; ++steps) {
+      if (cur == i) {
+        out.entities[i].parent = -1;
+        break;
+      }
+      cur = out.entities[cur].parent;
+    }
   }
   return true;
 }

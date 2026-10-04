@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include "../../../include/core_engine/TransformMath.hpp"
 #include <imgui_impl_vulkan.h>
 #include <iostream>
 #include <sstream>
@@ -226,8 +227,10 @@ void SceneRenderer::CreateOffscreenResources() {
   imageInfo.arrayLayers = 1;
   imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
   imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-  imageInfo.usage =
-      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  // TRANSFER_SRC: ReadbackViewport copies this image back to the CPU.
+  imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
   if (vkCreateImage(device, &imageInfo, nullptr, &offscreen.image) !=
       VK_SUCCESS) {
@@ -522,7 +525,7 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
                                         camera3d.nearPlane, camera3d.farPlane);
     // No Y-flip on projection: the Scene panel already flips the sampled
     // image via ImGui UVs (V from 1→0). Editor view draws gizmos.
-    RecordWorld(cmd, view3d, proj3d, /*drawGizmos=*/true);
+    RecordWorld(cmd, view3d, proj3d, WorldView::Editor);
   }
 
   for (const auto &obj : scene.objects) {
@@ -1292,16 +1295,19 @@ SceneRenderer::ResolveTextureDescriptor(const std::string &path) {
   return ds != VK_NULL_HANDLE ? ds : whiteDescriptor;
 }
 
-void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
+void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
+                               bool drawMarkers) {
   if (meshPipeline == VK_NULL_HANDLE)
     return;
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
 
   // 1. Scan for the first active Light GameObject in the scene
   const Mesh3D *lightMesh = nullptr;
-  for (const auto &m : meshes3d) {
-    if (m.isLight) {
-      lightMesh = &m;
+  size_t lightIndex = 0;
+  for (size_t i = 0; i < meshes3d.size(); ++i) {
+    if (meshes3d[i].isLight) {
+      lightMesh = &meshes3d[i];
+      lightIndex = i;
       break;
     }
   }
@@ -1333,13 +1339,13 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
     forward.x = std::cos(yaw) * std::cos(pitch);
     forward.y = std::sin(pitch);
     forward.z = std::sin(yaw) * std::cos(pitch);
-    lightDir = glm::normalize(forward);
+    lightDir = Mesh3DLocalDirToWorld(lightIndex, forward);
 
     if (type == 0) { // Directional
       // Shader expects direction pointing TOWARD the light source
       posOrDir = -lightDir;
     } else { // Point or Spotlight
-      posOrDir = lightMesh->userPosition;
+      posOrDir = GetMesh3DWorldPosition(lightIndex);
     }
   } else {
     // Fallback global directional light
@@ -1349,10 +1355,13 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
   }
 
   // 3. Render all meshes in the scene
-  for (const auto &m : meshes3d) {
+  for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
+    const Mesh3D &m = meshes3d[mi];
     if (m.indexCount == 0)
       continue;
-    glm::mat4 model = m.ComputeModel();
+    if (!drawMarkers && (m.isLight || m.isCamera))
+      continue;
+    glm::mat4 model = GetMesh3DWorldModel(mi);
     glm::mat4 mvp = viewProj * model;
 
     struct PC {
@@ -2180,14 +2189,125 @@ void SceneRenderer::UpdateCamera3D(const ViewportInput &in) {
 // Per-mesh transform composition
 // ---------------------------------------------------------------------------
 
+glm::mat4 SceneRenderer::Mesh3D::ComputeLocal() const {
+  return ilmeee::ComposeTRS(userPosition, userRotation, userScale);
+}
+
 glm::mat4 SceneRenderer::Mesh3D::ComputeModel() const {
-  glm::mat4 M(1.0f);
-  M = glm::translate(M, userPosition);
-  M = glm::rotate(M, glm::radians(userRotation.z), glm::vec3(0, 0, 1));
-  M = glm::rotate(M, glm::radians(userRotation.y), glm::vec3(0, 1, 0));
-  M = glm::rotate(M, glm::radians(userRotation.x), glm::vec3(1, 0, 0));
-  M = glm::scale(M, userScale);
-  return M * autoFit;
+  return ComputeLocal() * autoFit;
+}
+
+// ---------------------------------------------------------------------------
+// Scene hierarchy. Parent links are indices into meshes3d; every walk up the
+// chain is bounded by the mesh count so a corrupt link can never hang a frame.
+// autoFit is per-mesh normalisation and deliberately not inherited.
+// ---------------------------------------------------------------------------
+
+int SceneRenderer::GetMesh3DParent(size_t i) const {
+  return i < meshes3d.size() ? meshes3d[i].parent : -1;
+}
+
+bool SceneRenderer::IsMesh3DInSubtree(size_t i, size_t ancestor) const {
+  size_t guard = meshes3d.size();
+  int cur = (int)i;
+  while (cur >= 0 && (size_t)cur < meshes3d.size() && guard-- > 0) {
+    if ((size_t)cur == ancestor)
+      return true;
+    cur = meshes3d[cur].parent;
+  }
+  return false;
+}
+
+glm::mat4 SceneRenderer::GetMesh3DWorldTRS(size_t i) const {
+  if (i >= meshes3d.size())
+    return glm::mat4(1.0f);
+  glm::mat4 M = meshes3d[i].ComputeLocal();
+  size_t guard = meshes3d.size();
+  int p = meshes3d[i].parent;
+  while (p >= 0 && (size_t)p < meshes3d.size() && guard-- > 0) {
+    M = meshes3d[p].ComputeLocal() * M;
+    p = meshes3d[p].parent;
+  }
+  return M;
+}
+
+glm::mat4 SceneRenderer::GetMesh3DWorldModel(size_t i) const {
+  if (i >= meshes3d.size())
+    return glm::mat4(1.0f);
+  return GetMesh3DWorldTRS(i) * meshes3d[i].autoFit;
+}
+
+glm::vec3 SceneRenderer::GetMesh3DWorldPosition(size_t i) const {
+  return glm::vec3(GetMesh3DWorldTRS(i)[3]);
+}
+
+glm::vec3 SceneRenderer::Mesh3DLocalDirToWorld(size_t i,
+                                               const glm::vec3 &localDir) const {
+  if (i >= meshes3d.size() || meshes3d[i].parent < 0)
+    return glm::normalize(localDir);
+  // Parents' rotation only: normalising the basis strips their scale, which
+  // would otherwise bend directions under non-uniform scale.
+  glm::mat4 P = GetMesh3DWorldTRS((size_t)meshes3d[i].parent);
+  glm::mat3 R(glm::normalize(glm::vec3(P[0])), glm::normalize(glm::vec3(P[1])),
+              glm::normalize(glm::vec3(P[2])));
+  return glm::normalize(R * localDir);
+}
+
+bool SceneRenderer::SetMesh3DParent(size_t child, int parent, bool keepWorld) {
+  if (child >= meshes3d.size() || parent >= (int)meshes3d.size())
+    return false;
+  if (parent >= 0 && IsMesh3DInSubtree((size_t)parent, child))
+    return false; // self, or one of its own descendants: would be a cycle
+  if (parent < 0)
+    parent = -1;
+  Mesh3D &m = meshes3d[child];
+  if (m.parent == parent)
+    return true;
+
+  if (keepWorld) {
+    glm::mat4 world = GetMesh3DWorldTRS(child);
+    glm::mat4 local = parent >= 0
+                          ? glm::inverse(GetMesh3DWorldTRS((size_t)parent)) *
+                                world
+                          : world;
+    ilmeee::DecomposeTRS(local, m.userPosition, m.userRotation, m.userScale);
+  }
+  m.parent = parent;
+  return true;
+}
+
+size_t SceneRenderer::RemoveMesh3D(size_t i) {
+  if (i >= meshes3d.size())
+    return 0;
+
+  // old index -> new index, -1 for everything in the removed subtree
+  std::vector<int> remap(meshes3d.size(), -1);
+  std::vector<bool> doomed(meshes3d.size(), false);
+  int next = 0;
+  for (size_t k = 0; k < meshes3d.size(); ++k) {
+    doomed[k] = IsMesh3DInSubtree(k, i);
+    if (!doomed[k])
+      remap[k] = next++;
+  }
+
+  // The GPU may still be reading these buffers from the last frame.
+  if (device != VK_NULL_HANDLE)
+    vkDeviceWaitIdle(device);
+
+  std::vector<Mesh3D> kept;
+  kept.reserve((size_t)next);
+  for (size_t k = 0; k < meshes3d.size(); ++k) {
+    if (doomed[k]) {
+      DestroyMesh(meshes3d[k]);
+      continue;
+    }
+    Mesh3D m = std::move(meshes3d[k]);
+    m.parent = m.parent >= 0 ? remap[(size_t)m.parent] : -1;
+    kept.push_back(std::move(m));
+  }
+  size_t removed = meshes3d.size() - kept.size();
+  meshes3d = std::move(kept);
+  return removed;
 }
 
 glm::vec3 SceneRenderer::GetMesh3DPosition(size_t i) const {
@@ -2242,12 +2362,14 @@ void SceneRenderer::SetMesh3DDebugSource(size_t i, const char *file, int line) {
   meshes3d[i].debugSrcFile = file ? file : "";
   meshes3d[i].debugSrcLine = line;
 }
+
 const std::string &SceneRenderer::GetMesh3DDebugSrcFile(size_t i) const {
   static const std::string empty;
   if (i >= meshes3d.size())
     return empty;
   return meshes3d[i].debugSrcFile;
 }
+
 int SceneRenderer::GetMesh3DDebugSrcLine(size_t i) const {
   if (i >= meshes3d.size())
     return 0;
@@ -2261,6 +2383,7 @@ int SceneRenderer::GetMesh3DDebugSrcLine(size_t i) const {
 uint32_t SceneRenderer::GetMesh3DSubmeshCount(size_t i) const {
   return i < meshes3d.size() ? (uint32_t)meshes3d[i].submeshes.size() : 0;
 }
+
 const std::string &SceneRenderer::GetMesh3DSubmeshName(size_t i,
                                                        uint32_t sub) const {
   static const std::string empty;
@@ -2268,6 +2391,7 @@ const std::string &SceneRenderer::GetMesh3DSubmeshName(size_t i,
     return empty;
   return meshes3d[i].submeshes[sub].name;
 }
+
 const std::string &SceneRenderer::GetMesh3DSubmeshTexture(size_t i,
                                                           uint32_t sub) const {
   static const std::string empty;
@@ -2275,6 +2399,7 @@ const std::string &SceneRenderer::GetMesh3DSubmeshTexture(size_t i,
     return empty;
   return meshes3d[i].submeshes[sub].texturePath;
 }
+
 glm::vec3 SceneRenderer::GetMesh3DSubmeshDiffuse(size_t i, uint32_t sub) const {
   if (i >= meshes3d.size() || sub >= meshes3d[i].submeshes.size())
     return glm::vec3(1.0f);
@@ -2382,7 +2507,7 @@ bool SceneRenderer::PickMesh3DSurface(float pxX, float pxY, int &outMeshIndex,
     const Mesh3D &m = meshes3d[mi];
     if (m.cpuPositions.empty() || m.cpuIndices.empty())
       continue;
-    glm::mat4 model = m.ComputeModel();
+    glm::mat4 model = GetMesh3DWorldModel(mi);
     for (size_t i = 0; i + 2 < m.cpuIndices.size(); i += 3) {
       uint32_t ia = m.cpuIndices[i + 0];
       uint32_t ib = m.cpuIndices[i + 1];
@@ -2429,7 +2554,7 @@ void SceneRenderer::DragMesh3DScreen(size_t i, float dxPx, float dyPx,
   glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
   glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-  glm::vec3 toObj = meshes3d[i].userPosition - camera3d.position;
+  glm::vec3 toObj = GetMesh3DWorldPosition(i) - camera3d.position;
   float depth = std::max(0.1f, glm::dot(toObj, forward));
 
   // World units per pixel at the object's depth: vertical FOV maps the
@@ -2439,6 +2564,11 @@ void SceneRenderer::DragMesh3DScreen(size_t i, float dxPx, float dyPx,
                         (float)viewportHeight;
 
   glm::vec3 move = right * (dxPx * worldPerPixel) - up * (dyPx * worldPerPixel);
+  // userPosition is in the parent's space: bring the world-space move there.
+  if (meshes3d[i].parent >= 0)
+    move = glm::vec3(
+        glm::inverse(GetMesh3DWorldTRS((size_t)meshes3d[i].parent)) *
+        glm::vec4(move, 0.0f));
   meshes3d[i].userPosition += move;
 }
 
@@ -3021,6 +3151,7 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     EditorEntitySnapshot entity;
     entity.name = mesh.displayName;
     entity.path = mesh.path;
+    entity.parent = mesh.parent;
     entity.position = mesh.userPosition;
     entity.rotation = mesh.userRotation;
     entity.scale = mesh.userScale;
@@ -3085,8 +3216,12 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
 
   ClearMeshes3D();
   bool allLoaded = true;
+  // snapshot index -> mesh index; an entity that fails to load shifts every
+  // later one, so parent links are resolved through this afterwards.
+  std::vector<int> loadedAs(snapshot.entities.size(), -1);
 
-  for (const EditorEntitySnapshot &entity : snapshot.entities) {
+  for (size_t si = 0; si < snapshot.entities.size(); ++si) {
+    const EditorEntitySnapshot &entity = snapshot.entities[si];
     bool loaded = false;
     if (entity.isLight) {
       loaded = LoadLight(entity.name, entity.lightType, entity.lightColor,
@@ -3126,6 +3261,7 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     }
 
     const size_t index = meshes3d.size() - 1;
+    loadedAs[si] = (int)index;
     // External loaders derive a display name from the filename. The editor
     // snapshot must win so undo/redo also preserves the hierarchy label.
     meshes3d[index].displayName = entity.name;
@@ -3158,6 +3294,15 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
       else if (!BindMesh3DSubmeshTexture(index, sub, texture))
         allLoaded = false;
     }
+  }
+
+  // Local transforms were restored as-is, so link without keepWorld. A child
+  // whose parent failed to load becomes a root rather than vanishing.
+  for (size_t si = 0; si < snapshot.entities.size(); ++si) {
+    int p = snapshot.entities[si].parent;
+    if (loadedAs[si] >= 0 && p >= 0 && (size_t)p < loadedAs.size() &&
+        loadedAs[(size_t)p] >= 0)
+      SetMesh3DParent((size_t)loadedAs[si], loadedAs[(size_t)p], false);
   }
 
   return allLoaded;
@@ -3419,16 +3564,19 @@ bool SceneRenderer::HasPlayerCamera() const {
 bool SceneRenderer::ComputePlayerCameraMatrices(float aspect, glm::mat4 &view,
                                                 glm::mat4 &proj) const {
   const Mesh3D *cam = nullptr;
-  for (const auto &m : meshes3d)
-    if (m.isCamera) {
-      cam = &m;
+  size_t camIndex = 0;
+  for (size_t i = 0; i < meshes3d.size(); ++i)
+    if (meshes3d[i].isCamera) {
+      cam = &meshes3d[i];
+      camIndex = i;
       break;
     }
   if (!cam)
     return false;
 
-  glm::vec3 pos = cam->userPosition;
-  glm::vec3 fwd = ForwardFromEuler(cam->userRotation);
+  glm::vec3 pos = GetMesh3DWorldPosition(camIndex);
+  glm::vec3 fwd =
+      Mesh3DLocalDirToWorld(camIndex, ForwardFromEuler(cam->userRotation));
   glm::vec3 up(0.0f, 1.0f, 0.0f);
   if (std::fabs(glm::dot(fwd, up)) > 0.999f)
     up = glm::vec3(0.0f, 0.0f, 1.0f);
@@ -3606,10 +3754,11 @@ void SceneRenderer::DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
 
   const float gizAspect = (float)previewWidth / (float)previewHeight;
 
-  for (const auto &m : meshes3d) {
+  for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
+    const Mesh3D &m = meshes3d[mi];
     if (m.isCamera) {
-      glm::vec3 pos = m.userPosition;
-      glm::vec3 fwd = ForwardFromEuler(m.userRotation);
+      glm::vec3 pos = GetMesh3DWorldPosition(mi);
+      glm::vec3 fwd = Mesh3DLocalDirToWorld(mi, ForwardFromEuler(m.userRotation));
       glm::vec3 right, up;
       basis(fwd, right, up);
       glm::vec3 col(0.30f, 0.85f, 0.95f); // cyan
@@ -3659,8 +3808,8 @@ void SceneRenderer::DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
       }
     } else if (m.isLight && m.lightType == 0) {
       // Directional light: dashed ray + small arrowhead along its direction.
-      glm::vec3 pos = m.userPosition;
-      glm::vec3 fwd = ForwardFromEuler(m.userRotation);
+      glm::vec3 pos = GetMesh3DWorldPosition(mi);
+      glm::vec3 fwd = Mesh3DLocalDirToWorld(mi, ForwardFromEuler(m.userRotation));
       glm::vec3 right, up;
       basis(fwd, right, up);
       glm::vec3 col = m.lightColor;
@@ -3727,16 +3876,177 @@ void SceneRenderer::DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
 // Shared 3D world recording for both the editor view and the player-camera
 // preview. Sprites and the 2D overlay are editor-only and handled elsewhere.
 void SceneRenderer::RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
-                                const glm::mat4 &proj3d, bool drawGizmos) {
+                                const glm::mat4 &proj3d, WorldView viewKind) {
+  const bool editor = viewKind == WorldView::Editor;
   glm::mat4 vp3d = proj3d * view3d;
-  if (sunVisible && sun.pipeline != VK_NULL_HANDLE)
+  if (editor && sunVisible && sun.pipeline != VK_NULL_HANDLE)
     DrawSun(cmd, vp3d);
-  if (grid3dVisible && grid3d.pipeline != VK_NULL_HANDLE)
+  if (editor && grid3dVisible && grid3d.pipeline != VK_NULL_HANDLE)
     DrawGrid3D(cmd, view3d, proj3d);
   if (!meshes3d.empty() && meshPipeline != VK_NULL_HANDLE)
-    DrawMeshes(cmd, vp3d);
-  if (drawGizmos && gizmoVisible && gizmoPipeline != VK_NULL_HANDLE)
+    DrawMeshes(cmd, vp3d, /*drawMarkers=*/editor);
+  if (editor && gizmoVisible && gizmoPipeline != VK_NULL_HANDLE)
     DrawGizmos(cmd, vp3d);
+}
+
+void SceneRenderer::SubmitOffscreenPass(
+    const Offscreen &target, int w, int h,
+    const std::function<void(VkCommandBuffer)> &record) {
+  VkCommandBufferAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocInfo.commandPool = commandPool;
+  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocInfo.commandBufferCount = 1;
+  VkCommandBuffer cmd;
+  if (vkAllocateCommandBuffers(device, &allocInfo, &cmd) != VK_SUCCESS)
+    return;
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(cmd, &beginInfo);
+
+  VkRenderPassBeginInfo rp{};
+  rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rp.renderPass = target.renderPass;
+  rp.framebuffer = target.framebuffer;
+  rp.renderArea.offset = {0, 0};
+  rp.renderArea.extent = {(uint32_t)w, (uint32_t)h};
+  VkClearValue clears[2];
+  clears[0].color = {{bgColor.x, bgColor.y, bgColor.z, bgColor.w}};
+  clears[1].depthStencil = {1.0f, 0};
+  rp.clearValueCount = 2;
+  rp.pClearValues = clears;
+  vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+  VkViewport vpRect{};
+  vpRect.width = (float)w;
+  vpRect.height = (float)h;
+  vpRect.maxDepth = 1.0f;
+  vkCmdSetViewport(cmd, 0, 1, &vpRect);
+  VkRect2D sc{};
+  sc.extent = {(uint32_t)w, (uint32_t)h};
+  vkCmdSetScissor(cmd, 0, 1, &sc);
+
+  record(cmd);
+
+  vkCmdEndRenderPass(cmd);
+  vkEndCommandBuffer(cmd);
+
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &cmd;
+  vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+  vkQueueWaitIdle(graphicsQueue);
+  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+}
+
+bool SceneRenderer::RenderGameView() {
+  if (device == VK_NULL_HANDLE || offscreen.framebuffer == VK_NULL_HANDLE ||
+      width <= 0 || height <= 0)
+    return false;
+  glm::mat4 view, proj;
+  if (!ComputePlayerCameraMatrices((float)width / (float)height, view, proj))
+    return false;
+  SubmitOffscreenPass(offscreen, width, height, [&](VkCommandBuffer cmd) {
+    RecordWorld(cmd, view, proj, WorldView::Game);
+  });
+  return true;
+}
+
+bool SceneRenderer::ReadbackViewport(std::vector<uint8_t> &rgba,
+                                     int &outWidth, int &outHeight) {
+  if (device == VK_NULL_HANDLE || offscreen.image == VK_NULL_HANDLE ||
+      width <= 0 || height <= 0)
+    return false;
+  const VkDeviceSize size = (VkDeviceSize)width * (VkDeviceSize)height * 4;
+
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  VkBufferCreateInfo bi{};
+  bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bi.size = size;
+  bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if (vkCreateBuffer(device, &bi, nullptr, &buffer) != VK_SUCCESS)
+    return false;
+  VkMemoryRequirements mr;
+  vkGetBufferMemoryRequirements(device, buffer, &mr);
+  VkMemoryAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  ai.allocationSize = mr.size;
+  ai.memoryTypeIndex =
+      findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  if (vkAllocateMemory(device, &ai, nullptr, &memory) != VK_SUCCESS) {
+    vkDestroyBuffer(device, buffer, nullptr);
+    return false;
+  }
+  vkBindBufferMemory(device, buffer, memory, 0);
+
+  VkCommandBufferAllocateInfo alloc{};
+  alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  alloc.commandPool = commandPool;
+  alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc.commandBufferCount = 1;
+  VkCommandBuffer cmd;
+  vkAllocateCommandBuffers(device, &alloc, &cmd);
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(cmd, &begin);
+
+  // The render pass leaves the image SHADER_READ_ONLY; borrow it as a copy
+  // source and hand it back in the same layout.
+  VkImageMemoryBarrier toSrc{};
+  toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  toSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  toSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  toSrc.image = offscreen.image;
+  toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &toSrc);
+
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {(uint32_t)width, (uint32_t)height, 1};
+  vkCmdCopyImageToBuffer(cmd, offscreen.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1,
+                         &region);
+
+  VkImageMemoryBarrier back = toSrc;
+  back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  back.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  back.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &back);
+
+  vkEndCommandBuffer(cmd);
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &cmd;
+  vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+  vkQueueWaitIdle(graphicsQueue);
+  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+
+  void *mapped = nullptr;
+  vkMapMemory(device, memory, 0, size, 0, &mapped);
+  rgba.assign((const uint8_t *)mapped, (const uint8_t *)mapped + size);
+  vkUnmapMemory(device, memory);
+  vkDestroyBuffer(device, buffer, nullptr);
+  vkFreeMemory(device, memory, nullptr);
+  outWidth = width;
+  outHeight = height;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -3925,59 +4235,11 @@ void SceneRenderer::RenderPlayerCameraPreview() {
   glm::mat4 view, proj;
   if (!ComputePlayerCameraMatrices(aspect, view, proj))
     return;
-
-  VkCommandBufferAllocateInfo allocInfo{};
-  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  allocInfo.commandPool = commandPool;
-  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  allocInfo.commandBufferCount = 1;
-  VkCommandBuffer cmd;
-  if (vkAllocateCommandBuffers(device, &allocInfo, &cmd) != VK_SUCCESS)
-    return;
-
-  VkCommandBufferBeginInfo beginInfo{};
-  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  vkBeginCommandBuffer(cmd, &beginInfo);
-
-  VkRenderPassBeginInfo rp{};
-  rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-  rp.renderPass = preview.renderPass;
-  rp.framebuffer = preview.framebuffer;
-  rp.renderArea.offset = {0, 0};
-  rp.renderArea.extent = {(uint32_t)previewWidth, (uint32_t)previewHeight};
-  VkClearValue clears[2];
-  clears[0].color = {{bgColor.x, bgColor.y, bgColor.z, bgColor.w}};
-  clears[1].depthStencil = {1.0f, 0};
-  rp.clearValueCount = 2;
-  rp.pClearValues = clears;
-  vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
-
-  VkViewport vpRect{};
-  vpRect.x = 0.0f;
-  vpRect.y = 0.0f;
-  vpRect.width = (float)previewWidth;
-  vpRect.height = (float)previewHeight;
-  vpRect.minDepth = 0.0f;
-  vpRect.maxDepth = 1.0f;
-  vkCmdSetViewport(cmd, 0, 1, &vpRect);
-  VkRect2D sc{};
-  sc.offset = {0, 0};
-  sc.extent = {(uint32_t)previewWidth, (uint32_t)previewHeight};
-  vkCmdSetScissor(cmd, 0, 1, &sc);
-
-  RecordWorld(cmd, view, proj, false);
-
-  vkCmdEndRenderPass(cmd);
-  vkEndCommandBuffer(cmd);
-
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &cmd;
-  vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-  vkQueueWaitIdle(graphicsQueue);
-  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+  // Game view: the preview shows exactly what a built game will.
+  SubmitOffscreenPass(preview, previewWidth, previewHeight,
+                      [&](VkCommandBuffer cmd) {
+                        RecordWorld(cmd, view, proj, WorldView::Game);
+                      });
 }
 
 VkDescriptorSet SceneRenderer::GetPlayerCameraPreviewDescriptor() const {

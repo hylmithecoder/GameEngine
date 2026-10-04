@@ -1,7 +1,6 @@
 #include "../../../include/ui/assets.hpp"
 
 // Untuk memuat gambar
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 // Fungsi untuk memuat tekstur dari file gambar
 bool Assets::LoadTextureFromFile(const char *filename,

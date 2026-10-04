@@ -1,15 +1,101 @@
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/InspectMode.hpp"
+#include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
+#include "../../../include/core_engine/net/Protocol.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <nfd.h>
+
+static const char *kSpawnNames[] = {"Cube", "Sphere", "Plane", "Light",
+                                    "Camera"};
+
+int MainWindow::SelectedMeshIndex() const {
+  if (!sceneRenderer || objectName[0] == '\0')
+    return -1;
+  for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
+    if (sceneRenderer->GetMesh3DName(i) == objectName)
+      return (int)i;
+  return -1;
+}
+
+bool MainWindow::SceneStructureLocked() const { return !builder.IsStopped(); }
+
+bool MainWindow::DeletingRemovesLastCamera(size_t index) const {
+  if (!sceneRenderer)
+    return false;
+  for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
+    if (sceneRenderer->IsMesh3DCamera(i) &&
+        !sceneRenderer->IsMesh3DInSubtree(i, index))
+      return false; // a camera survives
+  return true;
+}
+
+int MainWindow::SpawnSceneObject(int kind, int parent,
+                                 const glm::vec3 &localPosition) {
+  if (!sceneRenderer || kind < 0 || kind > 4 || SceneStructureLocked())
+    return -1;
+  const char *base = kSpawnNames[kind];
+  // Auto-number so repeated adds don't collide by name (selection is by name).
+  std::string name = base;
+  auto taken = [&](const std::string &s) {
+    for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
+      if (sceneRenderer->GetMesh3DName(i) == s)
+        return true;
+    return false;
+  };
+  for (int n = 1; taken(name); ++n)
+    name = std::string(base) + " " + std::to_string(n);
+
+  bool ok = false;
+  if (kind == 0)
+    ok = sceneRenderer->LoadCube(name);
+  else if (kind == 1)
+    ok = sceneRenderer->LoadSphere(name);
+  else if (kind == 2)
+    ok = sceneRenderer->LoadPlane(name);
+  else if (kind == 3)
+    ok = sceneRenderer->LoadLight(name, 0, glm::vec3(1.0f, 0.96f, 0.88f), 1.0f,
+                                  10.0f, 30.0f, 1.05f);
+  else
+    ok = sceneRenderer->LoadCamera(name);
+  if (!ok)
+    return -1;
+
+  size_t idx = sceneRenderer->GetMesh3DCount() - 1;
+  sceneRenderer->SetMesh3DTransform(idx, localPosition, glm::vec3(0.0f),
+                                    glm::vec3(1.0f));
+  if (parent >= 0)
+    sceneRenderer->SetMesh3DParent(idx, parent, false);
+  // Record where this object was spawned so Inspect Mode (F2) can answer
+  // "which line created this thing?" on hover.
+  sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
+  std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
+  RecordEditorHistory();
+  return (int)idx;
+}
+
+void MainWindow::DeleteSceneObject(size_t index) {
+  if (!sceneRenderer || index >= sceneRenderer->GetMesh3DCount() ||
+      SceneStructureLocked() || DeletingRemovesLastCamera(index))
+    return;
+  std::string name = sceneRenderer->GetMesh3DName(index);
+  size_t removed = sceneRenderer->RemoveMesh3D(index);
+  objectName[0] = '\0';
+  selectedSurface = -1;
+  PushMessage("Deleted '" + name + "'" +
+              (removed > 1 ? " and " + std::to_string(removed - 1) +
+                                 " child object(s)"
+                           : std::string()));
+  RecordEditorHistory();
+}
 
 void MainWindow::RenderHierarchyWindow() {
   Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
@@ -23,46 +109,163 @@ void MainWindow::RenderHierarchyWindow() {
       RecordEditorHistory();
   }
 
-  if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (sceneRenderer) {
-      for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
-        const std::string &meshName = sceneRenderer->GetMesh3DName(i);
-        bool isCamera = sceneRenderer->IsMesh3DCamera(i);
-        bool isLight = sceneRenderer->IsMesh3DLight(i);
+  // Edits are queued and applied after the tree is drawn: they renumber the
+  // meshes the recursion below is walking.
+  enum class Op { None, Spawn, Delete, Reparent };
+  Op op = Op::None;
+  int opIndex = -1, opParent = -1, opKind = 0;
+  const bool locked = SceneStructureLocked();
 
-        // Pick SVG icon and label prefix
-        std::string svgPath = "assets/icons/svg/box.svg";
-        std::string prefix = "";
-        if (isCamera) {
-          svgPath = "assets/icons/svg/camera.svg";
-          prefix = "[Cam] ";
-        } else if (isLight) {
-          svgPath = "assets/icons/svg/flash.svg";
-          prefix = "[Light] ";
+  auto createMenu = [&](int parent) {
+    for (int k = 0; k < 5; ++k)
+      if (MenuItem(kSpawnNames[k], nullptr, false, !locked)) {
+        op = Op::Spawn;
+        opKind = k;
+        opParent = parent;
+      }
+  };
+
+  if (sceneRenderer) {
+    const size_t count = sceneRenderer->GetMesh3DCount();
+    std::vector<std::vector<size_t>> children(count);
+    std::vector<size_t> roots;
+    for (size_t i = 0; i < count; ++i) {
+      int p = sceneRenderer->GetMesh3DParent(i);
+      if (p >= 0 && (size_t)p < count)
+        children[(size_t)p].push_back(i);
+      else
+        roots.push_back(i);
+    }
+
+    // Accept a hierarchy entry dropped on the current item.
+    auto dropTarget = [&](int newParent) {
+      if (!BeginDragDropTarget())
+        return;
+      if (const ImGuiPayload *pl = AcceptDragDropPayload("ILMEEE_MESH")) {
+        op = Op::Reparent;
+        opIndex = *(const int *)pl->Data;
+        opParent = newParent;
+      }
+      EndDragDropTarget();
+    };
+
+    std::function<void(size_t)> drawNode = [&](size_t i) {
+      const std::string &meshName = sceneRenderer->GetMesh3DName(i);
+      bool isCamera = sceneRenderer->IsMesh3DCamera(i);
+      bool isLight = sceneRenderer->IsMesh3DLight(i);
+
+      // Pick SVG icon and label prefix
+      std::string svgPath = "assets/icons/svg/box.svg";
+      std::string prefix = "";
+      if (isCamera) {
+        svgPath = "assets/icons/svg/camera.svg";
+        prefix = "[Cam] ";
+      } else if (isLight) {
+        svgPath = "assets/icons/svg/flash.svg";
+        prefix = "[Light] ";
+      }
+
+      // Draw icon
+      svgIcons.DrawIcon(svgPath, 16);
+
+      ImGuiTreeNodeFlags flags = nodeFlags;
+      if (children[i].empty())
+        flags |= ImGuiTreeNodeFlags_Leaf;
+      if (meshName == objectName)
+        flags |= ImGuiTreeNodeFlags_Selected;
+
+      PushID((int)i);
+      std::string label = prefix + meshName;
+      // New children should be visible without hunting for the arrow.
+      SetNextItemOpen(true, ImGuiCond_Once);
+      bool open = TreeNodeEx(label.c_str(), flags);
+      DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
+      if (IsItemClicked(ImGuiMouseButton_Left) ||
+          IsItemClicked(ImGuiMouseButton_Right))
+        std::snprintf(objectName, sizeof(objectName), "%s", meshName.c_str());
+
+      if (!locked && BeginDragDropSource()) {
+        int payload = (int)i;
+        SetDragDropPayload("ILMEEE_MESH", &payload, sizeof(payload));
+        Text("%s", label.c_str());
+        EndDragDropSource();
+      }
+      dropTarget((int)i);
+
+      if (BeginPopupContextItem("HierarchyItemMenu")) {
+        if (BeginMenu("Create Child", !locked)) {
+          createMenu((int)i);
+          EndMenu();
         }
-
-        // Draw icon
-        svgIcons.DrawIcon(svgPath, 16);
-
-        ImGuiTreeNodeFlags leafFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf;
-        bool selected = (meshName == objectName);
-        if (selected)
-          leafFlags |= ImGuiTreeNodeFlags_Selected;
-
-        PushID((int)i);
-        std::string label = prefix + meshName;
-        if (TreeNodeEx(label.c_str(), leafFlags)) {
-          DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
-          if (IsItemClicked()) {
-            std::snprintf(objectName, sizeof(objectName), "%s",
-                          meshName.c_str());
-          }
-          TreePop();
+        if (sceneRenderer->GetMesh3DParent(i) >= 0 &&
+            MenuItem("Unparent", nullptr, false, !locked)) {
+          op = Op::Reparent;
+          opIndex = (int)i;
+          opParent = -1;
         }
-        PopID();
+        Separator();
+        bool lastCam = DeletingRemovesLastCamera(i);
+        if (MenuItem("Delete", "Del", false, !locked && !lastCam)) {
+          op = Op::Delete;
+          opIndex = (int)i;
+        }
+        if (lastCam && IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+          SetTooltip("The scene needs at least one camera");
+        if (locked)
+          TextDisabled("Stop the game to edit the scene");
+        EndPopup();
+      }
+
+      if (open) {
+        for (size_t c : children[i])
+          drawNode(c);
+        TreePop();
+      }
+      PopID();
+    };
+
+    if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
+      dropTarget(-1); // dropping on "Scene" moves the object to the root
+      for (size_t r : roots)
+        drawNode(r);
+      TreePop();
+    }
+
+    // Right-click on empty space: create at the scene root.
+    if (BeginPopupContextWindow("HierarchyEmptyMenu",
+                                ImGuiPopupFlags_MouseButtonRight |
+                                    ImGuiPopupFlags_NoOpenOverItems)) {
+      if (BeginMenu("Create", !locked)) {
+        createMenu(-1);
+        EndMenu();
+      }
+      EndPopup();
+    }
+
+    if (op == Op::None && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
+      int sel = SelectedMeshIndex();
+      if (sel >= 0) {
+        op = Op::Delete;
+        opIndex = sel;
       }
     }
-    TreePop();
+  }
+
+  switch (op) {
+  case Op::Spawn:
+    SpawnSceneObject(opKind, opParent, glm::vec3(0.0f));
+    break;
+  case Op::Delete:
+    DeleteSceneObject((size_t)opIndex);
+    break;
+  case Op::Reparent:
+    // Keep the object where it is on screen; refuses cycles on its own.
+    if (sceneRenderer->SetMesh3DParent((size_t)opIndex, opParent, true))
+      RecordEditorHistory();
+    break;
+  case Op::None:
+    break;
   }
   End();
 }
@@ -889,70 +1092,12 @@ void MainWindow::RenderSceneWindow() {
           ::Log("Loaded scene " + mainScene.string(), Debug::LogLevel::SUCCESS);
         }
 
-        for (const auto &e : scene.entities) {
-          bool ok = false;
-          switch (e.kind) {
-          case ilmeee::PrimitiveKind::Cube:
-            ok = sceneRenderer->LoadCube(e.name);
-            break;
-          case ilmeee::PrimitiveKind::Sphere:
-            ok = sceneRenderer->LoadSphere(e.name);
-            break;
-          case ilmeee::PrimitiveKind::Plane:
-            ok = sceneRenderer->LoadPlane(e.name);
-            break;
-          case ilmeee::PrimitiveKind::ExternalObj: {
-            fs::path full = fs::path(activeProject) / e.externalPath;
-            std::string ext = full.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            // Auto-detect by extension: .pmx → PMX, .fbx → FBX, else OBJ.
-            if (ext == ".pmx")
-              ok = sceneRenderer->LoadPMXMesh(full.string());
-            else if (ext == ".fbx")
-              ok = sceneRenderer->LoadFbxMesh(full.string());
-            else
-              ok = sceneRenderer->LoadObjMesh(full.string());
-            break;
-          }
-          case ilmeee::PrimitiveKind::ExternalPmx: {
-            fs::path full = fs::path(activeProject) / e.externalPath;
-            ok = sceneRenderer->LoadPMXMesh(full.string());
-            break;
-          }
-          case ilmeee::PrimitiveKind::Light: {
-            ok = sceneRenderer->LoadLight(e.name, e.lightType, e.lightColor,
-                                          e.lightIntensity, e.lightRange,
-                                          e.lightSpotAngle, e.lightGamma);
-            break;
-          }
-          case ilmeee::PrimitiveKind::Camera: {
-            ok = sceneRenderer->LoadCamera(e.name, e.camProjection, e.camFov,
-                                           e.camOrthoSize, e.camNear, e.camFar);
-            break;
-          }
-          }
-          if (ok) {
-            size_t idx = sceneRenderer->GetMesh3DCount() - 1;
-            sceneRenderer->SetMesh3DTransform(idx, e.position, e.rotationEuler,
-                                              e.scale);
-            // Inspect Mode: every scene-bootstrap-spawned object remembers
-            // this loop so hover-to-source lands users on the deserializer.
-            sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
-            // Re-apply per-surface texture bindings saved in the scene.
-            // Paths stored relative to the project resolve against it;
-            // absolute paths (textures outside the project) load as-is.
-            for (const auto &st : e.surfaceTextures) {
-              if (st.texturePath.empty())
-                continue;
-              fs::path tp(st.texturePath);
-              std::string full = tp.is_absolute()
-                                     ? st.texturePath
-                                     : (fs::path(activeProject) / tp).string();
-              sceneRenderer->BindMesh3DSubmeshTexture(idx, st.surfaceIndex,
-                                                      full);
-            }
-          }
-        }
+        ilmeee::SceneLoadReport report =
+            ilmeee::InstantiateScene(*sceneRenderer, scene, activeProject);
+        if (report.failed > 0)
+          ::Log(std::to_string(report.failed) +
+                    " scene object(s) could not be loaded",
+                Debug::LogLevel::WARNING);
         s_loadedForProject = desired;
       }
 
@@ -1265,24 +1410,31 @@ void MainWindow::RenderSceneWindow() {
 
       // Right-click WITHOUT drag opens an "Add" menu and instances a
       // default object on the ground where the cursor was. RMB-drag is
-      // camera mouselook, so we snapshot the press position; ImGui only
-      // opens the context popup when the button is released without
-      // dragging past the threshold, which gives us click-vs-drag for
-      // free without stealing the orbit gesture.
+      // camera mouselook, so the menu must not open when the button comes
+      // up after a drag: BeginPopupContextItem cannot tell the two apart (it
+      // opens on any release over the item), so open it by hand, only when
+      // the press started here and the mouse barely moved while held.
       const ImVec2 imgMin = GetItemRectMin();
       static ImVec2 s_rmbAnchor(0.0f, 0.0f);
+      static bool s_rmbPressedHere = false;
       if (IsItemHovered() && IsMouseClicked(ImGuiMouseButton_Right)) {
         ImVec2 m = GetMousePos();
         s_rmbAnchor = ImVec2(m.x - imgMin.x, m.y - imgMin.y);
+        s_rmbPressedHere = true;
+      }
+      if (s_rmbPressedHere && IsMouseReleased(ImGuiMouseButton_Right)) {
+        s_rmbPressedHere = false;
+        const float t = GetIO().MouseDragThreshold;
+        if (IsItemHovered() &&
+            GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < t * t)
+          OpenPopup("SceneAddMenu");
       }
       PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f));
       PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 5.0f));
       PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 5.0f));
-      bool open = BeginPopupContextItem("SceneAddMenu",
-                                        ImGuiPopupFlags_MouseButtonRight);
-      if (open) {
-        if (BeginMenu("Add")) {
-          // 0 = Cube (default), 1 = Sphere, 2 = Plane
+      if (BeginPopup("SceneAddMenu")) {
+        const bool locked = SceneStructureLocked();
+        if (BeginMenu("Add", !locked)) {
           auto spawn = [&](int kind) {
             glm::vec3 world(0.0f);
             if (!sceneRenderer->ScreenToGround(s_rmbAnchor.x, s_rmbAnchor.y,
@@ -1300,62 +1452,32 @@ void MainWindow::RenderSceneWindow() {
               world.x = std::round(world.x);
               world.z = std::round(world.z);
             }
-            const char *base = (kind == 0)   ? "Cube"
-                               : (kind == 1) ? "Sphere"
-                               : (kind == 2) ? "Plane"
-                               : (kind == 3) ? "Light"
-                                             : "Camera";
-            // Auto-number so repeated adds don't collide by name.
-            std::string name = base;
-            auto taken = [&](const std::string &s) {
-              for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
-                if (sceneRenderer->GetMesh3DName(i) == s)
-                  return true;
-              return false;
-            };
-            for (int n = 1; taken(name); ++n)
-              name = std::string(base) + " " + std::to_string(n);
-
-            bool ok = false;
-            if (kind == 0)
-              ok = sceneRenderer->LoadCube(name);
-            else if (kind == 1)
-              ok = sceneRenderer->LoadSphere(name);
-            else if (kind == 2)
-              ok = sceneRenderer->LoadPlane(name);
-            else if (kind == 3)
-              ok = sceneRenderer->LoadLight(name, 0,
-                                            glm::vec3(1.0f, 0.96f, 0.88f), 1.0f,
-                                            10.0f, 30.0f, 1.05f);
-            else if (kind == 4)
-              ok = sceneRenderer->LoadCamera(name);
-
-            if (ok) {
-              size_t idx = sceneRenderer->GetMesh3DCount() - 1;
-              sceneRenderer->SetMesh3DTransform(idx, world, glm::vec3(0.0f),
-                                                glm::vec3(1.0f));
-              // Record where this object was spawned so Inspect Mode (F2)
-              // can answer "which line created this thing?" on hover.
-              sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
-              std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
-              RecordEditorHistory();
-            }
+            SpawnSceneObject(kind, -1, world);
           };
-          if (MenuItem("Cube"))
-            spawn(0);
-          if (MenuItem("Sphere"))
-            spawn(1);
-          if (MenuItem("Plane"))
-            spawn(2);
-          if (MenuItem("Light"))
-            spawn(3);
-          if (MenuItem("Camera"))
-            spawn(4);
+          for (int k = 0; k < 5; ++k)
+            if (MenuItem(kSpawnNames[k]))
+              spawn(k);
           EndMenu();
+        }
+        int sel = SelectedMeshIndex();
+        if (sel >= 0) {
+          Separator();
+          bool lastCam = DeletingRemovesLastCamera((size_t)sel);
+          std::string del = "Delete '" + std::string(objectName) + "'";
+          if (MenuItem(del.c_str(), "Del", false, !locked && !lastCam))
+            DeleteSceneObject((size_t)sel);
         }
         EndPopup();
       }
       PopStyleVar(3);
+
+      // Delete key while the viewport has focus removes the selection.
+      if (IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+          !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
+        int sel = SelectedMeshIndex();
+        if (sel >= 0)
+          DeleteSceneObject((size_t)sel);
+      }
     }
 
     // Render toolbar di atas viewport
@@ -1658,9 +1780,12 @@ void MainWindow::RenderConsoleWindow() {
     EndTabItem();
   }
 
-  if (BeginTabItem("Build")) {
+  const ImGuiTabItemFlags buildTabFlags =
+      focusBuildTab ? ImGuiTabItemFlags_SetSelected : 0;
+  focusBuildTab = false; // one-shot: a started build brings the tab forward
+  if (BeginTabItem("Build", nullptr, buildTabFlags)) {
     selectedTab = 2;
-    Text("Build output will be displayed here");
+    RenderBuildTab();
     EndTabItem();
   }
 
@@ -1682,7 +1807,7 @@ void MainWindow::RenderMenuBar() {
       }
       if (MenuItem("Load Scene", "Ctrl+O")) {
         // projectHandler.OpenScene();
-        networkManager->sendMessage("LoadScene");
+        RequestEngineSceneLoad();
       }
       if (MenuItem("Save", "Ctrl+S")) {
         Save3DScene();
@@ -1725,6 +1850,7 @@ void MainWindow::RenderMenuBar() {
       EndMenu();
     }
 
+    RenderBuildMenu();
     if (BeginMenu("Tools")) {
       if (MenuItem("Secondary Window", nullptr, &showSecondary)) {
       }
@@ -2025,6 +2151,31 @@ void MainWindow::RenderPlayMenu() {
   PopStyleVar(4);
 }
 
+void MainWindow::RequestEngineSceneLoad() {
+  using namespace ilmeee::net;
+  ConnectionId engine =
+      ipcBus ? ipcBus->PeerByRole(proto::kRoleEngine) : kInvalidConnection;
+  if (engine == kInvalidConnection) {
+    PushMessage("[IPC] Load Scene: engine is not connected");
+    return;
+  }
+  // The engine shows a file dialog, so the answer can take as long as the
+  // user does.
+  ipcBus->Request(
+      engine, proto::kSceneLoad, nlohmann::json::object(),
+      [this](const Response &r) {
+        if (r.ok)
+          PushMessage("[IPC] Engine loaded scene '" +
+                      r.payload.value("sceneName", std::string()) + "' (" +
+                      std::to_string(r.payload.value("objects", 0)) +
+                      " objects) from " +
+                      r.payload.value("path", std::string()));
+        else if (r.error != "cancelled")
+          PushMessage("[IPC] Load Scene failed: " + r.error);
+      },
+      std::chrono::minutes(30));
+}
+
 void MainWindow::PushMessage(const string &message) {
   lock_guard<mutex> lock(messagesMutex);
   messages.push_back(message);
@@ -2057,9 +2208,13 @@ void MainWindow::Save3DScene() {
   fs::path mainScene = scenesDir / "main.ilmeeescene";
 
   ilmeee::IlmeeeScene scene;
+  scene.backgroundColor = sceneRenderer->GetBackgroundColor();
   for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
     ilmeee::SceneEntity e;
     e.name = sceneRenderer->GetMesh3DName(i);
+    // Entities are written in mesh order, so the mesh index is the entity
+    // index and the parent link carries over unchanged.
+    e.parent = sceneRenderer->GetMesh3DParent(i);
     e.position = sceneRenderer->GetMesh3DPosition(i);
     e.rotationEuler = sceneRenderer->GetMesh3DRotation(i);
     e.scale = sceneRenderer->GetMesh3DScale(i);

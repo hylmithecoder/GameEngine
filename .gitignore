@@ -41,7 +41,10 @@
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
+# CMake-generated Makefiles live inside build dirs; the root Makefile is
+# hand-written project source and must stay tracked.
+build*/Makefile
+**/CMakeFiles/Makefile
 
 # OS generated files
 .DS_Store
@@ -61,3 +64,6 @@ references/
 
 .implementation/
 .roadmap/
+# build / distribution artifacts
+build-verify/
+build*/dist/

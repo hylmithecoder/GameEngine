@@ -9,48 +9,59 @@
 using namespace std;
 using namespace Debug;
 
-typedef string (*ReceivedMessages)();
-
+// Started by the editor (GameEngineSDL) as
+//   HandlerIlmeeeEngine --ipc-url ws://127.0.0.1:<port>/
+// with the session token in ILMEEE_IPC_TOKEN. Without --ipc-url it still runs,
+// just without an editor to talk to.
 int main(int argc, char* argv[]) {
-    // Initialize COM for modern UI effects
-    // CoInitialize(nullptr);
-    
+    using namespace ilmeee::net;
+
+    std::string ipcUrl;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == proto::kIpcUrlArg && i + 1 < argc)
+            ipcUrl = argv[++i];
+    }
+    std::string ipcToken;
+    if (const char *t = std::getenv(proto::kIpcTokenEnv)) {
+        ipcToken = t;
+        // Anything this process spawns has no business holding it.
+        unsetenv(proto::kIpcTokenEnv);
+    }
+
     LoadingWindow loadingWindow;
     LibraryManager libManager;
-    // DLLManager dllManager;
-    
-    if (!loadingWindow.Create()) {
 
+    if (!loadingWindow.Create()) {
         LibraryManager::ShowError("Failed to create loading window");
         return -1;
     }
-    
+
     loadingWindow.Show();
-    // loadingWindow.StartLoadingAnimation();
-    
+
     // Execute loading sequence
-    LaunchSequence sequence(loadingWindow, libManager);
+    LaunchSequence sequence(loadingWindow, libManager, ipcUrl, ipcToken);
     bool success = sequence.Execute();
-    
+
     loadingWindow.Hide();
-    
-    // if (!success) {
-    //     CoUninitialize();
-    //     return -1;
-    // }
-    
-    // Run the engine
+
+    if (!success) {
+        sequence.Shutdown();
+        return -1;
+    }
+
+    // Run the engine until it is stopped (engine.stop from the editor, or the
+    // editor going away).
     auto Run = libManager.GetFunction<EngineRunFunc>(libManager.GetEngineLib(), "EngineRun");
     auto Shutdown = libManager.GetFunction<EngineShutdownFunc>(libManager.GetEngineLib(), "EngineShutdown");
-    // This not working
-    // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(dllManager.GetEditorDLL(), "EditorRun");
-    SendCommandToEngineFunc SendCommand = libManager.GetFunction<SendCommandToEngineFunc>(libManager.GetEditorLib(), "SendCommandToEngine");
 
-    if (Run) {
+    if (Run && !sequence.StopRequested()) {
         cout << "Running engine..." << endl;
         Run();
     }
 
-    // CoUninitialize();
+    sequence.Shutdown();
+    if (Shutdown)
+        Shutdown();
     return 0;
 }

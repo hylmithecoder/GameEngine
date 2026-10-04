@@ -7,6 +7,59 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_definitions(__cpp_lib_constexpr_exceptions=0)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
+
+# ---------------------------------------------------------------------------
+# Layout and linker policy (shared by every target in this project)
+#
+#   build/bin        -> executables
+#   build/lib        -> shared libraries
+#   <prefix>/{bin,lib,assets,share}  -> staged tree (see `make bundle`)
+#
+# Binaries locate their sibling libraries through a relative RPATH ($ORIGIN),
+# never an absolute path, so the staged tree can be extracted anywhere on any
+# distro without LD_LIBRARY_PATH or a launcher wrapper.
+# ---------------------------------------------------------------------------
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+endif()
+
+# No prefix is forced here: `make` builds into build/, and `make bundle` stages
+# a self-contained tree that an installer script can drop anywhere (typically
+# /opt/ilmeeeengine). Override with -DCMAKE_INSTALL_PREFIX=... when you really
+# want a system install.
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# Keep the build tree runnable straight out of build/bin ...
+set(CMAKE_SKIP_BUILD_RPATH OFF)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
+set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib")
+# ... and make the installed tree relocatable.
+set(CMAKE_INSTALL_RPATH "$ORIGIN:$ORIGIN/../lib")
+# Deliberately OFF: appending the linker's search paths would bake absolute
+# host paths (nix store, /usr/lib) into the installed binaries and defeat the
+# whole point. The bundle ships those dependencies in lib/ instead.
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
+
+# The C++ runtime is folded into every binary rather than shipped as a .so:
+# libstdc++/libgcc are the one pair of dependencies that must never be older
+# than the code linking them, and a bundled copy would also shadow the host's
+# for anything the process dlopen()s (Mesa, the Vulkan ICD). Static here means
+# the runtime always matches the compiler that produced the binary, while
+# libc itself still comes from the host, as it must.
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_link_options($<$<NOT:$<CONFIG:Debug>>:-static-libstdc++>
+                     $<$<NOT:$<CONFIG:Debug>>:-static-libgcc>)
+endif()
+
+# Directory names inside the install prefix, reused by the install() rules below.
+set(ILMEEE_BIN_DIR    bin)
+set(ILMEEE_LIB_DIR    lib)
+set(ILMEEE_ASSET_DIR  assets)
+set(ILMEEE_SHARE_DIR  share/ilmeeeengine)
 # Set output directories specifically for library targets
 
 add_subdirectory(test)
@@ -112,6 +165,88 @@ find_package(glm REQUIRED)
 add_library(ufbx STATIC ${CMAKE_SOURCE_DIR}/vendor/ufbx/ufbx.c)
 target_include_directories(ufbx PUBLIC ${CMAKE_SOURCE_DIR}/vendor/ufbx)
 target_link_libraries(ufbx PUBLIC m)
+
+# stb_image — header-only; compiled once here so every target links the same
+# single definition instead of each TU trying to emit its own.
+add_library(stb_impl STATIC ${CMAKE_SOURCE_DIR}/vendor/stb_impl.c)
+target_include_directories(stb_impl PUBLIC ${STB_INCLUDE_DIRS})
+target_link_libraries(stb_impl PUBLIC m)
+
+# ilmeee_net — engine IPC message layer (envelope, MessageBus, transports).
+# Depends only on the vendored nlohmann/json so it can be linked into the
+# editor, the handler and the hub alike, and tested without a GPU.
+#
+# IXWebSocket (vendored, see vendor/ixwebsocket/VENDORED.txt) is built static
+# so it disappears into ilmeee_net instead of becoming one more .so to bundle.
+# BUILD_SHARED_LIBS is shadowed only for this subdirectory. No TLS/zlib: the
+# bus is loopback IPC and per-message deflate is disabled anyway.
+set(USE_TLS OFF CACHE BOOL "" FORCE)
+set(USE_ZLIB OFF CACHE BOOL "" FORCE)
+set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(vendor/ixwebsocket EXCLUDE_FROM_ALL)
+unset(BUILD_SHARED_LIBS)
+# Unmodified upstream code; its warnings (mostly zlib-off stubs) are not ours.
+target_compile_options(ixwebsocket PRIVATE -w)
+
+add_library(ilmeee_net STATIC
+    src/cpp/core_engine/net/Message.cpp
+    src/cpp/core_engine/net/MessageBus.cpp
+    src/cpp/core_engine/net/LoopbackTransport.cpp
+    src/cpp/core_engine/net/WsTransport.cpp
+)
+target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
+
+add_executable(TestNetProtocol test/net/TestNetProtocol.cpp)
+target_link_libraries(TestNetProtocol PRIVATE ilmeee_net)
+
+add_executable(TestWsTransport test/net/TestWsTransport.cpp)
+target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
+
+add_executable(TestTransformMath test/TestTransformMath.cpp)
+target_link_libraries(TestTransformMath PRIVATE glm::glm)
+
+add_executable(TestSceneFormat test/TestSceneFormat.cpp)
+target_link_libraries(TestSceneFormat PRIVATE glm::glm)
+
+add_executable(TestGameBuild test/TestGameBuild.cpp
+    src/cpp/core_engine/GameBuilder.cpp)
+target_link_libraries(TestGameBuild PRIVATE glm::glm)
+
+# IlmeeePlayer — the runtime a built game ships with. Only the engine pieces
+# that load and draw a scene: no editor UI, no IPC, no video.
+add_executable(IlmeeePlayer
+    src/cpp/player/PlayerMain.cpp
+    src/cpp/core_engine/SceneLoader.cpp
+    src/cpp/core_engine/SceneRenderer.cpp
+    src/cpp/core_engine/TextureManager.cpp
+    src/cpp/core_engine/PMXLoader.cpp
+    src/cpp/vulkan/VulkanBase.cpp
+    src/cpp/vulkan/VkTools.cpp
+    ${IMGUI_SOURCES}
+)
+target_include_directories(IlmeeePlayer PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    ${STB_INCLUDE_DIRS}
+)
+target_link_libraries(IlmeeePlayer PRIVATE
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    glm::glm
+    ufbx
+    ${GTK3_LIBRARIES}
+)
+
+# Spawns the real HandlerIlmeeeEngine; needs a display (run under xvfb-run).
+add_executable(TestEngineIpc test/net/TestEngineIpc.cpp)
+target_link_libraries(TestEngineIpc PRIVATE ilmeee_net)
+add_dependencies(TestEngineIpc HandlerIlmeeeEngine IlmeeeEditor IlmeeeEngine)
 
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -488,6 +623,7 @@ endif()
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    ilmeee_net
     PkgConfig::SDL3
     Vulkan::Vulkan
     KTX::ktx
@@ -552,6 +688,7 @@ target_link_libraries(IlmeeeHub PRIVATE
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE
+    ilmeee_net
     PkgConfig::SDL3
     Vulkan::Vulkan
     OpenGL::GL
@@ -559,3 +696,89 @@ target_link_libraries(IlmeeeEditor PRIVATE
     ${XCB_LIBRARIES}
     ${X11_LIBRARIES}
 )
+
+# ---------------------------------------------------------------------------
+# Consistent linking + installable tree (/opt/ilmeeeengine by default)
+# ---------------------------------------------------------------------------
+set(ILMEEE_RUNTIME_TARGETS
+    ${PROJECT_NAME}          # GameEngineSDL
+    IlmeeePlayer             # runtime copied into every built game
+    IlmeeeHub
+    HandlerIlmeeeEngine
+    ViewPort3D
+    TestBackground
+)
+set(ILMEEE_LIBRARY_TARGETS
+    IlmeeeEngine
+    IlmeeeEditor
+)
+
+# Every binary and library gets the same output layout and the same RPATH,
+# so anything in bin/ resolves anything in lib/ without env vars.
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS ILMEEE_LIBRARY_TARGETS)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+            BUILD_RPATH   "${CMAKE_BINARY_DIR}/lib"
+            INSTALL_RPATH "$ORIGIN:$ORIGIN/../lib"
+            INSTALL_RPATH_USE_LINK_PATH OFF
+            SKIP_BUILD_RPATH OFF
+            BUILD_WITH_INSTALL_RPATH OFF
+        )
+    endif()
+endforeach()
+
+# One definition of the vendored header-only helpers for everyone, plus the
+# system primitives every target needs. Keeping this in one place is what makes
+# the link line consistent across binaries and libraries.
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS ILMEEE_LIBRARY_TARGETS)
+    if(TARGET ${_t})
+        target_link_libraries(${_t} PRIVATE dl pthread m stb_impl)
+    endif()
+endforeach()
+
+# Executables -> <prefix>/bin
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS)
+    if(TARGET ${_t})
+        install(TARGETS ${_t}
+            RUNTIME DESTINATION ${ILMEEE_BIN_DIR}
+        )
+    endif()
+endforeach()
+
+# Runtime data the binaries expect next to themselves.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/
+    DESTINATION ${ILMEEE_ASSET_DIR}
+    USE_SOURCE_PERMISSIONS
+)
+if(EXISTS ${CMAKE_SOURCE_DIR}/res)
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/res/
+        DESTINATION ${ILMEEE_SHARE_DIR}/res
+        USE_SOURCE_PERMISSIONS
+    )
+endif()
+install(FILES ${CMAKE_SOURCE_DIR}/LICENSE ${CMAKE_SOURCE_DIR}/README.md
+    DESTINATION ${ILMEEE_SHARE_DIR}
+    OPTIONAL
+)
+# The editor's portable game build runs these (File > Build > Portable).
+install(PROGRAMS
+    ${CMAKE_SOURCE_DIR}/scripts/bundle-deps.sh
+    ${CMAKE_SOURCE_DIR}/scripts/host-libs.sh
+    DESTINATION ${ILMEEE_SHARE_DIR}/scripts
+)
+
+# Public headers, mirroring the source tree so #include paths keep working.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
+    DESTINATION include/ilmeeeengine
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+)
+
+# Convenience launchers on the PATH: /usr/local/bin symlinks are left to the
+# packager; here we only emit a wrapper-free, relocatable tree.
+message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  bin    -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_BIN_DIR}")
+message(STATUS "  lib    -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_LIB_DIR}")
+message(STATUS "  assets -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_ASSET_DIR}")

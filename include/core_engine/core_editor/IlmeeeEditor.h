@@ -14,7 +14,6 @@
 #endif
 #endif
 
-#include "TCPConnection.hpp"
 #include <SDL3/SDL.h>
 #include <functional>
 #include <glad/glad.h>
@@ -25,6 +24,12 @@
 #include <string>
 #include <vector>
 using namespace std;
+
+namespace ilmeee::net {
+class MessageBus;
+class WsClientTransport;
+} // namespace ilmeee::net
+
 namespace IlmeeeEditor {
 
 // Forward declarations
@@ -37,7 +42,16 @@ private:
   std::vector<std::unique_ptr<Project>> projects;
   std::vector<std::unique_ptr<EditorWindow>> windows;
   std::function<void()> onProjectOpenedCallback;
-  TCPConnection tcpClient;
+
+  // Engine IPC client: connects to the core (GameEngineSDL), the only server.
+  std::unique_ptr<ilmeee::net::WsClientTransport> ipcTransport;
+  std::unique_ptr<ilmeee::net::MessageBus> ipcBus;
+  // Host-registered listeners (IpcOn), keyed by message type. Payloads are
+  // handed over as JSON text so the C API stays C.
+  std::map<std::string, std::vector<std::function<void(const std::string &)>>>
+      ipcListeners;
+  void ForwardIpcType(const std::string &type);
+  void NotifyIpcListeners(const std::string &type, const std::string &payload);
 
 public:
   static std::unique_ptr<Editor> instance;
@@ -62,10 +76,17 @@ public:
 
   // Callbacks
   void SetOnProjectOpenedCallback(const std::function<void()> &callback);
-  bool connectToEngine();
-  bool startServer();
-  bool sendCommandToEngine(const std::string &command);
-  std::string receiveMessageFromEngine();
+
+  // Engine IPC. ConnectIpc() returns immediately; the transport keeps
+  // dialling until the core answers. Everything is dispatched in PollIpc(),
+  // on the thread that calls it.
+  bool ConnectIpc(const std::string &url, const std::string &token);
+  void PollIpc();
+  bool IsIpcReady() const;
+  bool EmitIpc(const std::string &type, const std::string &payloadJson);
+  void OnIpc(const std::string &type,
+             std::function<void(const std::string &payloadJson)> callback);
+  void DisconnectIpc();
 
   string projectPath;
 };
@@ -182,12 +203,17 @@ extern "C" {
 ILMEEEDITOR_API bool EditorInit(const char *title, int width, int height);
 ILMEEEDITOR_API void EditorRun();
 ILMEEEDITOR_API void EditorShutdown();
-ILMEEEDITOR_API bool ConnectToEngine();
-ILMEEEDITOR_API bool StartServer();
-ILMEEEDITOR_API bool SendCommandToEngine(const char *command);
-ILMEEEDITOR_API bool ConnectToEngine();
 ILMEEEDITOR_API void LoadScene();
-ILMEEEDITOR_API string GetCommandFromEngine();
 ILMEEEDITOR_API void SetProjectPath(string &path);
+
+// Engine IPC (see core_engine/net/Protocol.hpp for the message catalog).
+// `payloadJson` is a JSON object as text; null means {}.
+typedef void (*IpcCallback)(const char *payloadJson, void *user);
+ILMEEEDITOR_API bool IpcConnect(const char *url, const char *token);
+ILMEEEDITOR_API void IpcPoll();
+ILMEEEDITOR_API bool IpcIsReady();
+ILMEEEDITOR_API bool IpcEmit(const char *type, const char *payloadJson);
+ILMEEEDITOR_API void IpcOn(const char *type, IpcCallback callback, void *user);
+ILMEEEDITOR_API void IpcDisconnect();
 }
 } // namespace IlmeeeEditor

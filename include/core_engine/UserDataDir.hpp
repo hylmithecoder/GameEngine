@@ -13,6 +13,9 @@
 // one OS open the same on the other.
 
 #include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -34,6 +37,39 @@ inline std::string HomeDirectory() {
     return h;
   return "";
 #endif
+}
+
+// Directory holding the running executable.
+//
+// Needed whenever one of our binaries has to spawn a sibling: the working
+// directory is wherever the user happened to launch us from, so a relative
+// "./Sibling" only resolves by luck. Asking the OS where we actually live
+// works the same in the build tree and in an installed bundle.
+inline std::filesystem::path ExecutableDir() {
+  std::error_code ec;
+#ifdef _WIN32
+  wchar_t buf[32768];
+  DWORD n = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(buf[0]));
+  if (n > 0)
+    return std::filesystem::path(std::wstring(buf, n)).parent_path();
+#else
+  std::filesystem::path self =
+      std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (!ec)
+    return self.parent_path();
+#endif
+  // Last resort: behave as before rather than fail outright.
+  return std::filesystem::current_path(ec);
+}
+
+// Resolve a sibling executable next to this one, falling back to the bare
+// name so PATH still gets a chance if the layout is unexpected.
+inline std::string SiblingExecutable(const std::string &name) {
+  std::error_code ec;
+  std::filesystem::path p = ExecutableDir() / name;
+  if (std::filesystem::exists(p, ec))
+    return p.string();
+  return name;
 }
 
 // User-specified .ilmeee directory for layout settings and legacy

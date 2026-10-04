@@ -4,7 +4,6 @@
 #include <ktxvulkan.h>
 #include <stb/stb_image.h>
 #include <texture.hpp>
-#define STB_IMAGE_IMPLEMENTATION
 
 void TextureBase::generateQuad() {
   // Setup vertices for a single uv-mapped quad made from two triangles

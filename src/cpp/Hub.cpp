@@ -52,6 +52,44 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 // ---------------------------------------------------------------------------
+// Editor binary resolution
+// ---------------------------------------------------------------------------
+// The Hub used to exec "./GameEngineSDL", which resolves against the
+// *current working directory*. Launching the Hub from anywhere other
+// than the directory holding the editor binary made exec fail with
+// ENOENT (child exits 127). Resolve against the Hub's own executable
+// directory instead, then fall back to a few sibling layouts and
+// finally to PATH.
+static fs::path ExecutableDir() {
+  std::error_code ec;
+  fs::path self = fs::read_symlink("/proc/self/exe", ec);
+  if (!ec && !self.empty())
+    return self.parent_path();
+  return fs::current_path(ec);
+}
+
+static std::string ResolveEditorBinary() {
+  const char *override_env = std::getenv("ILMEEE_EDITOR_BIN");
+  if (override_env && *override_env)
+    return override_env;
+
+  const fs::path dir = ExecutableDir();
+  const fs::path candidates[] = {
+      dir / "GameEngineSDL",              // installed / build bin layout
+      dir / "bin" / "GameEngineSDL",      // Hub at prefix root
+      dir.parent_path() / "bin" / "GameEngineSDL",
+      fs::path("build") / "bin" / "GameEngineSDL", // run from repo root
+  };
+  std::error_code ec;
+  for (const auto &c : candidates) {
+    if (fs::exists(c, ec) && !ec)
+      return fs::absolute(c, ec).string();
+  }
+  // Last resort: let execvp search PATH.
+  return "GameEngineSDL";
+}
+
+// ---------------------------------------------------------------------------
 // Global debug mode flag
 // ---------------------------------------------------------------------------
 static bool g_DebugMode = false;
@@ -346,15 +384,17 @@ public:
       // show nothing until the child terminates.
       setvbuf(stdout, nullptr, _IOLBF, 0);
       setvbuf(stderr, nullptr, _IOLBF, 0);
+      const std::string editorBin = ResolveEditorBinary();
       if (g_DebugMode) {
-        execlp("./GameEngineSDL", "GameEngineSDL", "--project",
+        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
                projectPath.c_str(), "--debug", (char *)nullptr);
       } else {
-        execlp("./GameEngineSDL", "GameEngineSDL", "--project",
+        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
                projectPath.c_str(), (char *)nullptr);
       }
       // exec failed:
-      std::fprintf(stderr, "execlp failed: %s\n", std::strerror(errno));
+      std::fprintf(stderr, "execlp(%s) failed: %s\n", editorBin.c_str(),
+                   std::strerror(errno));
       _exit(127);
     }
 

@@ -1,6 +1,7 @@
 #include "../core_engine/Builder.hpp"
 #include "../core_engine/EditorSessionHistory.hpp"
-#include "../core_engine/NetworkManager.hpp"
+#include "../core_engine/GameBuilder.hpp"
+#include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
@@ -16,6 +17,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 #include <list>
+#include <sys/types.h>
 #include <vector>
 #define IMGUI_HAS_DOCK
 #define IMGUI_HAS_VIEWPORT
@@ -124,8 +126,11 @@ public:
   std::vector<std::string> messages;
   std::mutex messagesMutex;
   static const size_t MAX_MESSAGES = 1000;
-  string currentMessageFrom27015 = "";
-  std::unique_ptr<NetworkManager> networkManager;
+  // Owned by ApplicationManager; null until it is wired in, and again once
+  // shutdown has torn the bus down. Polled once per frame in OnUpdate().
+  ilmeee::net::MessageBus *ipcBus = nullptr;
+  // Ask the engine process to run its scene picker (File > Load Scene).
+  void RequestEngineSceneLoad();
   // list<string> currentName = {"Shiroko", "Shun_Small"};
 
   enum CurrentBackground {
@@ -166,6 +171,47 @@ public:
   void HandleViewportInteraction(ImVec2 viewportPos, ImVec2 viewportSize);
   void RenderSceneWindow();
   void RenderHierarchyWindow();
+
+  // ---- Game build (Build menu + Console > Build tab) -------------------
+  // Saves the scene, then builds <project>/build/linux/<Game> on a worker
+  // thread; with runWhenDone the game is started once it succeeds.
+  void StartGameBuild(bool runWhenDone);
+  void LaunchBuiltGame();
+  // Per frame: pick up a finished build, start the game, reap it on exit.
+  void PollGameBuild();
+  void RenderBuildMenu();
+  void RenderBuildTab();
+  void PushBuildLog(const std::string &line);
+  std::thread gameBuildThread;
+  std::atomic<bool> gameBuildRunning{false};
+  std::atomic<bool> gameBuildFinished{false};
+  std::mutex gameBuildLogMutex;
+  std::vector<std::string> gameBuildLog;
+  bool gameBuildScrollToEnd = false;
+  // Written by the worker; read only after gameBuildFinished is seen.
+  ilmeee::GameBuildResult gameBuildResult;
+  bool gameBuildRunAfter = false;
+  bool gameBuildPortable = false;
+  std::filesystem::path lastGameLauncher;
+  pid_t gameProcess = -1;
+  // Short-lived helpers (xdg-open) waiting to be reaped.
+  std::vector<pid_t> gameProcessHelpers;
+  bool focusBuildTab = false;
+  // Scene-object operations shared by the Hierarchy panel and the viewport.
+  // Selection is by name (objectName), as everywhere else in the editor.
+  int SelectedMeshIndex() const;
+  // kind: 0 Cube, 1 Sphere, 2 Plane, 3 Light, 4 Camera. `localPosition` is
+  // relative to `parent` (-1 = scene root). Selects and records history.
+  // Returns the new mesh index, or -1.
+  int SpawnSceneObject(int kind, int parent, const glm::vec3 &localPosition);
+  // Deletes the object and everything parented under it.
+  void DeleteSceneObject(size_t index);
+  // Adding/removing objects is blocked while playing: Stop restores the
+  // scene by index and could not undo a structural change.
+  bool SceneStructureLocked() const;
+  // Deleting this subtree would leave the scene without a player camera
+  // (which the Hierarchy would immediately recreate).
+  bool DeletingRemovesLastCamera(size_t index) const;
   void Save3DScene();
   EditorSessionHistory::Snapshot CaptureEditorSnapshot() const;
   void StartEditorSession();

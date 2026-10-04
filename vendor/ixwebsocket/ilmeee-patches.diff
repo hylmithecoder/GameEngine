@@ -1,0 +1,115 @@
+diff -ru a/ixwebsocket/IXWebSocket.cpp b/ixwebsocket/IXWebSocket.cpp
+--- a/ixwebsocket/IXWebSocket.cpp	2026-10-04 21:47:00.176403561 +0700
++++ b/ixwebsocket/IXWebSocket.cpp	2026-10-04 22:05:53.765625583 +0700
+@@ -46,7 +46,7 @@
+         _ws.setOnCloseCallback(
+             [this](uint16_t code, const std::string& reason, size_t wireSize, bool remote)
+             {
+-                _onMessageCallback(
++                invokeOnMessageCallback(
+                     ix::make_unique<WebSocketMessage>(WebSocketMessageType::Close,
+                                                       emptyMsg,
+                                                       wireSize,
+@@ -236,7 +236,7 @@
+             return status;
+         }
+ 
+-        _onMessageCallback(ix::make_unique<WebSocketMessage>(
++        invokeOnMessageCallback(ix::make_unique<WebSocketMessage>(
+             WebSocketMessageType::Open,
+             emptyMsg,
+             0,
+@@ -272,7 +272,7 @@
+             return status;
+         }
+ 
+-        _onMessageCallback(
++        invokeOnMessageCallback(
+             ix::make_unique<WebSocketMessage>(WebSocketMessageType::Open,
+                                               emptyMsg,
+                                               0,
+@@ -360,7 +360,7 @@
+                 connectErr.reason = status.errorStr;
+                 connectErr.http_status = status.http_status;
+ 
+-                _onMessageCallback(ix::make_unique<WebSocketMessage>(WebSocketMessageType::Error,
++                invokeOnMessageCallback(ix::make_unique<WebSocketMessage>(WebSocketMessageType::Error,
+                                                                      emptyMsg,
+                                                                      0,
+                                                                      connectErr,
+@@ -440,7 +440,7 @@
+ 
+                     bool binary = messageKind == WebSocketTransport::MessageKind::MSG_BINARY;
+ 
+-                    _onMessageCallback(ix::make_unique<WebSocketMessage>(webSocketMessageType,
++                    invokeOnMessageCallback(ix::make_unique<WebSocketMessage>(webSocketMessageType,
+                                                                          msg,
+                                                                          wireSize,
+                                                                          webSocketErrorInfo,
+@@ -455,14 +455,28 @@
+ 
+     void WebSocket::setOnMessageCallback(const OnMessageCallback& callback)
+     {
++        std::lock_guard<std::mutex> lock(_onMessageCallbackMutex);
+         _onMessageCallback = callback;
+     }
+ 
+     bool WebSocket::isOnMessageCallbackRegistered() const
+     {
++        std::lock_guard<std::mutex> lock(_onMessageCallbackMutex);
+         return _onMessageCallback != nullptr;
+     }
+ 
++    void WebSocket::invokeOnMessageCallback(const WebSocketMessagePtr& msg)
++    {
++        // Copy under the lock, call outside it: the callback may itself call
++        // setOnMessageCallback().
++        OnMessageCallback callback;
++        {
++            std::lock_guard<std::mutex> lock(_onMessageCallbackMutex);
++            callback = _onMessageCallback;
++        }
++        if (callback) callback(msg);
++    }
++
+     void WebSocket::setTrafficTrackerCallback(const OnTrafficTrackerCallback& callback)
+     {
+         _onTrafficTrackerCallback = callback;
+diff -ru a/ixwebsocket/IXWebSocket.h b/ixwebsocket/IXWebSocket.h
+--- a/ixwebsocket/IXWebSocket.h	2026-10-04 21:46:42.479460289 +0700
++++ b/ixwebsocket/IXWebSocket.h	2026-10-04 22:05:48.667431300 +0700
+@@ -149,7 +149,11 @@
+ 
+         mutable std::mutex _configMutex; // protect all config variables access
+ 
++        // Guarded: the server clears it from the connection thread while
++        // stop() may be closing the socket (and so firing it) from another.
+         OnMessageCallback _onMessageCallback;
++        mutable std::mutex _onMessageCallbackMutex;
++        void invokeOnMessageCallback(const WebSocketMessagePtr& msg);
+         static OnTrafficTrackerCallback _onTrafficTrackerCallback;
+ 
+         std::atomic<bool> _stop;
+diff -ru a/ixwebsocket/IXWebSocketTransport.cpp b/ixwebsocket/IXWebSocketTransport.cpp
+--- a/ixwebsocket/IXWebSocketTransport.cpp	2026-10-04 21:47:00.177403558 +0700
++++ b/ixwebsocket/IXWebSocketTransport.cpp	2026-10-04 22:01:15.093175067 +0700
+@@ -1306,7 +1306,7 @@
+         _closeReason = reason;
+     }
+ 
+-    const std::string& WebSocketTransport::getCloseReason() const
++    std::string WebSocketTransport::getCloseReason() const
+     {
+         std::lock_guard<std::mutex> lock(_closeReasonMutex);
+         return _closeReason;
+diff -ru a/ixwebsocket/IXWebSocketTransport.h b/ixwebsocket/IXWebSocketTransport.h
+--- a/ixwebsocket/IXWebSocketTransport.h	2026-10-04 21:46:42.481460283 +0700
++++ b/ixwebsocket/IXWebSocketTransport.h	2026-10-04 22:01:15.060778402 +0700
+@@ -293,6 +293,6 @@
+         std::string getMergedChunks() const;
+ 
+         void setCloseReason(const std::string& reason);
+-        const std::string& getCloseReason() const;
++        std::string getCloseReason() const;
+     };
+ } // namespace ix

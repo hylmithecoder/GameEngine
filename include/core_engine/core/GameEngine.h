@@ -14,6 +14,7 @@
     #endif
 #endif
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,7 +41,8 @@ namespace GameEngine {
     class GAMEENGINE_API Engine {
     private:
         static std::unique_ptr<Engine> instance;
-        EngineState currentState;
+        // Atomic: Stop() arrives from the IPC thread while Run() spins on it.
+        std::atomic<EngineState> currentState;
         std::unique_ptr<Scene> activeScene;
         
         // Lifecycle callbacks

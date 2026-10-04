@@ -1,8 +1,14 @@
 #include "../../include/ui/Application.hpp"
+#include "../../include/core_engine/UserDataDir.hpp"
+#include "../../include/core_engine/net/Protocol.hpp"
 #include <SDL3/SDL.h>
+#include <chrono>
+#include <cstring>
+#include <thread>
+
+extern char **environ;
 
 ApplicationManager::ApplicationManager() {
-  networkManager = std::make_unique<NetworkManager>();
   environment = std::make_unique<Environment>();
   discordRich = std::make_unique<DiscordRichPresence>();
 
@@ -40,6 +46,9 @@ bool ApplicationManager::Initialize() {
     // any project. Only consumed when projectPath is empty.
     window->debug2D = debug2D;
 
+    // The window's frame loop is what drives the IPC bus from here on.
+    window->ipcBus = ipcBus.get();
+
     // If a project path was passed in (typically from IlmeeeHub via
     // --project), open it now so the editor starts directly in-context.
     // When unset, the editor keeps its hardcoded debug behavior — useful
@@ -63,16 +72,84 @@ bool ApplicationManager::Initialize() {
   }
 }
 
+bool ApplicationManager::StartIpcServer() {
+  using namespace ilmeee::net;
+
+  ipcToken = proto::GenerateToken();
+  ipcTransport = std::make_unique<WsServerTransport>();
+  BusConfig config;
+  config.role = BusRole::Server;
+  config.token = ipcToken;
+  ipcBus = std::make_unique<MessageBus>(*ipcTransport, config);
+
+  ipcBus->SetLogSink([](BusLogLevel level, const std::string &text) {
+    ::Log("[IPC] " + text, level == BusLogLevel::Error ? Debug::LogLevel::ERROR
+                           : level == BusLogLevel::Warning
+                               ? Debug::LogLevel::WARNING
+                               : Debug::LogLevel::INFO);
+  });
+
+  ipcBus->OnPeerJoined([this](const PeerInfo &peer) {
+    if (peer.role != proto::kRoleEngine)
+      return;
+    ::Log("[IPC] Engine connected (pid " + std::to_string(peer.pid) + ")",
+          Debug::LogLevel::SUCCESS);
+    ipcBus->Emit(peer.connection, proto::kSessionInit,
+                 {{"project", projectPath}});
+  });
+
+  ipcBus->OnPeerLeft([this](const PeerInfo &peer, const std::string &reason) {
+    if (peer.role != proto::kRoleEngine)
+      return;
+    ::Log("[IPC] Engine disconnected: " + reason,
+          isRunning ? Debug::LogLevel::WARNING : Debug::LogLevel::INFO);
+    ReapEngineIfExited();
+  });
+
+  if (!ipcBus->Start())
+    return false;
+  ::Log("[IPC] Core listening on " + ipcTransport->Url(),
+        Debug::LogLevel::SUCCESS);
+  return true;
+}
+
 bool ApplicationManager::LaunchEngine() {
+  using namespace ilmeee::net;
   try {
-    ::Log("[IlmeeeEditor] Starting network server...");
+    ::Log("[IlmeeeEditor] Starting IPC server...");
     isRunning = true;
-    if (!networkManager->startServer()) {
-      ::Log("Failed to start network server", Debug::LogLevel::CRASH);
+    if (!StartIpcServer()) {
+      ::Log("Failed to start IPC server", Debug::LogLevel::CRASH);
       return false;
     }
 
     ::Log("[IlmeeeEditor] Launching engine process...");
+
+    // Resolve the handler next to this binary rather than relative to the
+    // working directory: the editor is launched from Hub, from a shell in the
+    // repo root, or from an installed bin/, and "./HandlerIlmeeeEngine" only
+    // happens to work in the last of those.
+    const std::string handler = ilmeee::SiblingExecutable("HandlerIlmeeeEngine");
+
+    // Everything the child needs is built before fork(): between fork and
+    // exec only async-signal-safe calls are allowed, which rules out
+    // allocating. The URL travels in argv, the token in the environment.
+    std::string url = ipcTransport->Url();
+    std::string programName = "HandlerIlmeeeEngine";
+    std::string urlArg = proto::kIpcUrlArg;
+    std::vector<char *> childArgv = {programName.data(), urlArg.data(),
+                                     url.data(), nullptr};
+
+    const std::string tokenPrefix = std::string(proto::kIpcTokenEnv) + "=";
+    std::vector<std::string> envStorage;
+    for (char **e = environ; e && *e; ++e)
+      if (std::strncmp(*e, tokenPrefix.c_str(), tokenPrefix.size()) != 0)
+        envStorage.emplace_back(*e);
+    envStorage.push_back(tokenPrefix + ipcToken);
+    std::vector<char *> childEnv;
+    for (auto &entry : envStorage)
+      childEnv.push_back(entry.data());
+    childEnv.push_back(nullptr);
 
     pid_t pid = fork();
     if (pid == -1) {
@@ -80,31 +157,22 @@ bool ApplicationManager::LaunchEngine() {
             Debug::LogLevel::CRASH);
       return false;
     } else if (pid == 0) {
-      execl("./HandlerIlmeeeEngine", "HandlerIlmeeeEngine", "-project",
-            "MyGameProject", nullptr);
-      exit(1);
-    } else {
-      engineProcessId = pid;
+      execve(handler.c_str(), childArgv.data(), childEnv.data());
+      // exec only returns on failure. Leave with _exit, not exit: this child
+      // is a fork of the editor and still owns copies of its atexit handlers,
+      // static destructors and open sockets. Running them here would tear down
+      // the *parent's* state — the Discord session and the listening socket the
+      // engine is about to connect to.
+      _exit(1);
     }
 
-    // Wait for connection asynchronously
-    std::future<bool> connectionFuture = std::async(
-        std::launch::async, [this]() { return WaitForServerConnection(30); });
-
-    while (connectionFuture.wait_for(std::chrono::milliseconds(100)) !=
-           std::future_status::ready) {
-      // Waiting
-    }
-
-    if (!connectionFuture.get()) {
-      ::Log("Failed to establish connection", Debug::LogLevel::CRASH);
-      return false;
-    }
-
-    networkManager->sendMessage("init:MyGameProject");
-    ::Log("[IlmeeeEditor] Engine launched successfully");
-
-    StartNetworkThread();
+    engineProcessId = pid;
+    // No waiting here: the engine dials in on its own (retrying until we
+    // listen, which we already do) and announces itself with a handshake.
+    // OnPeerJoined sends it the session once that happens.
+    ::Log("[IlmeeeEditor] Engine process started (pid " + std::to_string(pid) +
+              ")",
+          Debug::LogLevel::SUCCESS);
     return true;
 
   } catch (const std::exception &e) {
@@ -114,39 +182,20 @@ bool ApplicationManager::LaunchEngine() {
   }
 }
 
-void ApplicationManager::StartNetworkThread() {
-  networkThreadRunning = true;
-  networkThread = std::thread([this]() {
-    ::Log("[IlmeeeEditor] Network thread started");
-    while (networkThreadRunning && isRunning) {
-      try {
-        std::string message = networkManager->receiveMessage();
-        if (!message.empty()) {
-          ProcessNetworkMessage(message);
-          messagesFrom27015.push(message);
-          lastMessageFrom27015 = message;
-        }
-
-        if (engineProcessId > 0) {
-          int status;
-          pid_t result = waitpid(engineProcessId, &status, WNOHANG);
-          if (result == engineProcessId) {
-            shouldExit = true;
-            break;
-          }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-      } catch (...) {
-        break;
-      }
-    }
-  });
-}
-
-void ApplicationManager::ProcessNetworkMessage(const std::string &message) {
-  if (message == "shutdown" || message == "exit") {
-    shouldExit = true;
-  }
+void ApplicationManager::ReapEngineIfExited() {
+  if (engineProcessId <= 0)
+    return;
+  int status = 0;
+  if (waitpid(engineProcessId, &status, WNOHANG) != engineProcessId)
+    return;
+  if (WIFEXITED(status))
+    ::Log("[IlmeeeEditor] Engine exited with code " +
+          std::to_string(WEXITSTATUS(status)));
+  else if (WIFSIGNALED(status))
+    ::Log("[IlmeeeEditor] Engine killed by signal " +
+              std::to_string(WTERMSIG(status)),
+          Debug::LogLevel::WARNING);
+  engineProcessId = -1;
 }
 
 void ApplicationManager::Run() {
@@ -179,13 +228,11 @@ void ApplicationManager::Shutdown() {
 
   ::Log("Starting application shutdown...");
 
-  if (networkManager && isRunning) {
-    try {
-      networkManager->sendMessage("Stop");
-    } catch (...) {
-      // sendMessage bisa throw kalau peer sudah disconnect; jangan
-      // halangi shutdown.
-    }
+  if (ipcBus && isRunning) {
+    using namespace ilmeee::net;
+    ConnectionId engine = ipcBus->PeerByRole(proto::kRoleEngine);
+    if (engine != kInvalidConnection)
+      engineStopRequested = ipcBus->Emit(engine, proto::kEngineStop);
   }
   isRunning = false;
   shouldExit = true;
@@ -197,34 +244,44 @@ void ApplicationManager::Shutdown() {
     discordRich->Shutdown();
   }
 
-  CleanupNetwork();
+  // Engine before network: it is still connected and acting on engine.stop,
+  // and it may need a moment to leave its loop.
   CleanupEngine();
+  CleanupNetwork();
   CleanupWindow();
   CleanupSDL();
   ::Log("Application shutdown complete");
 }
 
 void ApplicationManager::CleanupNetwork() {
-  networkThreadRunning = false;
-  if (networkThread.joinable())
-    networkThread.join();
-
-  if (networkManager) {
-    // Penting: panggil stop() supaya listenThread_ & receiveThread_
-    // internal NetworkManager di-join. Tanpa ini, ~NetworkManager
-    // (default-generated) menghancurkan std::thread yang masih
-    // joinable → std::terminate → crash di shutdown.
-    try {
-      networkManager->stop();
-    } catch (...) {
-      // best-effort; lanjut destroy walaupun gagal
-    }
-    networkManager.reset();
+  if (window)
+    window->ipcBus = nullptr;
+  if (ipcBus) {
+    // Joins the transport's IO threads; nothing may Poll() after this.
+    ipcBus->Stop();
+    ipcBus.reset();
   }
+  ipcTransport.reset();
 }
 
 void ApplicationManager::CleanupEngine() {
+  if (engineProcessId <= 0)
+    return;
+
+  // Give an engine that was told to stop the chance to do it cleanly;
+  // SIGTERM is the fallback, not the plan.
+  if (engineStopRequested) {
+    for (int i = 0; i < 40 && engineProcessId > 0; ++i) {
+      ReapEngineIfExited();
+      if (engineProcessId > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+
   if (engineProcessId > 0) {
+    if (engineStopRequested)
+      ::Log("[IlmeeeEditor] Engine did not stop within 2 s; sending SIGTERM",
+            Debug::LogLevel::WARNING);
     kill(engineProcessId, SIGTERM);
     waitpid(engineProcessId, nullptr, 0);
     engineProcessId = -1;

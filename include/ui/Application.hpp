@@ -1,18 +1,17 @@
 #include "../core_engine/Check_Environment.hpp"
 #include "../core_engine/Debugger.hpp"
 #include "../core_engine/Discordrich.hpp"
-#include "../core_engine/NetworkManager.hpp"
+#include "../core_engine/net/MessageBus.hpp"
+#include "../core_engine/net/WsTransport.hpp"
 #include "MainWindow.hpp"
 #include <atomic>
 #include <functional>
-#include <future>
 #include <iostream>
 #include <memory>
 #include <signal.h>
 #include <string>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -22,69 +21,24 @@ using namespace Ilmeee;
 
 class ApplicationManager {
 private:
-  std::unique_ptr<NetworkManager> networkManager;
+  // Engine IPC: this process is the only server. HandlerIlmeeeEngine (and
+  // any later tool) connects to it; see core_engine/net/Protocol.hpp.
+  std::unique_ptr<ilmeee::net::WsServerTransport> ipcTransport;
+  std::unique_ptr<ilmeee::net::MessageBus> ipcBus;
+  std::string ipcToken;
+
   MainWindow *window;
-  string lastMessageFrom27015;
   std::unique_ptr<Environment> environment;
   std::unique_ptr<DiscordRichPresence> discordRich;
   pid_t engineProcessId = -1;
   std::atomic<bool> isRunning{false};
   std::atomic<bool> shouldExit{false};
   std::vector<std::function<void()>> cleanupTasks;
-  queue<string> messagesFrom27015;
 
-  // Thread management
-  std::thread networkThread;
-  std::thread messageProcessorThread;
-  std::atomic<bool> networkThreadRunning{false};
+  bool engineStopRequested = false;
 
-  std::mutex messagesMutex;
-  static const size_t MAX_MESSAGES = 1000; // Limit buffer size
-  bool WaitForServerConnection(int timeoutSeconds = 30) {
-    Log("Waiting for server connection...");
-
-    auto startTime = std::chrono::steady_clock::now();
-    bool connected = false;
-
-    while (!connected) {
-      try {
-        // Try to connect
-        if (networkManager->connectToServer()) {
-          Log("Successfully connected to server", Debug::LogLevel::SUCCESS);
-          return true;
-        }
-
-        // Check timeout
-        auto currentTime = std::chrono::steady_clock::now();
-        auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                                  currentTime - startTime)
-                                  .count();
-
-        if (elapsedSeconds >= timeoutSeconds) {
-          Log("Connection timeout after " + std::to_string(timeoutSeconds) +
-                  " seconds",
-              Debug::LogLevel::CRASH);
-          return false;
-        }
-
-        // Update status every second
-        if (elapsedSeconds % 5 == 0) {
-          Log("Waiting for server... " +
-              std::to_string(timeoutSeconds - elapsedSeconds) +
-              " seconds remaining");
-        }
-
-        // Small delay before next attempt
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-      } catch (const std::exception &e) {
-        Log("Connection attempt failed: " + std::string(e.what()),
-            Debug::LogLevel::WARNING);
-      }
-    }
-
-    return false;
-  };
+  bool StartIpcServer();
+  void ReapEngineIfExited();
   void CleanupNetwork();
   void CleanupEngine();
   void CleanupWindow();
@@ -99,8 +53,6 @@ public:
   }
   bool Initialize();
   bool LaunchEngine();
-  void StartNetworkThread();
-  void ProcessNetworkMessage(const std::string &message);
   void Shutdown();
 
   // Set the project path before Initialize() so the editor opens

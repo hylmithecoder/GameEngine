@@ -8,15 +8,15 @@
 #include <thread>
 // #include <CommCtrl.h>
 #include "../../../../include/core_engine/Debugger.hpp"
+#include "../../../../include/core_engine/UserDataDir.hpp"
+#include "../../../../include/core_engine/net/Protocol.hpp"
 #include <atomic>
 #include <mutex>
 // #include <windowsx.h>
-#include <condition_variable>
 #include <gtk-3.0/gtk/gtkdialog.h>
 #include <gtk-3.0/gtk/gtktypes.h>
 #include <gtk-3.0/gtk/gtkwidget.h>
 #include <gtk-3.0/gtk/gtkwindow.h>
-#include <queue>
 using namespace Debug;
 using namespace std;
 #pragma comment(lib, "comctl32.lib")
@@ -25,14 +25,15 @@ using namespace std;
 typedef bool (*EngineInitFunc)(const char *, int, int);
 typedef void (*EngineRunFunc)();
 typedef void (*EngineShutdownFunc)();
+typedef void (*EngineStopFunc)();
 typedef bool (*EditorInitFunc)(const char *, int, int);
 typedef void (*EditorRunFunc)();
-typedef bool (*StartServerFunc)();
-typedef bool (*ConnectToEngineFunc)();
-typedef bool (*SendCommandToEngineFunc)(const char *);
-typedef string (*GetCommandFunc)();
-typedef void (*SetProjectPathFunc)(const string &);
-typedef void (*ExecuteCommandFunc)();
+// Engine IPC, exported by libIlmeeeEditor (see IlmeeeEditor.h).
+typedef void (*IpcCallback)(const char *payloadJson, void *user);
+typedef bool (*IpcConnectFunc)(const char *url, const char *token);
+typedef void (*IpcPollFunc)();
+typedef void (*IpcOnFunc)(const char *type, IpcCallback callback, void *user);
+typedef void (*IpcDisconnectFunc)();
 
 // Loading window class
 class LoadingWindow {
@@ -243,22 +244,41 @@ public:
   const vector<string> IlmeeEngine = {"libIlmeeeEngine.so",
                                       "libIlmeeeEditor.so"};
 
+  // Locate one of our shared libraries. The launcher is started from Hub,
+  // from a shell in the repo root, or from an installed bin/, so resolving
+  // "lib/<name>" against the working directory only worked by accident; both
+  // build/ and the installed bundle put the libraries in ../lib next to bin/.
+  static string ResolveLibrary(const string &name) {
+    namespace fs = std::filesystem;
+    const fs::path exeDir = ilmeee::ExecutableDir();
+    std::error_code ec;
+    for (const fs::path &candidate :
+         {exeDir / ".." / "lib" / name, exeDir / "lib" / name,
+          exeDir / name}) {
+      if (fs::exists(candidate, ec))
+        return fs::weakly_canonical(candidate, ec).string();
+    }
+    // Nothing found on disk: hand the bare soname to dlopen so RPATH and the
+    // usual loader search still get their chance.
+    return name;
+  }
+
   bool LoadLibraries() {
     // Load engine library
-    string enginePath = "lib/" + IlmeeEngine[0];
+    string enginePath = ResolveLibrary(IlmeeEngine[0]);
     engineLib = dlopen(enginePath.c_str(), RTLD_LAZY);
     if (!engineLib) {
       ShowError(
-          ("Failed to load " + IlmeeEngine[0] + ": " + dlerror()).c_str());
+          ("Failed to load " + enginePath + ": " + dlerror()).c_str());
       return false;
     }
 
     // Load editor library
-    string editorPath = "lib/" + IlmeeEngine[1];
+    string editorPath = ResolveLibrary(IlmeeEngine[1]);
     editorLib = dlopen(editorPath.c_str(), RTLD_LAZY);
     if (!editorLib) {
       ShowError(
-          ("Failed to load " + IlmeeEngine[1] + ": " + dlerror()).c_str());
+          ("Failed to load " + editorPath + ": " + dlerror()).c_str());
       Cleanup();
       return false;
     }
@@ -297,6 +317,11 @@ public:
   void *GetEditorLib() const { return editorLib; }
 
   static void ShowError(const char *message) {
+    // Always report on stderr as well: the dialog is invisible when the
+    // launcher is started by the editor (no one is watching a modal), and a
+    // failed load would otherwise leave nothing at all in the log.
+    std::cerr << "[HandlerIlmeeeEngine] " << message << std::endl;
+
     // Use GTK message dialog instead of MessageBox
     GtkWidget *dialog =
         gtk_message_dialog_new(nullptr, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
@@ -365,7 +390,6 @@ public:
 class LaunchSequence {
 private:
   LoadingWindow &loadingWindow;
-  // DLLManager& dllManager;
   LibraryManager &libManager;
 
   struct LoadingStep {
@@ -377,178 +401,78 @@ private:
   std::vector<LoadingStep> steps;
   std::atomic<bool> messageThreadRunning{false};
   std::thread messagePollingThread;
-  std::queue<std::string> messageQueue;
-  std::mutex queueMutex;
 
-  std::atomic<bool> isProcessingMessage{false};
-  std::condition_variable messageCV;
-  std::mutex processingMutex;
+  // Where the core is listening; empty when started by hand (no IPC).
+  std::string ipcUrl;
+  std::string ipcToken;
+  EngineStopFunc engineStop = nullptr;
+  std::atomic<bool> stopRequested{false};
 
-  void RunMessageLoop() {
-    Log("Starting message loop...", Debug::LogLevel::INFO);
-    messageThreadRunning = true;
-
-    auto SendCommand = libManager.GetFunction<SendCommandToEngineFunc>(
-        libManager.GetEditorLib(), "SendCommandToEngine");
-
-    auto GetReceiveCommand = libManager.GetFunction<GetCommandFunc>(
-        libManager.GetEditorLib(), "GetCommandFromEngine");
-
-    // auto RunEditor = dllManager.GetFunction<EditorRunFunc>(
-    //     dllManager.GetEditorDLL(),
-    //     "EditorRun"
-    // );
-    // RunEditor();
-
-    // auto LoadScene = dllManager.GetFunction<ExecuteCommandFunc>(
-    //     dllManager.GetEditorDLL(),
-    //     "LoadScene"
-    // );
-    // LoadScene();
-
-    if (!SendCommand || !GetReceiveCommand) {
-      Log("Failed to initialize message functions", Debug::LogLevel::CRASH);
-      return;
-    }
-
-    std::atomic<bool> processingMessage{false};
-
-    while (messageThreadRunning) {
-      try {
-        if (!processingMessage) {
-          std::string message = GetReceiveCommand();
-          if (!message.empty()) {
-            processingMessage = true;
-
-            std::thread([this, message, &processingMessage]() {
-              try {
-                std::lock_guard<std::mutex> lock(queueMutex);
-                messageQueue.push(message);
-                Log("[HandlerIlmeeeEngine] Received: " + message,
-                    Debug::LogLevel::INFO);
-
-                // Check if message contains directory info
-                // if (message.find("C:/") || message.find("E:/") !=
-                // string::npos || message.find("F:/")) {
-                //     auto SetProjectPath =
-                //     dllManager.GetFunction<ExecuteCommandFunc>(
-                //         dllManager.GetEditorDLL(),
-                //         "SetProjectPath"
-                //     );
-                //     Log("Current path now: "+message);
-                //     if (SetProjectPath) {
-                //         // Extract path from message
-                //         std::string path = message;
-                //         SetProjectPath();
-                //         Log("Set project path: " + path,
-                //         Debug::LogLevel::INFO);
-                //     }
-                // } else
-                if (message ==
-                    "/home/hylmi/GameEngineFolder/My First Project") {
-                  auto SetProjectPath =
-                      libManager.GetFunction<SetProjectPathFunc>(
-                          libManager.GetEditorLib(), "SetProjectPath");
-                  // if (SetProjectPath)
-                  // {
-                  Log("Set project path: " + message, Debug::LogLevel::SUCCESS);
-                  SetProjectPath(message);
-                  // }
-                }
-                bool deferred = false;
-                if (message == "LoadScene") {
-                  Log("Processing LoadScene command...");
-                  auto HandlerMethodExecute =
-                      libManager.GetFunction<ExecuteCommandFunc>(
-                          libManager.GetEditorLib(), message.c_str());
-
-                  if (HandlerMethodExecute) {
-                    struct CallbackData {
-                      ExecuteCommandFunc func;
-                      std::atomic<bool> *flag;
-                    };
-                    auto *cbData = new CallbackData{HandlerMethodExecute,
-                                                    &processingMessage};
-                    g_idle_add(
-                        [](gpointer data) -> gboolean {
-                          auto *args = static_cast<CallbackData *>(data);
-                          try {
-                            args->func();
-                          } catch (const std::exception &e) {
-                            Log("Exception in idle LoadScene: " +
-                                    std::string(e.what()),
-                                Debug::LogLevel::CRASH);
-                          }
-                          *(args->flag) = false;
-                          delete args;
-                          return G_SOURCE_REMOVE;
-                        },
-                        cbData);
-                    deferred = true;
-                  }
-                }
-
-                if (!deferred) {
-                  processingMessage = false;
-                }
-              } catch (const std::exception &e) {
-                Log("Message processing error: " + std::string(e.what()),
-                    Debug::LogLevel::CRASH);
-                processingMessage = false;
-              }
-            }).detach();
-          }
-        }
-
-        // Heartbeat check
-        static auto lastHeartbeat = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now -
-                                                             lastHeartbeat)
-                .count() >= 5) {
-          if (SendCommand) {
-            // SendCommand("Info Heartbeat");
-          }
-          lastHeartbeat = now;
-        }
-
-        // Process Windows messages
-        // MSG msg;
-        // while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        //     TranslateMessage(&msg);
-        //     DispatchMessage(&msg);
-        //     if (msg.message == WM_QUIT) {
-        //         messageThreadRunning = false;
-        //         break;
-        //     }
-        // }
-        while (g_main_context_iteration(NULL, FALSE)) {
-          // Process all pending GTK events
-          if (!messageThreadRunning) {
-            break;
-          }
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-      } catch (const std::exception &e) {
-        Log("Message loop error: " + std::string(e.what()),
-            Debug::LogLevel::CRASH);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-      }
-    }
+  // engine.stop from the core, or the core going away: either way the engine
+  // loop has to end so this process exits instead of lingering as an orphan.
+  static void OnStopRequested(const char *payloadJson, void *user) {
+    auto *self = static_cast<LaunchSequence *>(user);
+    Log("[HandlerIlmeeeEngine] Stop requested by core: " +
+            std::string(payloadJson ? payloadJson : "{}"),
+        Debug::LogLevel::INFO);
+    self->stopRequested = true;
+    if (self->engineStop)
+      self->engineStop();
   }
 
-  void StopMessagePolling() {
-    messageThreadRunning = false;
-    if (messagePollingThread.joinable()) {
-      messagePollingThread.join();
+  bool ConnectToCore() {
+    if (ipcUrl.empty()) {
+      Log("No " + std::string(ilmeee::net::proto::kIpcUrlArg) +
+              " given; running without a connection to the editor",
+          Debug::LogLevel::WARNING);
+      return true;
+    }
+
+    auto IpcOn = libManager.GetFunction<IpcOnFunc>(libManager.GetEditorLib(),
+                                                   "IpcOn");
+    auto IpcConnect = libManager.GetFunction<IpcConnectFunc>(
+        libManager.GetEditorLib(), "IpcConnect");
+    engineStop = libManager.GetFunction<EngineStopFunc>(
+        libManager.GetEngineLib(), "EngineStop");
+    if (!IpcOn || !IpcConnect || !engineStop)
+      return false; // GetFunction already reported which one.
+
+    IpcOn(ilmeee::net::proto::kEngineStop, &LaunchSequence::OnStopRequested,
+          this);
+    IpcOn(ilmeee::net::proto::kCoreLost, &LaunchSequence::OnStopRequested,
+          this);
+
+    // Returns at once: the client keeps dialling in the background, so there
+    // is nothing to wait for here.
+    if (!IpcConnect(ipcUrl.c_str(), ipcToken.c_str())) {
+      LibraryManager::ShowError("Failed to start the editor connection");
+      return false;
+    }
+    return true;
+  }
+
+  // Dispatches IPC messages (handlers run on this thread) and pumps GTK,
+  // which the engine-side file dialogs need.
+  void RunMessageLoop() {
+    Log("Starting message loop...", Debug::LogLevel::INFO);
+    auto IpcPoll = libManager.GetFunction<IpcPollFunc>(
+        libManager.GetEditorLib(), "IpcPoll");
+
+    while (messageThreadRunning) {
+      if (IpcPoll)
+        IpcPoll();
+      while (messageThreadRunning && g_main_context_iteration(NULL, FALSE)) {
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
   }
 
 public:
   // Ui loading sequence
-  LaunchSequence(LoadingWindow &window, LibraryManager &dllManager)
-      : loadingWindow(window), libManager(dllManager) {
+  LaunchSequence(LoadingWindow &window, LibraryManager &dllManager,
+                 std::string url, std::string token)
+      : loadingWindow(window), libManager(dllManager), ipcUrl(std::move(url)),
+        ipcToken(std::move(token)) {
 
     // Define loading steps
     steps = {
@@ -569,7 +493,6 @@ public:
            }
            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
            return Init("My First Project", 1280, 720);
-           Log("Engine initialized", Debug::LogLevel::SUCCESS);
          },
          30},
         {"Initializing Editor...",
@@ -583,86 +506,14 @@ public:
            }
            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
            return InitEditor("Ilmee Editor", 1280, 720);
-           Log("Editor initialized", Debug::LogLevel::SUCCESS);
          },
          25},
-        {"Starting Editor Server...",
+        {"Connecting to Ilmeee Editor...",
          [&]() {
-           Log("Starting Editor Server...");
-           StartServerFunc StartServer =
-               libManager.GetFunction<StartServerFunc>(
-                   libManager.GetEditorLib(), "StartServer");
-           if (!StartServer) {
-             LibraryManager::ShowError("Failed to find StartServer function");
-             return false;
-           }
-           std::this_thread::sleep_for(std::chrono::milliseconds(600));
-           return StartServer();
-           // Log("Editor Server started", Debug::LogLevel::SUCCESS);
+           Log("Connecting to Ilmeee Editor...");
+           return ConnectToCore();
          },
-         15},
-        {"Connecting Editor to Engine...",
-         [&]() {
-           Log("Connecting Editor to Engine...");
-           auto ConnectToEngine = libManager.GetFunction<ConnectToEngineFunc>(
-               libManager.GetEditorLib(), "ConnectToEngine");
-
-           if (!ConnectToEngine) {
-             LibraryManager::ShowError(
-                 "Failed to find ConnectToEngine function");
-             return false;
-           }
-
-           if (!ConnectToEngine()) {
-             LibraryManager::ShowError("Failed to connect editor to engine");
-             return false;
-           }
-
-           // Start message polling after successful connection
-           // StartMessagePolling();
-
-           // Test message
-           // auto SendCommand =
-           // dllManager.GetFunction<SendCommandToEngineFunc>(
-           //     dllManager.GetEditorDLL(),
-           //     "SendCommandToEngine"
-           // );
-
-           // if (SendCommand) {
-           //     SendCommand("[HandlerLauncher] Communication initialized");
-           // }
-
-           return true;
-           // Log("Editor connected to engine", Debug::LogLevel::SUCCESS);
-         },
-         10}};
-  }
-
-  // Dont Use Like This is not safe TODO: You should create a string method with
-  // asyncron to handle receive message from Ui Editor
-  string GetEngineMessage() {
-    auto GetReceiveCommand = libManager.GetFunction<GetCommandFunc>(
-        libManager.GetEditorLib(), "GetCommandFromEngine");
-
-    if (!GetReceiveCommand) {
-      std::cout << "Failed to find GetReceiveCommand function" << std::endl;
-      return "Error: Cannot receive messages from engine";
-    }
-
-    try {
-      string message = GetReceiveCommand();
-      if (!message.empty()) {
-        std::cout << "Engine Message: " + message << std::endl;
-        return message;
-      }
-    } catch (const std::exception &e) {
-      std::cerr << "Error receiving message: " + string(e.what()) << endl;
-      // DLLManager::ShowError(("Error receiving message: " +
-      // string(e.what())).c_str());
-      return "Error: " + string(e.what());
-    }
-
-    return "No message";
+         25}};
   }
 
   bool Execute() {
@@ -677,7 +528,6 @@ public:
     for (const auto &step : steps) {
       // Update status
       loadingWindow.SetStatus(step.description);
-      // loadingWindow.ProcessMessages();
 
       // Execute step
       if (!step.action()) {
@@ -688,38 +538,38 @@ public:
       currentProgress += step.progressWeight;
       int percentage = (currentProgress * 100) / totalProgress;
       loadingWindow.SetProgress(percentage);
-      // loadingWindow.ProcessMessages();
     }
 
     loadingWindow.SetStatus("Launch Complete!");
     loadingWindow.SetProgress(100);
-    // loadingWindow.ProcessMessages();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     Log("Launch Complete!", Debug::LogLevel::SUCCESS);
-    // Start message loop in a separate thread
-    std::thread messageThread(&LaunchSequence::RunMessageLoop, this);
-    messageThread.detach(); // Let it run independently
 
+    messageThreadRunning = true;
+    messagePollingThread = std::thread(&LaunchSequence::RunMessageLoop, this);
     return true;
   }
 
-  std::vector<std::string> GetPendingMessages() {
-    std::vector<std::string> messages;
-    std::lock_guard<std::mutex> lock(queueMutex);
+  // True once the core asked us to stop (possibly before the engine loop
+  // even started, in which case there is no point starting it).
+  bool StopRequested() const { return stopRequested; }
 
-    while (!messageQueue.empty()) {
-      messages.push_back(messageQueue.front());
-      messageQueue.pop();
+  // Joins the message thread, then closes the IPC connection. Call before
+  // the libraries go away.
+  void Shutdown() {
+    messageThreadRunning = false;
+    if (messagePollingThread.joinable())
+      messagePollingThread.join();
+    if (!ipcUrl.empty() && libManager.GetEditorLib()) {
+      auto IpcDisconnect = libManager.GetFunction<IpcDisconnectFunc>(
+          libManager.GetEditorLib(), "IpcDisconnect");
+      if (IpcDisconnect)
+        IpcDisconnect();
     }
-
-    return messages;
   }
 
-  // Modify the destructor to ensure clean shutdown
   ~LaunchSequence() {
-    messageThreadRunning = false;
-    this_thread::sleep_for(std::chrono::milliseconds(100));
-    // StopMessagePolling();
+    Shutdown();
     std::cout << "Destroying LaunchSequence" << std::endl;
   }
 };

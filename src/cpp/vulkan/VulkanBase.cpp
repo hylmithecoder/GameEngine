@@ -100,6 +100,8 @@ void VulkanBase::Run() {
 }
 
 void VulkanBase::Cleanup() {
+  // Idempotent: an explicit Cleanup() is followed by the one in ~VulkanBase,
+  // so every handle is cleared once it has been destroyed.
   OnCleanup();
 
   if (ctx.device != VK_NULL_HANDLE) {
@@ -120,15 +122,19 @@ void VulkanBase::Cleanup() {
     vkDestroyDescriptorPool(ctx.device, ctx.descriptorPool, nullptr);
     vkDestroyCommandPool(ctx.device, ctx.commandPool, nullptr);
     vkDestroyDevice(ctx.device, nullptr);
+    ctx.device = VK_NULL_HANDLE;
   }
 
   if (ctx.instance != VK_NULL_HANDLE) {
     vkDestroySurfaceKHR(ctx.instance, surface, nullptr);
     vkDestroyInstance(ctx.instance, nullptr);
+    surface = VK_NULL_HANDLE;
+    ctx.instance = VK_NULL_HANDLE;
   }
 
   if (window) {
     SDL_DestroyWindow(window);
+    window = nullptr;
   }
   SDL_Quit();
 }

@@ -1,4 +1,7 @@
 #include "../../../../include/core_engine/core_editor/IlmeeeEditor.h"
+#include "../../../../include/core_engine/net/MessageBus.hpp"
+#include "../../../../include/core_engine/net/Protocol.hpp"
+#include "../../../../include/core_engine/net/WsTransport.hpp"
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -320,6 +323,8 @@ void Editor::Run() {
 void Editor::Shutdown() {
   LogInfo("Shutting down editor...");
 
+  DisconnectIpc();
+
   // Clear all windows
   windows.clear();
 
@@ -391,56 +396,65 @@ void Editor::OpenProject(const std::string &path) {
   LogSuccess("Project opened successfully");
 }
 
-void Editor::LoadScene() {
+// Runs the scene picker and converts the chosen scene to JSON next to it.
+// Shared by the exported LoadScene() and the core's scene.load request.
+static ilmeee::net::RequestResult
+LoadSceneInteractive(const std::string &projectPath) {
+  using ilmeee::net::RequestResult;
   NFD::Guard nfdGuard;
   NFD::UniquePath outPath;
-
   nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
 
-  try {
-    nfdresult_t result =
-        NFD::OpenDialog(outPath, filterItem, 1, projectPath.c_str());
-
-    if (result == NFD_OKAY && outPath.get() != nullptr) {
-      std::string scenePath = outPath.get();
-
-      if (fs::path(scenePath).extension() != ".ilmeeescene") {
-        LogError("Invalid scene file format");
-        return;
-      }
-
-      try {
-        // Deserialisasi scene
-        SceneData loaded = DeserializeScene(scenePath);
-        LogInfo("Scene Loaded: " + loaded.sceneName);
-        for (const auto &obj : loaded.objects) {
-          LogInfo("Loaded Object: " + obj.name + " at (" +
-                  std::to_string(obj.x) + ", " + std::to_string(obj.y) + ")");
-        }
-
-        // Simpan JSON sementara
-        std::string tempScenePath =
-            projectPath + "/TempScene_" + loaded.sceneName + ".json";
-        std::ofstream tempOut(tempScenePath);
-        if (!tempOut) {
-          LogError("Failed to write temp scene file");
-          return;
-        }
-
-        tempOut << SerializeSceneToJson(
-            loaded); // Pastikan kamu punya fungsi ini
-        tempOut.close();
-
-        // Kirim path ke engine
-        SendCommandToEngine(("LoadSceneFromFile: " + tempScenePath).c_str());
-
-      } catch (const std::exception &e) {
-        LogError(std::string("Failed to load scene: ") + e.what());
-      }
-    }
-  } catch (const std::exception &e) {
-    LogError(std::string("Exception in LoadScene: ") + e.what());
+  nfdresult_t result = NFD::OpenDialog(
+      outPath, filterItem, 1,
+      projectPath.empty() ? nullptr : projectPath.c_str());
+  if (result == NFD_CANCEL)
+    return RequestResult::Fail("cancelled");
+  if (result != NFD_OKAY || outPath.get() == nullptr) {
+    const char *err = NFD_GetError();
+    return RequestResult::Fail(std::string("file dialog failed: ") +
+                               (err ? err : "unknown error"));
   }
+
+  std::string scenePath = outPath.get();
+  if (fs::path(scenePath).extension() != ".ilmeeescene")
+    return RequestResult::Fail("not an .ilmeeescene file: " + scenePath);
+
+  try {
+    SceneData loaded = DeserializeScene(scenePath);
+    LogInfo("Scene Loaded: " + loaded.sceneName);
+    for (const auto &obj : loaded.objects) {
+      LogInfo("Loaded Object: " + obj.name + " at (" + std::to_string(obj.x) +
+              ", " + std::to_string(obj.y) + ")");
+    }
+
+    // Without a project (standalone debug), write beside the scene rather
+    // than at "/TempScene_*.json".
+    fs::path tempDir = projectPath.empty() ? fs::path(scenePath).parent_path()
+                                           : fs::path(projectPath);
+    std::string tempScenePath =
+        (tempDir / ("TempScene_" + loaded.sceneName + ".json")).string();
+    std::ofstream tempOut(tempScenePath);
+    if (!tempOut)
+      return RequestResult::Fail("cannot write " + tempScenePath);
+    tempOut << SerializeSceneToJson(loaded);
+
+    return RequestResult::Ok({{"path", scenePath},
+                              {"json", tempScenePath},
+                              {"sceneName", loaded.sceneName},
+                              {"objects", loaded.objects.size()}});
+  } catch (const std::exception &e) {
+    return RequestResult::Fail(std::string("failed to load scene: ") +
+                               e.what());
+  }
+}
+
+void Editor::LoadScene() {
+  auto result = LoadSceneInteractive(projectPath);
+  if (result.ok)
+    LogSuccess("Scene converted to " + result.payload.value("json", std::string()));
+  else if (result.error != "cancelled")
+    LogError("LoadScene: " + result.error);
 }
 
 void Editor::CloseProject() {
@@ -515,26 +529,118 @@ void RecommendationWindow::Render() {
   ImGui::End();
 }
 
-bool Editor::connectToEngine() {
-  std::cout << "Connecting to engine..." << std::endl;
-  return tcpClient.connectToEngine();
+bool Editor::ConnectIpc(const std::string &url, const std::string &token) {
+  using namespace ilmeee::net;
+  if (ipcBus)
+    return true;
+
+  WsClientOptions options;
+  options.url = url;
+  ipcTransport = std::make_unique<WsClientTransport>(options);
+
+  BusConfig config;
+  config.role = BusRole::Client;
+  config.token = token;
+  config.clientRole = proto::kRoleEngine;
+  ipcBus = std::make_unique<MessageBus>(*ipcTransport, config);
+
+  ipcBus->SetLogSink([](BusLogLevel level, const std::string &text) {
+    if (level == BusLogLevel::Error)
+      LogError("[IPC] " + text);
+    else if (level == BusLogLevel::Warning)
+      LogWarning("[IPC] " + text);
+    else
+      LogInfo("[IPC] " + text);
+  });
+
+  ipcBus->OnPeerJoined([](const PeerInfo &core) {
+    LogSuccess("[IPC] Connected to core (pid " + std::to_string(core.pid) +
+               ")");
+  });
+  ipcBus->OnPeerLeft([this](const PeerInfo &, const std::string &reason) {
+    LogWarning("[IPC] Lost connection to core: " + reason);
+    NotifyIpcListeners(proto::kCoreLost, json{{"reason", reason}}.dump());
+  });
+
+  ipcBus->On(proto::kSessionInit, [this](ConnectionId, const json &payload) {
+    std::string project = payload.value("project", std::string());
+    if (!project.empty()) {
+      projectPath = project;
+      LogInfo("Project path set by core: " + project);
+    }
+    NotifyIpcListeners(proto::kSessionInit, payload.dump());
+  });
+  ipcBus->OnRequest(proto::kSceneLoad, [this](ConnectionId, const json &) {
+    return LoadSceneInteractive(projectPath);
+  });
+
+  // Listeners the host registered before connecting.
+  for (const auto &[type, _] : ipcListeners)
+    ForwardIpcType(type);
+
+  if (!ipcBus->Start()) {
+    LogError("[IPC] Could not start client for " + url);
+    ipcBus.reset();
+    ipcTransport.reset();
+    return false;
+  }
+  LogInfo("[IPC] Connecting to core at " + url);
+  return true;
 }
 
-bool Editor::startServer() {
-  std::cout << "Starting server..." << std::endl;
-  return tcpClient.startServerCore();
+void Editor::ForwardIpcType(const std::string &type) {
+  using namespace ilmeee::net;
+  // Local-only, or already handled above (which notifies on its own).
+  if (!ipcBus || type == proto::kCoreLost || type == proto::kSessionInit)
+    return;
+  ipcBus->On(type, [this, type](ConnectionId, const json &payload) {
+    NotifyIpcListeners(type, payload.dump());
+  });
 }
 
-bool Editor::sendCommandToEngine(const std::string &command) {
-  std::cout << "Sending command to engine: " << command << std::endl;
-  return tcpClient.sendMessageToEngine(command);
+void Editor::NotifyIpcListeners(const std::string &type,
+                                const std::string &payload) {
+  auto it = ipcListeners.find(type);
+  if (it == ipcListeners.end())
+    return;
+  for (auto &listener : it->second)
+    listener(payload);
 }
 
-std::string Editor::receiveMessageFromEngine() {
-  // std::cout << "Receiving message from engine..." << std::endl;
-  std::string msg = tcpClient.receiveMessageFromEngine();
-  // std::cout << "Message: " << msg << std::endl;
-  return msg;
+void Editor::PollIpc() {
+  if (ipcBus)
+    ipcBus->Poll();
+}
+
+bool Editor::IsIpcReady() const { return ipcBus && ipcBus->IsReady(); }
+
+bool Editor::EmitIpc(const std::string &type, const std::string &payloadJson) {
+  if (!ipcBus)
+    return false;
+  json payload = payloadJson.empty()
+                     ? json::object()
+                     : json::parse(payloadJson, nullptr, false);
+  if (payload.is_discarded() || !payload.is_object()) {
+    LogError("[IPC] Emit '" + type + "': payload is not a JSON object");
+    return false;
+  }
+  return ipcBus->Emit(type, std::move(payload));
+}
+
+void Editor::OnIpc(const std::string &type,
+                   std::function<void(const std::string &)> callback) {
+  auto &listeners = ipcListeners[type];
+  listeners.push_back(std::move(callback));
+  if (listeners.size() == 1)
+    ForwardIpcType(type);
+}
+
+void Editor::DisconnectIpc() {
+  if (ipcBus) {
+    ipcBus->Stop();
+    ipcBus.reset();
+  }
+  ipcTransport.reset();
 }
 
 // ========== C API Implementation ==========
@@ -576,39 +682,43 @@ ILMEEEDITOR_API void EditorShutdown() {
   }
 }
 
-ILMEEEDITOR_API bool StartServer() {
-  if (Editor::instance) {
-    Editor::instance->startServer();
+ILMEEEDITOR_API bool IpcConnect(const char *url, const char *token) {
+  if (!Editor::instance) {
+    LogError("Editor not initialized. Call EditorInit first.");
+    return false;
   }
-  return true;
+  return Editor::instance->ConnectIpc(url ? url : "", token ? token : "");
 }
 
-ILMEEEDITOR_API bool SendCommandToEngine(const char *command) {
-  if (Editor::instance) {
-    return Editor::instance->sendCommandToEngine(std::string(command));
-  }
-  LogError("Editor not initialized. Call EditorInit first.");
-  return false;
+ILMEEEDITOR_API void IpcPoll() {
+  if (Editor::instance)
+    Editor::instance->PollIpc();
 }
 
-ILMEEEDITOR_API bool ConnectToEngine() {
-  if (Editor::instance) {
-    return Editor::instance->connectToEngine();
-  }
-  LogError("Editor not initialized. Call EditorInit first.");
-  return false;
+ILMEEEDITOR_API bool IpcIsReady() {
+  return Editor::instance && Editor::instance->IsIpcReady();
 }
 
-ILMEEEDITOR_API string GetCommandFromEngine() {
-  // if (Editor::instance) {
-  std::string command =
-      Editor::instance
-          ->receiveMessageFromEngine(); // Make sure this returns string
-  // cout << "Received command from engine: " << command << endl;
-  return command;
-  // }
-  // // LogError("Editor not initialized. Call EditorInit first.");
-  // return "Still Empty";
+ILMEEEDITOR_API bool IpcEmit(const char *type, const char *payloadJson) {
+  if (!Editor::instance || !type)
+    return false;
+  return Editor::instance->EmitIpc(type, payloadJson ? payloadJson : "");
+}
+
+ILMEEEDITOR_API void IpcOn(const char *type, IpcCallback callback,
+                           void *user) {
+  if (!Editor::instance || !type || !callback) {
+    LogError("IpcOn: editor not initialized or bad arguments");
+    return;
+  }
+  Editor::instance->OnIpc(type, [callback, user](const std::string &payload) {
+    callback(payload.c_str(), user);
+  });
+}
+
+ILMEEEDITOR_API void IpcDisconnect() {
+  if (Editor::instance)
+    Editor::instance->DisconnectIpc();
 }
 
 ILMEEEDITOR_API void SetProjectPath(string &path) {

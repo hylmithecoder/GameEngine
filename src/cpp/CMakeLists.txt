@@ -29,8 +29,11 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/assets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerProject.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/GameBuildPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneLoader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GameBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/EditorSessionHistory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/TextureManager.cpp
