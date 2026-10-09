@@ -45,7 +45,11 @@ int main() {
 
   // ---- a project touching every kind of reference -----------------------
   Write(project / "assets/readme.txt", "hello");
+  Write(project / "assets/ui/main.json",
+        "{\"version\":1,\"elements\":[{\"id\":\"hp\",\"type\":\"text\","
+        "\"text\":\"HP: 100\"}]}");
   Write(project / "assets/models/inside.obj", "o inside");
+  Write(project / "assets/logo.png", "png");
   Write(project / "extra/thing.obj", "o thing");
   Write(project / "extra/thing.mtl", "newmtl m");
   Write(outside / "hero/hero.obj", "o hero");
@@ -66,6 +70,16 @@ int main() {
   scene.entities.push_back(Model("Gone", "assets/models/missing.obj"));
   scene.entities.push_back(Model("AtRoot", "model_at_root.obj"));
   scene.entities.back().parent = 0;
+  SceneEntity canvas;
+  canvas.name = "Canvas";
+  canvas.kind = PrimitiveKind::Canvas;
+  scene.entities.push_back(canvas);
+  SceneEntity uiImage;
+  uiImage.name = "Logo";
+  uiImage.kind = PrimitiveKind::UiImage;
+  uiImage.parent = 6;
+  uiImage.uiImagePath = "assets/logo.png";
+  scene.entities.push_back(uiImage);
   fs::create_directories(project / "scenes");
   CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
 
@@ -93,6 +107,14 @@ int main() {
   CHECK((fs::status(out / "bin/My_First_Project").permissions() &
          fs::perms::owner_exec) != fs::perms::none);
   CHECK(fs::exists(out / "assets/readme.txt"));
+  {
+    std::ifstream in(out / "assets/ui/main.json");
+    CHECK(in.good());
+    if (in) {
+      const auto ui = nlohmann::json::parse(in);
+      CHECK(ui["elements"][0]["text"] == "HP: 100");
+    }
+  }
   CHECK(fs::exists(out / "assets/shaders/vulkan/scene_mesh.vert.spv"));
   CHECK(!fs::exists(out / "build")); // the build is not copied into itself
   CHECK(!fs::exists(out.string() + ".building"));
@@ -110,6 +132,10 @@ int main() {
   CHECK(built.entities.size() == scene.entities.size());
   CHECK(built.backgroundColor == scene.backgroundColor);
   CHECK(built.entities[5].parent == 0);
+  CHECK(built.entities[6].kind == PrimitiveKind::Canvas);
+  CHECK(built.entities[7].kind == PrimitiveKind::UiImage);
+  CHECK(built.entities[7].parent == 6);
+  CHECK(built.entities[7].uiImagePath == "assets/logo.png");
   // Every model/texture path is now relative and exists inside the game.
   auto present = [&](const std::string &p) {
     return fs::path(p).is_relative() && fs::exists(out / p);

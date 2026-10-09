@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3 (hierarchy) / v1.4 (environment): round trip, reading
+// .ilmeeescene v1.3–v1.5: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -74,6 +74,36 @@ int main() {
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
     CHECK(in.backgroundColor == glm::vec4(0.1f, 0.5f, 0.9f, 1.0f));
+  }
+
+  // 1c. Canvas and UI children live in the same scene hierarchy (v1.5).
+  {
+    IlmeeeScene s;
+    SceneEntity canvas;
+    canvas.name = "Canvas";
+    canvas.kind = PrimitiveKind::Canvas;
+    canvas.uiWidth = 1920;
+    canvas.uiHeight = 1080;
+    SceneEntity button;
+    button.name = "Pause";
+    button.kind = PrimitiveKind::UiButton;
+    button.parent = 0;
+    button.uiAnchor = 1;
+    button.uiText = "Pause";
+    button.uiAction = "TogglePause";
+    button.uiColor = {0.2f, 0.4f, 0.8f, 1.0f};
+    s.entities = {canvas, button};
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 2);
+    CHECK(in.entities[0].kind == PrimitiveKind::Canvas);
+    CHECK(in.entities[0].uiWidth == 1920);
+    CHECK(in.entities[1].parent == 0);
+    CHECK(in.entities[1].kind == PrimitiveKind::UiButton);
+    CHECK(in.entities[1].uiAnchor == 1);
+    CHECK(in.entities[1].uiAction == "TogglePause");
+    CHECK(in.entities[1].uiColor == glm::vec4(0.2f, 0.4f, 0.8f, 1.0f));
   }
 
   // 2. A v1.2 file (no parent field) still loads, everything at the root.

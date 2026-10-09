@@ -21,6 +21,8 @@
 //                         position/rotation/scale are then parent-local
 //   -- after all entities, v1.4 environment --
 //   float32 backgroundColor[4]   clear colour the scene is shown against
+//   -- v1.5 UI entities: Canvas/UiText/UiImage/UiButton carry screen-space
+//      properties after their parent field; world entities have no extra data --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -44,6 +46,10 @@ enum class PrimitiveKind : uint8_t {
   ExternalPmx = 4,
   Light = 5,
   Camera = 6,
+  Canvas = 7,
+  UiText = 8,
+  UiImage = 9,
+  UiButton = 10,
 };
 
 // One per-surface texture override: which material/surface index of the
@@ -83,6 +89,18 @@ struct SceneEntity {
 
   // Index of the parent in IlmeeeScene::entities, -1 for a root (v1.3).
   int32_t parent = -1;
+
+  // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
+  // child elements use them as their displayed size.
+  uint8_t uiAnchor = 0;
+  float uiX = 0.0f, uiY = 0.0f;
+  float uiWidth = 160.0f, uiHeight = 44.0f;
+  float uiFontSize = 24.0f;
+  std::string uiText;
+  std::string uiImagePath;
+  std::string uiAction;
+  glm::vec4 uiColor{1.0f};
+  glm::vec4 uiBackground{0.14f, 0.20f, 0.31f, 0.92f};
 };
 
 struct IlmeeeScene {
@@ -109,6 +127,9 @@ inline void WriteVec3(std::ofstream &f, const glm::vec3 &v) {
   WriteF32(f, v.y);
   WriteF32(f, v.z);
 }
+inline void WriteVec4(std::ofstream &f, const glm::vec4 &v) {
+  for (int i = 0; i < 4; ++i) WriteF32(f, v[i]);
+}
 inline void WriteString(std::ofstream &f, const std::string &s) {
   uint16_t n = (uint16_t)std::min<size_t>(s.size(), 65535);
   WriteU16(f, n);
@@ -127,6 +148,11 @@ inline bool ReadF32(std::ifstream &f, float &v) {
 }
 inline bool ReadVec3(std::ifstream &f, glm::vec3 &v) {
   return ReadF32(f, v.x) && ReadF32(f, v.y) && ReadF32(f, v.z);
+}
+inline bool ReadVec4(std::ifstream &f, glm::vec4 &v) {
+  for (int i = 0; i < 4; ++i)
+    if (!ReadF32(f, v[i])) return false;
+  return true;
 }
 inline bool ReadString(std::ifstream &f, std::string &out) {
   uint16_t n = 0;
@@ -147,7 +173,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 4); // minor
+  detail::WriteU16(f, 5); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -180,6 +206,25 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
 
     // Version 1.3: hierarchy
     detail::WriteU32(f, (uint32_t)e.parent);
+    // Version 1.5: only UI entities carry screen-space data.
+    if (e.kind == PrimitiveKind::Canvas) {
+      detail::WriteF32(f, e.uiWidth);
+      detail::WriteF32(f, e.uiHeight);
+    } else if (e.kind == PrimitiveKind::UiText ||
+               e.kind == PrimitiveKind::UiImage ||
+               e.kind == PrimitiveKind::UiButton) {
+      detail::WriteBytes(f, &e.uiAnchor, 1);
+      detail::WriteF32(f, e.uiX);
+      detail::WriteF32(f, e.uiY);
+      detail::WriteF32(f, e.uiWidth);
+      detail::WriteF32(f, e.uiHeight);
+      detail::WriteF32(f, e.uiFontSize);
+      detail::WriteString(f, e.uiText);
+      detail::WriteString(f, e.uiImagePath);
+      detail::WriteString(f, e.uiAction);
+      detail::WriteVec4(f, e.uiColor);
+      detail::WriteVec4(f, e.uiBackground);
+    }
   }
 
   // Version 1.4: environment
@@ -274,6 +319,25 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       if (!detail::ReadU32(f, parent))
         return false;
       e.parent = (int32_t)parent;
+    }
+    if (minor >= 5) {
+      if (e.kind == PrimitiveKind::Canvas) {
+        if (!detail::ReadF32(f, e.uiWidth) ||
+            !detail::ReadF32(f, e.uiHeight)) return false;
+      } else if (e.kind == PrimitiveKind::UiText ||
+                 e.kind == PrimitiveKind::UiImage ||
+                 e.kind == PrimitiveKind::UiButton) {
+        if (!detail::ReadBytes(f, &e.uiAnchor, 1) ||
+            !detail::ReadF32(f, e.uiX) || !detail::ReadF32(f, e.uiY) ||
+            !detail::ReadF32(f, e.uiWidth) ||
+            !detail::ReadF32(f, e.uiHeight) ||
+            !detail::ReadF32(f, e.uiFontSize) ||
+            !detail::ReadString(f, e.uiText) ||
+            !detail::ReadString(f, e.uiImagePath) ||
+            !detail::ReadString(f, e.uiAction) ||
+            !detail::ReadVec4(f, e.uiColor) ||
+            !detail::ReadVec4(f, e.uiBackground)) return false;
+      }
     }
     out.entities.push_back(std::move(e));
   }

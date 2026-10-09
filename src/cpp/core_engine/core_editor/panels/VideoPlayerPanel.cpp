@@ -36,7 +36,8 @@ bool VideoPlayerPanel::Open(const std::string &path) {
   filePathBuf[sizeof(filePathBuf) - 1] = '\0';
 
   if (handler->OpenFileVideo(path.c_str())) {
-    handler->openAudio();
+    handler->loopVideo = loop;
+    handler->SetVideoPaused(false);
     handler->isPlaying = true;
     paused = false;
     return true;
@@ -49,21 +50,28 @@ void VideoPlayerPanel::Play() {
     return;
   paused = false;
   handler->isPlaying = true;
+  handler->SetVideoPaused(false);
 }
 
 void VideoPlayerPanel::Pause() {
   if (!handler)
     return;
   paused = true;
+  handler->SetVideoPaused(true);
 }
 
-void VideoPlayerPanel::TogglePause() { paused = !paused; }
+void VideoPlayerPanel::TogglePause() {
+  if (paused)
+    Play();
+  else
+    Pause();
+}
 
 void VideoPlayerPanel::Stop() {
   if (!handler)
     return;
-  paused = true;
   handler->SeekTo(0.0);
+  Pause();
 }
 
 void VideoPlayerPanel::SeekTo(double seconds) {
@@ -188,6 +196,7 @@ void VideoPlayerPanel::DrawTransportBar() {
 
   ImGui::SameLine();
   ImGui::Checkbox("Loop", &loop);
+  handler->loopVideo = loop;
 }
 
 void VideoPlayerPanel::DrawInfoStrip() {

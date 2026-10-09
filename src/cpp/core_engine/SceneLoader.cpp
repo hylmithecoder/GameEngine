@@ -21,6 +21,9 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
   std::vector<int> loadedAs(scene.entities.size(), -1);
   for (size_t ei = 0; ei < scene.entities.size(); ++ei) {
     const SceneEntity &e = scene.entities[ei];
+    if (e.kind == PrimitiveKind::Canvas || e.kind == PrimitiveKind::UiText ||
+        e.kind == PrimitiveKind::UiImage || e.kind == PrimitiveKind::UiButton)
+      continue; // Screen-space entities are handled by GameUI.
     bool ok = false;
     switch (e.kind) {
     case PrimitiveKind::Cube:

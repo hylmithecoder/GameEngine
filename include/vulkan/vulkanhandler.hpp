@@ -23,6 +23,7 @@
 // #include <VkDevice.hpp>
 #include <VkTools.hpp>
 #include <array>
+#include <deque>
 #include <vector>
 
 #define GLM_FORCE_RADIANS
@@ -71,6 +72,8 @@ public:
   void updateAudio();
   void updateBothVideoAndAudio();
   void updateBothVideoAndAudio24fps();
+  void SetVideoPaused(bool paused);
+  bool loopVideo = true;
 
   // Seek to a specific absolute position in seconds. Clamped to
   // [0, duration]. Flushes decoder + audio queue so playback resumes
@@ -156,18 +159,29 @@ private:
   AVFrame *frameRGB = nullptr;
   AVFrame *hw_frame = nullptr;
   AVPacket *packet = nullptr;
-  AVFrame *lastGoodFrameRGB;
+  AVFrame *lastGoodFrameRGB = nullptr;
   SDL_Texture *videoTexture = nullptr;
   SDL_AudioSpec audioSpec;
   // int audioStream = -1;
   SwrContext *swrContext = nullptr;
   SDL_AudioDeviceID audioDeviceID = 0;
-  uint8_t *buffer;
+  uint8_t *buffer = nullptr;
   bool hasValidFrame = false;
   int audioStreamIndex = -1;
   SDL_AudioStream *audioStream = nullptr;
+  std::deque<std::pair<AVFrame *, double>> videoFrames;
+  double audioQueuedEnd = 0.0;
+  double seekPosition = 0.0;
+  double playbackAnchor = 0.0;
+  uint64_t playbackAnchorTicks = 0;
+  uint64_t audioEmptySinceTicks = 0;
+  bool audioClockValid = false;
+  bool videoPaused = false;
+  bool mediaEOF = false;
+  void clearVideoFrames();
+  double mediaTime(const AVFrame *decoded, int streamIndex) const;
 
-  AVChannelLayout audioChannelLayout;
+  AVChannelLayout audioChannelLayout{};
 
   void cleanUpVideoHandler();
 

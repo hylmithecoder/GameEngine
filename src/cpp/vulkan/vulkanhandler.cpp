@@ -1,6 +1,40 @@
 #include <stb/stb_image.h>
 #include <stdexcept>
+#include <algorithm>
+#include <cmath>
 #include <vulkanhandler.hpp>
+
+void VulkanHandler::clearVideoFrames() {
+  for (auto &item : videoFrames)
+    av_frame_free(&item.first);
+  videoFrames.clear();
+}
+
+double VulkanHandler::mediaTime(const AVFrame *decoded, int streamIndex) const {
+  const int64_t pts = decoded->best_effort_timestamp;
+  if (pts == AV_NOPTS_VALUE)
+    return NAN;
+  const double start = formatContext->start_time == AV_NOPTS_VALUE
+                           ? 0.0
+                           : formatContext->start_time * av_q2d(AV_TIME_BASE_Q);
+  return pts * av_q2d(formatContext->streams[streamIndex]->time_base) - start;
+}
+
+void VulkanHandler::SetVideoPaused(bool paused) {
+  if (videoPaused == paused)
+    return;
+  if (audioStream && audioClockValid && SDL_GetAudioStreamQueued(audioStream) > 0)
+    currentTime = std::max(0.0, audioQueuedEnd -
+        SDL_GetAudioStreamQueued(audioStream) / (44100.0 * 2 * sizeof(int16_t)));
+  else if (!audioClockValid && playbackAnchorTicks)
+    currentTime = playbackAnchor + (SDL_GetTicksNS() - playbackAnchorTicks) / 1e9;
+  videoPaused = paused;
+  playbackAnchor = currentTime;
+  playbackAnchorTicks = SDL_GetTicksNS();
+  if (audioDeviceID)
+    paused ? SDL_PauseAudioDevice(audioDeviceID)
+           : SDL_ResumeAudioDevice(audioDeviceID);
+}
 
 VkDescriptorSet VulkanHandler::LoadImage(const char *filename) {
   currentFile = filename;
@@ -134,6 +168,24 @@ void VulkanHandler::setCurrentDeviceAndPhysic(
 }
 
 void VulkanHandler::cleanUpVideoHandler() {
+  clearVideoFrames();
+  if (audioStream) {
+    SDL_DestroyAudioStream(audioStream);
+    audioStream = nullptr;
+  }
+  if (audioDeviceID) {
+    SDL_CloseAudioDevice(audioDeviceID);
+    audioDeviceID = 0;
+  }
+  if (swrContext)
+    swr_free(&swrContext);
+  if (audioCodecContext)
+    avcodec_free_context(&audioCodecContext);
+  av_channel_layout_uninit(&audioChannelLayout);
+  if (lastGoodFrameRGB) {
+    av_freep(&lastGoodFrameRGB->data[0]);
+    av_frame_free(&lastGoodFrameRGB);
+  }
   if (buffer)
     av_free(buffer);
   if (frameRGB)
@@ -178,11 +230,16 @@ void VulkanHandler::cleanUpVideoHandler() {
   buffer = nullptr;
   videoStream = -1;
   isPlaying = false;
+  audioClockValid = false;
+  audioEmptySinceTicks = 0;
+  videoPaused = false;
+  mediaEOF = false;
+  audioStreamIndex = -1;
 }
 
 bool VulkanHandler::OpenFileVideo(const char *filePath) {
 
-  if (isPlaying) {
+  if (formatContext) {
     cleanUpVideoHandler();
   }
 
@@ -297,12 +354,13 @@ bool VulkanHandler::OpenFileVideo(const char *filePath) {
 
   // Baca frame rate
   AVRational frameRate = formatContext->streams[videoStream]->avg_frame_rate;
-  fps = (double)frameRate.num / (double)frameRate.den;
+  fps = frameRate.den ? av_q2d(frameRate) : 0.0;
 
   currentTime = 0;
 
   // Baca durasi video
-  duration = formatContext->duration / 1000000.0;
+  duration = formatContext->duration == AV_NOPTS_VALUE
+                 ? 0.0 : formatContext->duration * av_q2d(AV_TIME_BASE_Q);
 
   // Alokasi packet
   cout << "[MainWindow] Allocating packet" << endl;
@@ -324,14 +382,20 @@ bool VulkanHandler::OpenFileVideo(const char *filePath) {
   cout << "[MainWindow] Opening audio" << endl;
   audioStreamIndex =
       av_find_best_stream(formatContext, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-  cout << "[MainWindow] Audio stream: " << audioStream << endl;
-  if (audioStreamIndex) {
+  cout << "[MainWindow] Audio stream: " << audioStreamIndex << endl;
+  if (audioStreamIndex >= 0) {
     openAudio();
   } else {
     Log("Audio Stream Not found", LogLevel::CRASH);
   }
 
   isPlaying = true;
+  seekPosition = 0.0;
+  playbackAnchor = 0.0;
+  playbackAnchorTicks = SDL_GetTicksNS();
+  audioClockValid = false;
+  audioEmptySinceTicks = 0;
+  mediaEOF = false;
   cout << "[MainWindow] Video handler initialized" << endl;
   return isPlaying;
 }
@@ -666,9 +730,9 @@ bool VulkanHandler::openAudio() {
 
   // Source specification (from FFmpeg)
   SDL_zero(srcSpec);
-  srcSpec.freq = audioCodecContext->sample_rate;
+  srcSpec.freq = 44100;
   srcSpec.format = SDL_AUDIO_S16;
-  srcSpec.channels = audioCodecContext->ch_layout.nb_channels;
+  srcSpec.channels = 2;
 
   // Destination specification (what we want for playback)
   SDL_zero(dstSpec);
@@ -879,120 +943,104 @@ void VulkanHandler::updateAudio() {
 }
 
 void VulkanHandler::updateBothVideoAndAudio() {
-  if (!isPlaying || !formatContext) {
-    return; // Video not initialized
-  }
+  if (!isPlaying || !formatContext || videoPaused)
+    return;
 
-  // Check if audio is available
-  bool hasAudio = (audioCodecContext && swrContext && audioDeviceID != 0 &&
-                   audioStream != nullptr);
+  constexpr double bytesPerSecond = 44100.0 * 2 * sizeof(int16_t);
+  constexpr int audioTargetBytes = 44100 * 2 * sizeof(int16_t) / 5;
+  const bool hasAudio = audioStream && audioCodecContext && swrContext;
+  const double targetTime = hasAudio && audioClockValid
+      ? (SDL_GetAudioStreamQueued(audioStream) > 0
+            ? std::max(0.0, audioQueuedEnd -
+                SDL_GetAudioStreamQueued(audioStream) / bytesPerSecond)
+            : currentTime)
+      : playbackAnchor + (SDL_GetTicksNS() - playbackAnchorTicks) / 1e9;
 
-  // Audio buffer constants for SDL3
-  const int MAX_AUDIO_QUEUE_SIZE = 8192 * 64;   // Maximum buffer size
-  const int IDEAL_AUDIO_QUEUE_SIZE = 8192 * 32; // Target buffer level
-  const int MIN_AUDIO_QUEUE_SIZE = 8192 * 16;   // Threshold to refill
-
-  // Track if we need to prioritize audio processing
-  bool needMoreAudio = false;
-  if (hasAudio) {
-    // SDL3: Use SDL_GetAudioStreamQueued instead of SDL_GetQueuedAudioSize
-    needMoreAudio =
-        (SDL_GetAudioStreamQueued(audioStream) < MIN_AUDIO_QUEUE_SIZE);
-  }
-
-  bool videoFrameProcessed = false;
-
-  // Pre-fill audio buffer if needed
-  if (hasAudio && needMoreAudio) {
-    for (int i = 0;
-         i < 5 && SDL_GetAudioStreamQueued(audioStream) < MIN_AUDIO_QUEUE_SIZE;
-         i++) {
-      updateAudio();
+  auto drainVideo = [&]() {
+    while (videoFrames.size() < 64 &&
+           avcodec_receive_frame(codecContext, frame) == 0) {
+      double pts = mediaTime(frame, videoStream);
+      if (!std::isfinite(pts))
+        pts = videoFrames.empty() ? currentTime :
+            videoFrames.back().second + (fps > 0 ? 1.0 / fps : 1.0 / 30.0);
+      if (pts + 0.001 >= seekPosition) {
+        AVFrame *copy = av_frame_clone(frame);
+        if (copy)
+          videoFrames.emplace_back(copy, pts);
+      }
+      av_frame_unref(frame);
     }
-  }
+  };
 
-  int maxPacketsToProcess = hasAudio && needMoreAudio ? 5 : 2;
-  int packetsProcessed = 0;
-
-  while (packetsProcessed < maxPacketsToProcess || !videoFrameProcessed) {
-    AVPacket *pkt = av_packet_alloc();
-    if (!pkt) {
-      Log("Could not allocate packet", LogLevel::CRASH);
+  // Keep a short audio queue and decode video in presentation order. Never
+  // advance a frame just because ImGui rendered another UI frame.
+  drainVideo();
+  for (int packets = 0; packets < 256 && !mediaEOF; ++packets) {
+    const bool audioReady = !hasAudio ||
+        SDL_GetAudioStreamQueued(audioStream) >= audioTargetBytes;
+    if (audioReady && !videoFrames.empty() &&
+        videoFrames.back().second > targetTime)
       break;
-    }
-
-    int readResult = av_read_frame(formatContext, pkt);
-
+    if (videoFrames.size() >= 64)
+      break;
+    const int readResult = av_read_frame(formatContext, packet);
     if (readResult < 0) {
-      av_packet_free(&pkt);
-
-      if (readResult == AVERROR_EOF) {
-        // Handle end of file - seek to beginning for looping
-        int seekResult =
-            av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
-        if (seekResult < 0) {
-          char errbuf[256];
-          av_strerror(seekResult, errbuf, sizeof(errbuf));
-          Log("Error seeking to beginning: " + std::string(errbuf),
-              LogLevel::CRASH);
-        } else {
-          // Flush codec buffers
-          if (codecContext)
-            avcodec_flush_buffers(codecContext);
-          if (audioCodecContext)
-            avcodec_flush_buffers(audioCodecContext);
-        }
-      } else {
-        char errbuf[256];
-        av_strerror(readResult, errbuf, sizeof(errbuf));
-        Log("Error reading frame: " + std::string(errbuf), LogLevel::CRASH);
-      }
-      break;
+      mediaEOF = true;
+      // H.264 and similar codecs can retain reordered pictures at EOF.
+      avcodec_send_packet(codecContext, nullptr);
+    } else if (packet->stream_index == videoStream) {
+      avcodec_send_packet(codecContext, packet);
+    } else if (hasAudio && packet->stream_index == audioStreamIndex) {
+      processAudioPacket(packet);
     }
+    if (readResult >= 0)
+      av_packet_unref(packet);
 
-    packetsProcessed++;
-
-    // Process video packets first to prevent glitching
-    if (pkt->stream_index == videoStream && !videoFrameProcessed) {
-      if (processVideoPacket(pkt)) {
-        videoFrameProcessed = true;
-      }
-    }
-    // Process audio packets
-    else if (hasAudio && pkt->stream_index == audioStreamIndex) {
-      processAudioPacket(pkt);
-
-      // SDL3: Check audio buffer status
-      if (SDL_GetAudioStreamQueued(audioStream) >= IDEAL_AUDIO_QUEUE_SIZE) {
-        needMoreAudio = false;
-      }
-    }
-
-    av_packet_unref(pkt);
-    av_packet_free(&pkt);
-
-    // Break if we have enough video and audio data
-    if (videoFrameProcessed &&
-        (!hasAudio || !needMoreAudio ||
-         SDL_GetAudioStreamQueued(audioStream) >= MIN_AUDIO_QUEUE_SIZE)) {
-      break;
-    }
-
-    // Safety check to prevent infinite loops
-    if (packetsProcessed > 20 && !videoFrameProcessed) {
-      Log("Warning: Processed 20 packets without finding a video frame",
-          LogLevel::WARNING);
-      break;
-    }
+    drainVideo();
   }
 
-  // Debug audio buffer status
-  if (hasAudio) {
-    const int AUDIO_QUEUE_SIZE = SDL_GetAudioStreamQueued(audioStream);
-    if (AUDIO_QUEUE_SIZE < MIN_AUDIO_QUEUE_SIZE) {
-      Log("Low audio buffer: " + std::to_string(AUDIO_QUEUE_SIZE) + " bytes",
-          LogLevel::WARNING);
+  // Queued bytes are in the 44.1 kHz stereo S16 format sent to SDL. This
+  // clock follows the audio device even when UI rendering drops frames.
+  if (hasAudio && audioClockValid) {
+    const int queued = SDL_GetAudioStreamQueued(audioStream);
+    if (queued > 0) {
+      audioEmptySinceTicks = 0;
+      currentTime = std::max(0.0, audioQueuedEnd - queued / bytesPerSecond);
+    } else {
+      if (!audioEmptySinceTicks)
+        audioEmptySinceTicks = SDL_GetTicksNS();
+      currentTime = audioQueuedEnd +
+          (SDL_GetTicksNS() - audioEmptySinceTicks) / 1e9;
     }
+  } else {
+    currentTime = playbackAnchor +
+        (SDL_GetTicksNS() - playbackAnchorTicks) / 1e9;
+  }
+  if (duration > 0.0)
+    currentTime = std::min(currentTime, duration);
+
+  // If rendering falls behind, present the newest due picture. Keeping old
+  // pictures would make the video permanently lag behind the soundtrack.
+  while (!videoFrames.empty() && videoFrames.front().second <= currentTime + 0.002) {
+    AVFrame *next = videoFrames.front().first;
+    videoFrames.pop_front();
+    if (!videoFrames.empty() && videoFrames.front().second <= currentTime + 0.002) {
+      av_frame_free(&next);
+      continue;
+    }
+    sws_scale(swsContext, next->data, next->linesize, 0, height,
+              frameRGB->data, frameRGB->linesize);
+    updateVideoTexture();
+    av_frame_free(&next);
+  }
+
+  if (mediaEOF && videoFrames.empty() &&
+      (hasAudio || duration <= 0.0 || currentTime >= duration) &&
+      (!hasAudio || SDL_GetAudioStreamQueued(audioStream) == 0)) {
+    if (loopVideo)
+      SeekTo(0.0);
+    else
+      SetVideoPaused(true);
   }
 }
 
@@ -1048,6 +1096,16 @@ void VulkanHandler::processAudioPacket(AVPacket *pkt) {
       break;
     }
 
+    const double decodedTime = mediaTime(audioFrame, audioStreamIndex);
+    const double decodedEnd = std::isfinite(decodedTime)
+        ? decodedTime + static_cast<double>(audioFrame->nb_samples) /
+                            audioCodecContext->sample_rate
+        : audioQueuedEnd;
+    if (decodedEnd < seekPosition - 0.001) {
+      av_frame_unref(audioFrame);
+      continue;
+    }
+
     // Process audio frame
     int outChannels = 2; // Stereo output
 
@@ -1076,6 +1134,12 @@ void VulkanHandler::processAudioPacket(AVPacket *pkt) {
           if (SDL_PutAudioStreamData(audioStream, outBuf, outBufSize) < 0) {
             cerr << "Failed to put audio stream data: " << SDL_GetError()
                  << endl;
+          } else {
+            const double start = std::isfinite(decodedTime)
+                ? decodedTime : (audioClockValid ? audioQueuedEnd : seekPosition);
+            audioQueuedEnd = start + convertedSamples / 44100.0;
+            audioClockValid = true;
+            audioEmptySinceTicks = 0;
           }
         }
       }
@@ -1347,8 +1411,9 @@ bool VulkanHandler::SeekTo(double seconds) {
   if (duration > 0.0 && seconds > duration)
     seconds = duration;
 
-  const int64_t target =
-      static_cast<int64_t>(seconds * static_cast<double>(AV_TIME_BASE));
+  const double start = formatContext->start_time == AV_NOPTS_VALUE
+                           ? 0.0 : formatContext->start_time * av_q2d(AV_TIME_BASE_Q);
+  const int64_t target = static_cast<int64_t>((seconds + start) * AV_TIME_BASE);
 
   int r = av_seek_frame(formatContext, -1, target, AVSEEK_FLAG_BACKWARD);
   if (r < 0) {
@@ -1365,8 +1430,20 @@ bool VulkanHandler::SeekTo(double seconds) {
     avcodec_flush_buffers(audioCodecContext);
   if (audioStream)
     SDL_ClearAudioStream(audioStream);
+  if (swrContext) {
+    swr_close(swrContext);
+    swr_init(swrContext);
+  }
+  clearVideoFrames();
 
   currentTime = seconds;
+  seekPosition = seconds;
+  audioQueuedEnd = seconds;
+  audioClockValid = false;
+  audioEmptySinceTicks = 0;
+  playbackAnchor = seconds;
+  playbackAnchorTicks = SDL_GetTicksNS();
+  mediaEOF = false;
   Log(std::string("[VulkanHandler] Seek to ") + std::to_string(seconds) + "s",
       LogLevel::INFO);
   return true;

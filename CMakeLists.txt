@@ -218,6 +218,7 @@ target_link_libraries(TestGameBuild PRIVATE glm::glm)
 # that load and draw a scene: no editor UI, no IPC, no video.
 add_executable(IlmeeePlayer
     src/cpp/player/PlayerMain.cpp
+    src/cpp/core_engine/GameUI.cpp
     src/cpp/core_engine/SceneLoader.cpp
     src/cpp/core_engine/SceneRenderer.cpp
     src/cpp/core_engine/TextureManager.cpp

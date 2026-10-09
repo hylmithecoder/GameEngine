@@ -16,6 +16,7 @@
 //                 exit — used by the build tests to check what a game shows.
 
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
@@ -117,6 +118,18 @@ protected:
       ::Log(error_, Debug::LogLevel::ERROR);
     }
 
+    gameUi_ = ilmeee::DefaultGameUI();
+    if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
+      // Older projects stored the canvas as a separate asset.
+      const fs::path uiPath = root_ / "assets/ui/main.json";
+      std::error_code uiEc;
+      if (fs::exists(uiPath, uiEc)) {
+        std::string uiError;
+        if (!ilmeee::LoadGameUI(uiPath.string(), gameUi_, &uiError))
+          ::Log("Game UI: " + uiError, Debug::LogLevel::WARNING);
+      }
+    }
+
     if (manifest_.fullscreen)
       SDL_SetWindowFullscreen(window, true);
   }
@@ -145,12 +158,33 @@ protected:
       int w = (int)swapChainExtent.width, h = (int)swapChainExtent.height;
       if (w > 0 && h > 0) {
         renderer_->SetViewportSize(w, h);
-        rendered = renderer_->RenderGameView();
+        if (!paused_ || !hasFrame_ || w != lastRenderWidth_ ||
+            h != lastRenderHeight_) {
+          hasFrame_ = renderer_->RenderGameView();
+          lastRenderWidth_ = w;
+          lastRenderHeight_ = h;
+        }
+        rendered = hasFrame_;
       }
-      if (rendered)
+      if (rendered) {
         // V flipped exactly like the editor's viewport.
         ImGui::Image((ImTextureID)renderer_->GetViewportDescriptorSet(),
                      vp->Size, ImVec2(0, 1), ImVec2(1, 0));
+        const ImVec2 imagePos = ImGui::GetItemRectMin();
+        const auto texture = [&](const std::string &asset) -> ImTextureID {
+          if (asset.empty()) return ImTextureID{};
+          return (ImTextureID)renderer_->GetUiTextureDescriptor(
+              (root_ / asset).string());
+        };
+        if (ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true, paused_) ==
+            "TogglePause")
+          paused_ = !paused_;
+        if (paused_)
+          ImGui::GetWindowDrawList()->AddText(
+              ImVec2(imagePos.x + vp->Size.x * 0.5f - 35,
+                     imagePos.y + vp->Size.y * 0.5f),
+              IM_COL32(255, 255, 255, 255), "PAUSED");
+      }
     }
     if (!error_.empty()) {
       ImVec2 ts = ImGui::CalcTextSize(error_.c_str());
@@ -192,6 +226,11 @@ private:
 
   fs::path root_;
   GameManifest manifest_;
+  ilmeee::GameUI gameUi_;
+  bool paused_ = false;
+  bool hasFrame_ = false;
+  int lastRenderWidth_ = 0;
+  int lastRenderHeight_ = 0;
   std::unique_ptr<SceneRenderer> renderer_;
   std::string error_;
   std::string screenshotPath_;

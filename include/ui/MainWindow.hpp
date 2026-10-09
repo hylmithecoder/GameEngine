@@ -3,6 +3,7 @@
 #include "../core_engine/GameBuilder.hpp"
 #include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/SceneRenderer.hpp"
+#include "../core_engine/GameUI.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
@@ -43,9 +44,16 @@ private:
   void renderVideoPlayer();
   void set_extension_icon();
   void renderVideoFrame();
+  void LoadGameUiForProject();
+  void RenderGameUiEditor();
   void set_mainbackground();
 
   VulkanHandler vulkanHandler;
+  ilmeee::GameUI gameUi = ilmeee::DefaultGameUI();
+  std::string gameUiProject;
+  // -1 = world object/none, -2 = Canvas, >=0 = UI child index.
+  int selectedUiElement = -1;
+  bool previewGamePaused = false;
 
   // Vulkan members are now inherited from VulkanBase (ctx, window, etc.)
 

@@ -23,6 +23,9 @@ public:
 
   // Returns the descriptor set for ImGui to display the viewport
   VkDescriptorSet GetViewportDescriptorSet() const;
+  VkDescriptorSet GetUiTextureDescriptor(const std::string &path) {
+    return textureManager.GetTextureDescriptor(path);
+  }
 
   enum class EditMode { SELECT, MOVE, ROTATE, SCALE };
 

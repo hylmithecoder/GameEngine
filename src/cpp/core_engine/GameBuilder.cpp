@@ -208,6 +208,8 @@ public:
           e.externalPath = Relocate(e.externalPath, true);
         for (SurfaceTexture &t : e.surfaceTextures)
           t.texturePath = Relocate(t.texturePath, false);
+        if (e.kind == PrimitiveKind::UiImage && !e.uiImagePath.empty())
+          e.uiImagePath = Relocate(e.uiImagePath, false);
       }
       fs::create_directories(dst.parent_path());
       if (!SaveScene(dst.string(), scene))

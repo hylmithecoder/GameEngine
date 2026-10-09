@@ -50,6 +50,22 @@ When no `--project` is supplied, the editor boots a hardcoded debug scene so the
 
 The 2D fallback drops a single sprite at world origin (300x300 px) and shows a dynamic editor grid + colored XY axes overlay that follow pan/zoom.
 
+## In-game UI
+
+Open a project and expand **Scene → Canvas** in the Hierarchy. Right-click
+Canvas to add Text, Image, or Button children; select an object to edit its
+properties in the Inspector. Set its anchor and offsets in reference pixels
+(default 1280×720). The **Camera Preview** shows the same UI used by the built
+game. Save with **Ctrl+S**: Canvas and its children are stored in
+`scenes/main.ilmeeescene`. Image paths are relative to the project folder,
+for example `assets/logo.png`. Older `assets/ui/main.json` files are imported
+when the scene does not contain a Canvas yet.
+
+The default canvas contains an HP label and a Pause button. `TogglePause` is
+the built-in button action; it freezes the displayed scene and shows a pause
+overlay in preview and player. The HP value is placeholder text until gameplay
+state is connected to the UI.
+
 ## Scene & Viewport Controls
 
 - **3D Viewport Navigation**:

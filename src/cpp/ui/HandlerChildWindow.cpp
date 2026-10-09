@@ -7,6 +7,7 @@
 #include "../../../include/ui/MainWindow.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <glm/glm.hpp>
@@ -78,6 +79,7 @@ int MainWindow::SpawnSceneObject(int kind, int parent,
   // "which line created this thing?" on hover.
   sceneRenderer->SetMesh3DDebugSource(idx, __FILE__, __LINE__);
   std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
+  selectedUiElement = -1;
   RecordEditorHistory();
   return (int)idx;
 }
@@ -98,6 +100,7 @@ void MainWindow::DeleteSceneObject(size_t index) {
 }
 
 void MainWindow::RenderHierarchyWindow() {
+  LoadGameUiForProject();
   Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
   DEBUG_TRACE_PANEL("Hierarchy panel");
   ImGuiTreeNodeFlags nodeFlags =
@@ -111,7 +114,10 @@ void MainWindow::RenderHierarchyWindow() {
 
   // Edits are queued and applied after the tree is drawn: they renumber the
   // meshes the recursion below is walking.
-  enum class Op { None, Spawn, Delete, Reparent };
+  enum class Op {
+    None, Spawn, Delete, Reparent,
+    SpawnUiText, SpawnUiImage, SpawnUiButton, DeleteUi
+  };
   Op op = Op::None;
   int opIndex = -1, opParent = -1, opKind = 0;
   const bool locked = SceneStructureLocked();
@@ -181,8 +187,10 @@ void MainWindow::RenderHierarchyWindow() {
       bool open = TreeNodeEx(label.c_str(), flags);
       DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
       if (IsItemClicked(ImGuiMouseButton_Left) ||
-          IsItemClicked(ImGuiMouseButton_Right))
+          IsItemClicked(ImGuiMouseButton_Right)) {
         std::snprintf(objectName, sizeof(objectName), "%s", meshName.c_str());
+        selectedUiElement = -1;
+      }
 
       if (!locked && BeginDragDropSource()) {
         int payload = (int)i;
@@ -228,6 +236,59 @@ void MainWindow::RenderHierarchyWindow() {
       dropTarget(-1); // dropping on "Scene" moves the object to the root
       for (size_t r : roots)
         drawNode(r);
+
+      // Screen-space UI is a Canvas game object with Text/Image/Button
+      // children. Its data is saved in the scene alongside world entities.
+      PushID("GameCanvas");
+      svgIcons.DrawIcon("assets/icons/svg/image.svg", 16);
+      SetNextItemOpen(true, ImGuiCond_Once);
+      ImGuiTreeNodeFlags canvasFlags = nodeFlags | ImGuiTreeNodeFlags_DefaultOpen;
+      if (selectedUiElement == -2)
+        canvasFlags |= ImGuiTreeNodeFlags_Selected;
+      bool canvasOpen = TreeNodeEx("Canvas", canvasFlags);
+      if (IsItemClicked(ImGuiMouseButton_Left) ||
+          IsItemClicked(ImGuiMouseButton_Right)) {
+        selectedUiElement = -2;
+        objectName[0] = '\0';
+      }
+      if (BeginPopupContextItem("CanvasMenu")) {
+        if (BeginMenu("Create Child", !locked)) {
+          if (MenuItem("Text")) op = Op::SpawnUiText;
+          if (MenuItem("Image")) op = Op::SpawnUiImage;
+          if (MenuItem("Button")) op = Op::SpawnUiButton;
+          EndMenu();
+        }
+        EndPopup();
+      }
+      if (canvasOpen) {
+        for (int i = 0; i < (int)gameUi.elements.size(); ++i) {
+          PushID(i);
+          const auto &element = gameUi.elements[i];
+          svgIcons.DrawIcon("assets/icons/svg/image.svg", 16);
+          ImGuiTreeNodeFlags uiFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf |
+                                     ImGuiTreeNodeFlags_NoTreePushOnOpen;
+          if (selectedUiElement == i)
+            uiFlags |= ImGuiTreeNodeFlags_Selected;
+          const char *kind = element.kind == ilmeee::UiKind::Text ? "Text" :
+              element.kind == ilmeee::UiKind::Image ? "Image" : "Button";
+          TreeNodeEx("ui", uiFlags, "%s (%s)", element.id.c_str(), kind);
+          if (IsItemClicked(ImGuiMouseButton_Left) ||
+              IsItemClicked(ImGuiMouseButton_Right)) {
+            selectedUiElement = i;
+            objectName[0] = '\0';
+          }
+          if (BeginPopupContextItem("UiItemMenu")) {
+            if (MenuItem("Delete", "Del", false, !locked)) {
+              op = Op::DeleteUi;
+              opIndex = i;
+            }
+            EndPopup();
+          }
+          PopID();
+        }
+        TreePop();
+      }
+      PopID();
       TreePop();
     }
 
@@ -245,7 +306,10 @@ void MainWindow::RenderHierarchyWindow() {
     if (op == Op::None && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
       int sel = SelectedMeshIndex();
-      if (sel >= 0) {
+      if (selectedUiElement >= 0 && !locked) {
+        op = Op::DeleteUi;
+        opIndex = selectedUiElement;
+      } else if (sel >= 0) {
         op = Op::Delete;
         opIndex = sel;
       }
@@ -265,6 +329,36 @@ void MainWindow::RenderHierarchyWindow() {
       RecordEditorHistory();
     break;
   case Op::None:
+    break;
+  case Op::SpawnUiText:
+  case Op::SpawnUiImage:
+  case Op::SpawnUiButton: {
+    if (locked) break;
+    ilmeee::UiElement element;
+    const char *prefix = op == Op::SpawnUiText ? "Text" :
+                         op == Op::SpawnUiImage ? "Image" : "Button";
+    for (int n = 1;; ++n) {
+      element.id = std::string(prefix) + " " + std::to_string(n);
+      if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
+                       [&](const ilmeee::UiElement &existing) {
+                         return existing.id == element.id;
+                       })) break;
+    }
+    element.kind = op == Op::SpawnUiText ? ilmeee::UiKind::Text :
+                   op == Op::SpawnUiImage ? ilmeee::UiKind::Image :
+                                            ilmeee::UiKind::Button;
+    element.text = element.kind == ilmeee::UiKind::Button ? "Button" :
+                   element.kind == ilmeee::UiKind::Text ? "Text" : "";
+    gameUi.elements.push_back(std::move(element));
+    selectedUiElement = (int)gameUi.elements.size() - 1;
+    objectName[0] = '\0';
+    break;
+  }
+  case Op::DeleteUi:
+    if (!locked && opIndex >= 0 && opIndex < (int)gameUi.elements.size()) {
+      gameUi.elements.erase(gameUi.elements.begin() + opIndex);
+      selectedUiElement = -2;
+    }
     break;
   }
   End();
@@ -419,6 +513,15 @@ void MainWindow::RenderInspectorWindow() {
 
   Text("Selected Object");
   Separator();
+  if (selectedUiElement == -2 ||
+      (selectedUiElement >= 0 &&
+       selectedUiElement < (int)gameUi.elements.size())) {
+    if (SceneStructureLocked()) BeginDisabled();
+    RenderGameUiEditor();
+    if (SceneStructureLocked()) EndDisabled();
+    End();
+    return;
+  }
 
   // if (isLoadScene)
   // {
@@ -1256,6 +1359,7 @@ void MainWindow::RenderSceneWindow() {
                                                   glm::vec3(1.0f));
               std::snprintf(objectName, sizeof(objectName), "%s",
                             sceneRenderer->GetMesh3DName(idx).c_str());
+              selectedUiElement = -1;
               projectHandler.ShowNotification("Model added", fname,
                                               ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
               RecordEditorHistory();
@@ -1271,6 +1375,7 @@ void MainWindow::RenderSceneWindow() {
               if (bound) {
                 std::snprintf(objectName, sizeof(objectName), "%s",
                               sceneRenderer->GetMesh3DName((size_t)hm).c_str());
+                selectedUiElement = -1;
                 selectedSurface = hs;
                 projectHandler.ShowNotification(
                     "Texture bound", fname + " → surface " + std::to_string(hs),
@@ -1382,6 +1487,7 @@ void MainWindow::RenderSceneWindow() {
                                              hitMesh, hitSurface)) {
           const std::string &nm = sceneRenderer->GetMesh3DName((size_t)hitMesh);
           std::snprintf(objectName, sizeof(objectName), "%s", nm.c_str());
+          selectedUiElement = -1;
           selectedSurface = hitSurface;
         }
       }
@@ -1501,7 +1607,9 @@ void MainWindow::RenderSceneWindow() {
   // the scene and show it in its own window. Only present when a camera
   // exists, so the editor stays uncluttered otherwise.
   if (sceneRenderer && sceneRenderer->HasPlayerCamera()) {
-    sceneRenderer->RenderPlayerCameraPreview();
+    LoadGameUiForProject();
+    if (!previewGamePaused)
+      sceneRenderer->RenderPlayerCameraPreview();
     if (Begin("Camera Preview", nullptr, ImGuiWindowFlags_NoScrollbar)) {
       VkDescriptorSet d = sceneRenderer->GetPlayerCameraPreviewDescriptor();
       if (d != VK_NULL_HANDLE) {
@@ -1516,10 +1624,98 @@ void MainWindow::RenderSceneWindow() {
         }
         // Flip V like the main viewport (framebuffer is top-left origin).
         Image((ImTextureID)d, ImVec2(w, h), ImVec2(0, 1), ImVec2(1, 0));
+        const ImVec2 imagePos = GetItemRectMin();
+        const std::filesystem::path projectRoot(projectHandler.projectPath);
+        const auto texture = [&](const std::string &asset) -> ImTextureID {
+          if (asset.empty()) return ImTextureID{};
+          const auto path = projectRoot.empty() ? std::filesystem::path(asset)
+              : projectRoot / asset;
+          return (ImTextureID)sceneRenderer->GetUiTextureDescriptor(path.string());
+        };
+        if (ilmeee::DrawGameUI(gameUi, imagePos, ImVec2(w, h), texture,
+                               true, previewGamePaused) ==
+            "TogglePause")
+          previewGamePaused = !previewGamePaused;
+        if (previewGamePaused)
+          GetWindowDrawList()->AddText(
+              ImVec2(imagePos.x + w * 0.5f - 35, imagePos.y + h * 0.5f),
+              IM_COL32(255, 255, 255, 255), "PAUSED");
       }
     }
     End();
   }
+}
+
+void MainWindow::LoadGameUiForProject() {
+  if (gameUiProject == projectHandler.projectPath)
+    return;
+  gameUiProject = projectHandler.projectPath;
+  gameUi = ilmeee::DefaultGameUI();
+  selectedUiElement = -1;
+  previewGamePaused = false;
+  if (!gameUiProject.empty()) {
+    const auto root = std::filesystem::path(gameUiProject);
+    const auto scenePath = root / "scenes/main.ilmeeescene";
+    ilmeee::IlmeeeScene scene;
+    if (ilmeee::LoadScene(scenePath.string(), scene) &&
+        ilmeee::GameUIFromScene(scene, gameUi))
+      return;
+    // Import the earlier standalone Game UI asset when a scene has no Canvas.
+    const auto path = root / "assets/ui/main.json";
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) {
+      std::string error;
+      if (!ilmeee::LoadGameUI(path.string(), gameUi, &error))
+        ::Log("Game UI: " + error, Debug::LogLevel::WARNING);
+    }
+  }
+}
+
+void MainWindow::RenderGameUiEditor() {
+  if (selectedUiElement == -2) {
+    Text("Canvas");
+    TextDisabled("Screen-space root for the game UI");
+    DragFloat2("Reference size", &gameUi.referenceWidth, 1.0f, 1.0f, 8192.0f);
+  }
+  if (selectedUiElement >= 0 &&
+      selectedUiElement < (int)gameUi.elements.size()) {
+    auto &e = gameUi.elements[selectedUiElement];
+    char buffer[512];
+    auto editString = [&](const char *label, std::string &value) {
+      std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
+      if (InputText(label, buffer, sizeof(buffer))) value = buffer;
+    };
+    editString("Name", e.id);
+    int kind = (int)e.kind;
+    if (Combo("Type", &kind, "Text\0Image\0Button\0"))
+      e.kind = (ilmeee::UiKind)kind;
+    int anchor = (int)e.anchor;
+    if (Combo("Anchor", &anchor,
+              "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0"))
+      e.anchor = (ilmeee::UiAnchor)anchor;
+    DragFloat("X", &e.x, 1.0f);
+    DragFloat("Y", &e.y, 1.0f);
+    DragFloat("Width", &e.width, 1.0f, 1.0f, 8192.0f);
+    DragFloat("Height", &e.height, 1.0f, 1.0f, 8192.0f);
+    if (e.kind != ilmeee::UiKind::Image) {
+      editString("Text", e.text);
+      DragFloat("Font size", &e.fontSize, 1.0f, 1.0f, 200.0f);
+    } else {
+      editString("Image path", e.imagePath);
+      TextDisabled("Path relative to project, e.g. assets/logo.png");
+    }
+    if (e.kind == ilmeee::UiKind::Button)
+      editString("Action", e.action);
+    ColorEdit4("Color", &e.color.x);
+    ColorEdit4("Background", &e.background.x);
+    if (Button("Delete element") && !SceneStructureLocked()) {
+      gameUi.elements.erase(gameUi.elements.begin() + selectedUiElement);
+      selectedUiElement = -2;
+    }
+  }
+  Separator();
+  TextDisabled("Preview in Camera Preview. Save with Ctrl+S.");
+  if (Button("Save Scene")) Save3DScene();
 }
 
 void MainWindow::RenderMainViewWindow() {
@@ -2194,6 +2390,7 @@ void MainWindow::ClearMessages() {
 void MainWindow::Save3DScene() {
   if (!sceneRenderer)
     return;
+  LoadGameUiForProject();
   const std::string activeProject = projectHandler.projectPath;
   if (activeProject.empty()) {
     ::Log("Cannot save scene: No active project opened.",
@@ -2279,6 +2476,8 @@ void MainWindow::Save3DScene() {
     }
     scene.entities.push_back(std::move(e));
   }
+
+  ilmeee::AppendGameUIToScene(scene, gameUi);
 
   if (ilmeee::SaveScene(mainScene.string(), scene)) {
     ::Log("Saved 3D scene to " + mainScene.string(), Debug::LogLevel::SUCCESS);

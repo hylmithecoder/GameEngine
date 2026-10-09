@@ -406,7 +406,6 @@ void MainWindow::setTheme(bool dark) {
 
 bool MainWindow::openVideo(const char *filePath) {
   if (vulkanHandler.OpenFileVideo(filePath)) {
-    vulkanHandler.openAudio();
     vulkanHandler.isPlaying = true;
     return true;
   }
@@ -1281,6 +1280,7 @@ void MainWindow::renderVideoPlayer() {
     if (strlen(videoPath) > 0) {
       openVideo(videoPath);
       paused = false;
+      vulkanHandler.SetVideoPaused(false);
     }
   }
 
@@ -1303,11 +1303,14 @@ void MainWindow::renderVideoPlayer() {
     ui::Separator();
     if (ui::Button(paused ? "Play" : "Pause")) {
       paused = !paused;
+      vulkanHandler.SetVideoPaused(paused);
     }
     ui::SameLine();
     if (ui::Button("Stop")) {
       // Logic for stop (e.g. seek to 0 and pause)
       paused = true;
+      vulkanHandler.SeekTo(0.0);
+      vulkanHandler.SetVideoPaused(true);
     }
 
     ui::Text("Time: %.2f / %.2f", (float)vulkanHandler.currentTime,
