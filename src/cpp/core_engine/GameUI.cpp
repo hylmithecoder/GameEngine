@@ -18,6 +18,7 @@ const char *KindName(UiKind kind) {
   case UiKind::Text: return "text";
   case UiKind::Image: return "image";
   case UiKind::Button: return "button";
+  case UiKind::Joystick: return "joystick";
   }
   return "text";
 }
@@ -36,6 +37,7 @@ const char *AnchorName(UiAnchor anchor) {
 UiKind ParseKind(const std::string &name) {
   if (name == "image") return UiKind::Image;
   if (name == "button") return UiKind::Button;
+  if (name == "joystick") return UiKind::Joystick;
   return UiKind::Text;
 }
 
@@ -110,6 +112,7 @@ bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out) {
     case PrimitiveKind::UiText: element.kind = UiKind::Text; break;
     case PrimitiveKind::UiImage: element.kind = UiKind::Image; break;
     case PrimitiveKind::UiButton: element.kind = UiKind::Button; break;
+    case PrimitiveKind::UiJoystick: element.kind = UiKind::Joystick; break;
     default: continue;
     }
     element.id = e.name;
@@ -148,6 +151,7 @@ void AppendGameUIToScene(IlmeeeScene &scene, const GameUI &ui) {
     case UiKind::Text: e.kind = PrimitiveKind::UiText; break;
     case UiKind::Image: e.kind = PrimitiveKind::UiImage; break;
     case UiKind::Button: e.kind = PrimitiveKind::UiButton; break;
+    case UiKind::Joystick: e.kind = PrimitiveKind::UiJoystick; break;
     }
     e.uiAnchor = static_cast<uint8_t>(element.anchor);
     e.uiX = element.x;
@@ -266,10 +270,34 @@ bool SaveGameUI(const std::string &path, const GameUI &ui, std::string *error) {
   return true;
 }
 
+UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
+                         ImVec2 origin, ImVec2 size) {
+  if (ui.referenceWidth <= 0.0f || ui.referenceHeight <= 0.0f)
+    return {origin, origin};
+  const float scale = std::min(size.x / ui.referenceWidth,
+                               size.y / ui.referenceHeight);
+  const float w = std::max(1.0f, e.width * scale);
+  const float h = std::max(1.0f, e.height * scale);
+  const float x = e.x * scale, y = e.y * scale;
+  ImVec2 pos = origin;
+  switch (e.anchor) {
+  case UiAnchor::TopLeft: pos.x += x; pos.y += y; break;
+  case UiAnchor::TopRight: pos.x += size.x - x - w; pos.y += y; break;
+  case UiAnchor::BottomLeft: pos.x += x; pos.y += size.y - y - h; break;
+  case UiAnchor::BottomRight:
+    pos.x += size.x - x - w; pos.y += size.y - y - h; break;
+  case UiAnchor::Center:
+    pos.x += (size.x - w) * 0.5f + x;
+    pos.y += (size.y - h) * 0.5f + y;
+    break;
+  }
+  return {pos, ImVec2(pos.x + w, pos.y + h)};
+}
+
 std::string DrawGameUI(
     const GameUI &ui, ImVec2 origin, ImVec2 size,
     const std::function<ImTextureID(const std::string &)> &imageTexture,
-    bool interactive, bool paused) {
+    bool interactive, bool paused, UiAxisMap *axes, UiFingers *fingers) {
   if (size.x <= 0 || size.y <= 0)
     return {};
   const float scale = std::min(size.x / ui.referenceWidth,
@@ -281,24 +309,54 @@ std::string DrawGameUI(
   std::string clicked;
   draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
   for (const UiElement &e : ui.elements) {
-    const float w = std::max(1.0f, e.width * scale);
-    const float h = std::max(1.0f, e.height * scale);
-    const float x = e.x * scale, y = e.y * scale;
-    ImVec2 pos = origin;
-    switch (e.anchor) {
-    case UiAnchor::TopLeft: pos.x += x; pos.y += y; break;
-    case UiAnchor::TopRight: pos.x += size.x - x - w; pos.y += y; break;
-    case UiAnchor::BottomLeft: pos.x += x; pos.y += size.y - y - h; break;
-    case UiAnchor::BottomRight:
-      pos.x += size.x - x - w; pos.y += size.y - y - h; break;
-    case UiAnchor::Center:
-      pos.x += (size.x - w) * 0.5f + x;
-      pos.y += (size.y - h) * 0.5f + y;
-      break;
+    const UiRect rect = GameUIElementRect(ui, e, origin, size);
+    const ImVec2 pos = rect.min;
+    const ImVec2 max = rect.max;
+    const float w = max.x - pos.x, h = max.y - pos.y;
+    // Touch ownership: new fingers on an interactive element are claimed.
+    const UiFinger *finger = nullptr;
+    if (fingers && interactive &&
+        (e.kind == UiKind::Joystick || e.kind == UiKind::Button)) {
+      for (auto &[id, f] : *fingers) {
+        if (f.fresh && f.element.empty() && f.pos.x >= pos.x &&
+            f.pos.x < max.x && f.pos.y >= pos.y && f.pos.y < max.y)
+          f.element = e.id;
+        if (f.element == e.id && !finger) finger = &f;
+      }
     }
-    const ImVec2 max(pos.x + w, pos.y + h);
     const ImU32 color = ImGui::ColorConvertFloat4ToU32(e.color);
     const ImU32 bg = ImGui::ColorConvertFloat4ToU32(e.background);
+    if (e.kind == UiKind::Joystick) {
+      // Base ring with a knob that travels up to 60% of the radius.
+      const ImVec2 center((pos.x + max.x) * 0.5f, (pos.y + max.y) * 0.5f);
+      const float radius = std::min(w, h) * 0.5f;
+      const float travel = radius * 0.6f;
+      glm::vec2 value(0.0f);
+      if (interactive) {
+        ImGui::PushID(e.id.c_str());
+        ImGui::SetCursorScreenPos(pos);
+        ImGui::InvisibleButton("##game-ui-joystick", ImVec2(w, h));
+        const bool held = finger || ImGui::IsItemActive();
+        ImGui::PopID();
+        if (held && travel > 0.0f) {
+          const ImVec2 mouse = finger ? finger->pos : ImGui::GetIO().MousePos;
+          value = {(mouse.x - center.x) / travel,
+                   (center.y - mouse.y) / travel};
+          const float length = std::sqrt(value.x * value.x + value.y * value.y);
+          if (length > 1.0f) value /= length;
+          if (axes) (*axes)[e.id] = value;
+        } else if (axes) {
+          const auto it = axes->find(e.id);
+          if (it != axes->end()) value = it->second;
+        }
+      }
+      draw->AddCircleFilled(center, radius, bg, 48);
+      draw->AddCircle(center, radius, color, 48, std::max(1.0f, 2.0f * scale));
+      draw->AddCircleFilled(
+          ImVec2(center.x + value.x * travel, center.y - value.y * travel),
+          radius * 0.4f, color, 32);
+      continue;
+    }
     if (e.kind == UiKind::Image) {
       const ImTextureID texture = imageTexture ? imageTexture(e.imagePath) : ImTextureID{};
       if (texture)
@@ -332,6 +390,9 @@ std::string DrawGameUI(
   }
   draw->PopClipRect();
   ImGui::SetCursorScreenPos(oldCursor);
+  // Fingers not claimed on their first frame stay free (camera look).
+  if (fingers)
+    for (auto &[id, f] : *fingers) f.fresh = false;
   return clicked;
 }
 

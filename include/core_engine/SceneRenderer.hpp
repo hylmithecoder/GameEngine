@@ -1,4 +1,5 @@
 #pragma once
+#include "MovementScript.hpp"
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "TextureManager.hpp"
@@ -106,7 +107,7 @@ private:
   } offscreen;
 
   // Second offscreen target: renders the scene from the in-scene player
-  // camera for the "Camera Preview" window. Fixed 16:9 size; shares the
+  // camera for the Game tab. Fixed 16:9 size; shares the
   // main offscreen render pass.
   Offscreen preview;
   int previewWidth = 480;
@@ -201,6 +202,12 @@ public:
     // user* transform fields are local to the parent. Kept consistent by
     // SetMesh3DParent / RemoveMesh3D — never assign it directly.
     int parent = -1;
+    bool movable = false;
+    std::string movementScript;
+    float movementSpeed = 3.0f;
+    // Camera + UI joystick links. rig.camera is a meshes3d index, renumbered
+    // by RemoveMesh3D like `parent`.
+    ilmeee::MovementRig movementRig;
     // PMX bone hierarchy (empty for OBJ meshes / primitives)
     std::vector<pmx::PMXBone> bones;
 
@@ -343,7 +350,7 @@ private:
   void DestroyPreviewResources();
   // Editor: sun, grid, light/camera markers and gizmos (each per its
   // toggle). Game: the scene's meshes only — what a built game shows, and
-  // what the Camera Preview mirrors.
+  // what the Game tab mirrors.
   enum class WorldView { Editor, Game };
   // Record the 3D world for the given camera matrices into an already-open
   // render pass.
@@ -568,6 +575,10 @@ public:
     glm::vec3 position{0.0f};
     glm::vec3 rotation{0.0f};
     glm::vec3 scale{1.0f};
+    bool movable = false;
+    std::string movementScript;
+    float movementSpeed = 3.0f;
+    ilmeee::MovementRig movementRig; // camera = index into entities
 
     bool isLight = false;
     float lightGamma = 1.05f;

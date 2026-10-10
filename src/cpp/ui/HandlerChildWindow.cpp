@@ -1,5 +1,6 @@
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/InspectMode.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
@@ -14,9 +15,88 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <nfd.h>
+#include <stb/stb_image.h>
 
 static const char *kSpawnNames[] = {"Cube", "Sphere", "Plane", "Light",
-                                    "Camera"};
+                                    "Camera", "Canvas"};
+
+namespace {
+// Explorer sends absolute file paths. Keep scene references project-relative
+// and reject links escaping assets, so built games can copy the same image.
+std::string ProjectUiImagePath(const std::string &project,
+                               const std::string &source) {
+  namespace fs = std::filesystem;
+  if (project.empty() || source.empty()) return {};
+  std::error_code ec;
+  const fs::path root = fs::canonical(project, ec);
+  if (ec) return {};
+  const fs::path assets = fs::canonical(root / "assets", ec);
+  if (ec) return {};
+  const fs::path assetsInProject = assets.lexically_relative(root);
+  if (assetsInProject != fs::path("assets")) return {};
+  const fs::path image = fs::canonical(source, ec);
+  if (ec || !fs::is_regular_file(image, ec) || ec) return {};
+  const fs::path withinAssets = image.lexically_relative(assets);
+  if (withinAssets.empty() || *withinAssets.begin() == "..") return {};
+  std::string ext = image.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return (char)std::tolower(c); });
+  if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" &&
+      ext != ".bmp" && ext != ".tga" && ext != ".psd") return {};
+  int width = 0, height = 0, channels = 0;
+  if (!stbi_info(image.string().c_str(), &width, &height, &channels) ||
+      width <= 0 || height <= 0) return {};
+  return image.lexically_relative(root).generic_string();
+}
+} // namespace
+
+bool MainWindow::BindUiImageAsset(int index, const std::string &sourcePath) {
+  if (SceneStructureLocked() || index < 0 ||
+      index >= (int)gameUi.elements.size() ||
+      gameUi.elements[index].kind != ilmeee::UiKind::Image) return false;
+  const std::string path = ProjectUiImagePath(projectHandler.projectPath,
+                                               sourcePath);
+  if (path.empty()) {
+    projectHandler.ShowNotification(
+        "UI Image rejected", "Drop a supported image from this project's assets",
+        ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+    PushMessage("[WARNING] UI Image must be a valid PNG/JPG/BMP/TGA/PSD inside project assets");
+    return false;
+  }
+  gameUi.elements[index].imagePath = path;
+  selectedUiElement = index;
+  objectName[0] = '\0';
+  PushMessage("[INFO] UI Image set to " + path);
+  return true;
+}
+
+void MainWindow::CreateUiImageAsset(const std::string &sourcePath,
+                                     float x, float y) {
+  if (SceneStructureLocked() || !hasGameUiCanvas) return;
+  ilmeee::UiElement element;
+  element.kind = ilmeee::UiKind::Image;
+  for (int n = 1;; ++n) {
+    element.id = "Image " + std::to_string(n);
+    if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
+                     [&](const ilmeee::UiElement &existing) {
+                       return existing.id == element.id;
+                     })) break;
+  }
+  int width = 0, height = 0, channels = 0;
+  if (stbi_info(sourcePath.c_str(), &width, &height, &channels) &&
+      width > 0 && height > 0) {
+    const float fit = std::min({1.0f, 320.0f / width, 320.0f / height});
+    element.width = std::max(1.0f, width * fit);
+    element.height = std::max(1.0f, height * fit);
+  }
+  element.x = std::clamp(x, 0.0f,
+                         std::max(0.0f, gameUi.referenceWidth - element.width));
+  element.y = std::clamp(y, 0.0f,
+                         std::max(0.0f, gameUi.referenceHeight - element.height));
+  gameUi.elements.push_back(std::move(element));
+  if (!BindUiImageAsset((int)gameUi.elements.size() - 1, sourcePath))
+    gameUi.elements.pop_back();
+}
 
 int MainWindow::SelectedMeshIndex() const {
   if (!sceneRenderer || objectName[0] == '\0')
@@ -116,7 +196,8 @@ void MainWindow::RenderHierarchyWindow() {
   // meshes the recursion below is walking.
   enum class Op {
     None, Spawn, Delete, Reparent,
-    SpawnUiText, SpawnUiImage, SpawnUiButton, DeleteUi
+    SpawnCanvas, DeleteCanvas, SpawnUiText, SpawnUiImage, SpawnUiButton, SpawnUiJoystick,
+    DeleteUi
   };
   Op op = Op::None;
   int opIndex = -1, opParent = -1, opKind = 0;
@@ -129,6 +210,9 @@ void MainWindow::RenderHierarchyWindow() {
         opKind = k;
         opParent = parent;
       }
+    if (parent < 0 && MenuItem(kSpawnNames[5], nullptr, false,
+                                !locked && !hasGameUiCanvas))
+      op = Op::SpawnCanvas;
   };
 
   if (sceneRenderer) {
@@ -232,13 +316,23 @@ void MainWindow::RenderHierarchyWindow() {
       PopID();
     };
 
-    if (TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen)) {
+    const bool sceneOpen =
+        TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginPopupContextItem("SceneRootMenu")) {
+      if (BeginMenu("Create", !locked)) {
+        createMenu(-1);
+        EndMenu();
+      }
+      EndPopup();
+    }
+    if (sceneOpen) {
       dropTarget(-1); // dropping on "Scene" moves the object to the root
       for (size_t r : roots)
         drawNode(r);
 
       // Screen-space UI is a Canvas game object with Text/Image/Button
       // children. Its data is saved in the scene alongside world entities.
+      if (hasGameUiCanvas) {
       PushID("GameCanvas");
       svgIcons.DrawIcon("assets/icons/svg/image.svg", 16);
       SetNextItemOpen(true, ImGuiCond_Once);
@@ -251,13 +345,22 @@ void MainWindow::RenderHierarchyWindow() {
         selectedUiElement = -2;
         objectName[0] = '\0';
       }
+      if (!locked && BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
+          CreateUiImageAsset((const char *)payload->Data, 24.0f, 24.0f);
+        EndDragDropTarget();
+      }
       if (BeginPopupContextItem("CanvasMenu")) {
         if (BeginMenu("Create Child", !locked)) {
           if (MenuItem("Text")) op = Op::SpawnUiText;
           if (MenuItem("Image")) op = Op::SpawnUiImage;
           if (MenuItem("Button")) op = Op::SpawnUiButton;
+          if (MenuItem("Joystick")) op = Op::SpawnUiJoystick;
           EndMenu();
         }
+        Separator();
+        if (MenuItem("Delete Canvas", "Del", false, !locked))
+          op = Op::DeleteCanvas;
         EndPopup();
       }
       if (canvasOpen) {
@@ -270,12 +373,19 @@ void MainWindow::RenderHierarchyWindow() {
           if (selectedUiElement == i)
             uiFlags |= ImGuiTreeNodeFlags_Selected;
           const char *kind = element.kind == ilmeee::UiKind::Text ? "Text" :
-              element.kind == ilmeee::UiKind::Image ? "Image" : "Button";
+              element.kind == ilmeee::UiKind::Image ? "Image" :
+              element.kind == ilmeee::UiKind::Joystick ? "Joystick" : "Button";
           TreeNodeEx("ui", uiFlags, "%s (%s)", element.id.c_str(), kind);
           if (IsItemClicked(ImGuiMouseButton_Left) ||
               IsItemClicked(ImGuiMouseButton_Right)) {
             selectedUiElement = i;
             objectName[0] = '\0';
+          }
+          if (!locked && element.kind == ilmeee::UiKind::Image &&
+              BeginDragDropTarget()) {
+            if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
+              BindUiImageAsset(i, (const char *)payload->Data);
+            EndDragDropTarget();
           }
           if (BeginPopupContextItem("UiItemMenu")) {
             if (MenuItem("Delete", "Del", false, !locked)) {
@@ -289,6 +399,7 @@ void MainWindow::RenderHierarchyWindow() {
         TreePop();
       }
       PopID();
+      }
       TreePop();
     }
 
@@ -306,7 +417,9 @@ void MainWindow::RenderHierarchyWindow() {
     if (op == Op::None && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
       int sel = SelectedMeshIndex();
-      if (selectedUiElement >= 0 && !locked) {
+      if (selectedUiElement == -2 && !locked) {
+        op = Op::DeleteCanvas;
+      } else if (selectedUiElement >= 0 && !locked) {
         op = Op::DeleteUi;
         opIndex = selectedUiElement;
       } else if (sel >= 0) {
@@ -330,13 +443,32 @@ void MainWindow::RenderHierarchyWindow() {
     break;
   case Op::None:
     break;
+  case Op::SpawnCanvas:
+    if (!locked && !hasGameUiCanvas) {
+      gameUi = ilmeee::GameUI{};
+      hasGameUiCanvas = true;
+      selectedUiElement = -2;
+      objectName[0] = '\0';
+      PushMessage("[INFO] Canvas created. Edit it in the Scene tab.");
+    }
+    break;
+  case Op::DeleteCanvas:
+    if (!locked && hasGameUiCanvas) {
+      gameUi = ilmeee::GameUI{};
+      hasGameUiCanvas = false;
+      selectedUiElement = -1;
+      PushMessage("[INFO] Canvas deleted");
+    }
+    break;
   case Op::SpawnUiText:
   case Op::SpawnUiImage:
-  case Op::SpawnUiButton: {
+  case Op::SpawnUiButton:
+  case Op::SpawnUiJoystick: {
     if (locked) break;
     ilmeee::UiElement element;
     const char *prefix = op == Op::SpawnUiText ? "Text" :
-                         op == Op::SpawnUiImage ? "Image" : "Button";
+                         op == Op::SpawnUiImage ? "Image" :
+                         op == Op::SpawnUiJoystick ? "Joystick" : "Button";
     for (int n = 1;; ++n) {
       element.id = std::string(prefix) + " " + std::to_string(n);
       if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
@@ -346,9 +478,18 @@ void MainWindow::RenderHierarchyWindow() {
     }
     element.kind = op == Op::SpawnUiText ? ilmeee::UiKind::Text :
                    op == Op::SpawnUiImage ? ilmeee::UiKind::Image :
-                                            ilmeee::UiKind::Button;
+                   op == Op::SpawnUiJoystick ? ilmeee::UiKind::Joystick :
+                                               ilmeee::UiKind::Button;
     element.text = element.kind == ilmeee::UiKind::Button ? "Button" :
                    element.kind == ilmeee::UiKind::Text ? "Text" : "";
+    if (element.kind == ilmeee::UiKind::Joystick) {
+      // Bottom-left thumb stick; a second one can go bottom-right for look.
+      element.anchor = ilmeee::UiAnchor::BottomLeft;
+      element.x = element.y = 48.0f;
+      element.width = element.height = 180.0f;
+      element.color = ImVec4(1.0f, 1.0f, 1.0f, 0.85f);
+      element.background = ImVec4(0.10f, 0.12f, 0.16f, 0.45f);
+    }
     gameUi.elements.push_back(std::move(element));
     selectedUiElement = (int)gameUi.elements.size() - 1;
     objectName[0] = '\0';
@@ -522,6 +663,8 @@ void MainWindow::RenderInspectorWindow() {
     End();
     return;
   }
+
+  if (SceneStructureLocked()) BeginDisabled();
 
   // if (isLoadScene)
   // {
@@ -710,6 +853,109 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
+  if (meshSelected && !isLight && !isCamera &&
+      CollapsingHeader("Movement Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+    auto &mesh = sceneRenderer->meshes3d[(size_t)meshIdx];
+    if (SceneStructureLocked()) BeginDisabled();
+    if (Checkbox("Movable", &mesh.movable)) {
+      if (mesh.movable && mesh.movementScript.empty())
+        mesh.movementScript = "WASD XZ";
+      RecordEditorHistory();
+    }
+    if (mesh.movable) {
+      const auto names = ilmeee::MovementScriptNames();
+      const char *selected = mesh.movementScript.empty() ? "None" :
+                             mesh.movementScript.c_str();
+      if (BeginCombo("Script", selected)) {
+        for (const auto &name : names) {
+          if (Selectable(name.c_str(), mesh.movementScript == name)) {
+            mesh.movementScript = name;
+            RecordEditorHistory();
+          }
+        }
+        EndCombo();
+      }
+      DragFloat("Speed", &mesh.movementSpeed, 0.1f, 0.0f, 100.0f,
+                "%.2f units/s");
+      if (IsItemDeactivatedAfterEdit())
+        RecordEditorHistory();
+
+      SeparatorText("Camera");
+      auto &rig = mesh.movementRig;
+      const auto cameraLabel = [&](int index) -> std::string {
+        if (index < 0) return "Game View Camera";
+        return sceneRenderer->GetMesh3DName((size_t)index);
+      };
+      if (BeginCombo("Camera", cameraLabel(rig.camera).c_str())) {
+        if (Selectable("Game View Camera", rig.camera < 0)) {
+          rig.camera = -1;
+          RecordEditorHistory();
+        }
+        for (size_t c = 0; c < sceneRenderer->GetMesh3DCount(); ++c) {
+          if (!sceneRenderer->IsMesh3DCamera(c)) continue;
+          PushID((int)c);
+          if (Selectable(cameraLabel((int)c).c_str(), rig.camera == (int)c)) {
+            rig.camera = (int)c;
+            RecordEditorHistory();
+          }
+          PopID();
+        }
+        EndCombo();
+      }
+      int style = static_cast<int>(rig.style);
+      if (Combo("POV Style", &style, ilmeee::kCameraStyleNames)) {
+        rig.style = static_cast<ilmeee::CameraStyle>(style);
+        // Pair the style with the script that moves the way it looks.
+        if (rig.style == ilmeee::CameraStyle::SideScroller)
+          mesh.movementScript = "Platformer";
+        else if (rig.style != ilmeee::CameraStyle::None &&
+                 mesh.movementScript == "WASD XZ")
+          mesh.movementScript = "Camera Relative";
+        RecordEditorHistory();
+      }
+      if (rig.style != ilmeee::CameraStyle::None) {
+        if (rig.style != ilmeee::CameraStyle::FirstPerson) {
+          DragFloat("Distance", &rig.distance, 0.05f, 0.0f, 100.0f, "%.2f");
+          if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
+        }
+        DragFloat(rig.style == ilmeee::CameraStyle::FirstPerson ? "Eye Height"
+                                                                : "Height",
+                  &rig.height, 0.05f, -10.0f, 50.0f, "%.2f");
+        if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
+      }
+
+      SeparatorText("UI Input");
+      const auto joystickCombo = [&](const char *label, std::string &id) {
+        if (!BeginCombo(label, id.empty() ? "None" : id.c_str())) return;
+        if (Selectable("None", id.empty())) {
+          id.clear();
+          RecordEditorHistory();
+        }
+        for (const auto &element : gameUi.elements) {
+          if (element.kind != ilmeee::UiKind::Joystick) continue;
+          if (Selectable(element.id.c_str(), id == element.id)) {
+            id = element.id;
+            RecordEditorHistory();
+          }
+        }
+        EndCombo();
+      };
+      LoadGameUiForProject();
+      joystickCombo("Move Joystick", rig.moveJoystick);
+      joystickCombo("Look Joystick", rig.lookJoystick);
+      if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
+                       [](const ilmeee::UiElement &e) {
+                         return e.kind == ilmeee::UiKind::Joystick;
+                       }))
+        TextDisabled("Add one: Canvas > Create Child > Joystick");
+
+      TextDisabled("Game tab: WASD move, Space jump,");
+      TextDisabled("right-drag / arrow keys look");
+      TextDisabled("Custom C++ functions: UserMovementScripts.cpp");
+    }
+    if (SceneStructureLocked()) EndDisabled();
+  }
+
   // Light Source section: only shown if selected object is a light
   if (isLight) {
     if (CollapsingHeader("Light Source", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -803,7 +1049,7 @@ void MainWindow::RenderInspectorWindow() {
         RecordEditorHistory();
 
       TextDisabled("Aim with the object's Rotation. See the cyan");
-      TextDisabled("frustum gizmo + the Camera Preview window.");
+      TextDisabled("frustum gizmo + the Game tab.");
     }
   }
 
@@ -970,6 +1216,7 @@ void MainWindow::RenderInspectorWindow() {
     EndPopup();
     // }
   }
+  if (SceneStructureLocked()) EndDisabled();
   End();
 }
 
@@ -1098,9 +1345,67 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
   PopStyleVar(1);
 }
 
+void MainWindow::EnsureSceneLoaded() {
+  if (!sceneRenderer) return;
+  const std::string activeProject = projectHandler.projectPath;
+  const std::string desired = activeProject.empty()
+      ? (debug2D ? "<standalone-2d>" : "<standalone-3d>") : activeProject;
+  if (loadedSceneProject == desired) return;
+
+  sceneRenderer->ClearMeshes3D();
+  projectHandler.currentScene.objects.clear();
+  if (activeProject.empty()) {
+    if (debug2D) {
+      GameObject sprite;
+      sprite.name = "TestSprite";
+      sprite.spritePath = "assets/testimage.png";
+      sprite.width = 300.0f;
+      sprite.height = 300.0f;
+      projectHandler.currentScene.objects.push_back(sprite);
+      sceneRenderer->SetGrid3DVisible(false);
+      loadedSceneProject = desired;
+    } else {
+      bool loaded = sceneRenderer->LoadPMXMesh(
+          "assets/3dmodels/wise/wise.pmx");
+      if (!loaded)
+        loaded = sceneRenderer->LoadObjMesh("assets/3dmodels/belle.obj");
+      if (loaded) {
+        sceneRenderer->SetMesh3DDebugSource(
+            sceneRenderer->GetMesh3DCount() - 1, __FILE__, __LINE__);
+        loadedSceneProject = desired;
+      }
+    }
+  } else {
+    namespace fs = std::filesystem;
+    const fs::path scenesDir = fs::path(activeProject) / "scenes";
+    std::error_code ec;
+    fs::create_directories(scenesDir, ec);
+    const fs::path mainScene = scenesDir / "main.ilmeeescene";
+    ilmeee::IlmeeeScene scene;
+    if (!ilmeee::LoadScene(mainScene.string(), scene)) {
+      scene = ilmeee::DefaultScene();
+      ilmeee::SaveScene(mainScene.string(), scene);
+      ::Log("Created default scene at " + mainScene.string(),
+            Debug::LogLevel::SUCCESS);
+    } else {
+      ::Log("Loaded scene " + mainScene.string(), Debug::LogLevel::SUCCESS);
+    }
+    const ilmeee::SceneLoadReport report =
+        ilmeee::InstantiateScene(*sceneRenderer, scene, activeProject);
+    if (report.failed > 0)
+      ::Log(std::to_string(report.failed) +
+                " scene object(s) could not be loaded",
+            Debug::LogLevel::WARNING);
+    loadedSceneProject = desired;
+  }
+  if (loadedSceneProject == desired)
+    StartEditorSession();
+}
+
 void MainWindow::RenderSceneWindow() {
-  if (!showScene)
-    return;
+  EnsureSceneLoaded();
+  ImGuiID sceneDockId = 0;
+  if (showScene) {
 
   // Window flags untuk menghilangkan padding dan scrollbar
   ImGuiWindowFlags window_flags =
@@ -1118,108 +1423,34 @@ void MainWindow::RenderSceneWindow() {
   // PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
   // PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
-  if (Begin("Scene", &showScene, window_flags)) {
+  if (focusSceneTab) {
+    SetNextWindowFocus();
+    focusSceneTab = false;
+  }
+  const bool sceneVisible = Begin("Scene", &showScene, window_flags);
+  sceneDockId = GetWindowDockID();
+  if (sceneVisible) {
     DEBUG_TRACE_PANEL("Scene viewport panel");
     ImVec2 windowPos = GetWindowPos();
     ImVec2 windowSize = GetWindowSize();
     ImVec2 contentSize = GetContentRegionAvail();
-
-    // First-frame scene bootstrap. Two modes:
-    //   - Standalone debug (no project loaded): boot either the 3D OBJ
-    //     fallback (Yixuan) or, when --2d was passed, a 2D sprite scene
-    //     using assets/testimage.png — both are intentional dev paths
-    //     so the engine renders something without needing a project.
-    //   - Project mode (projectPath set): obey the project's
-    //     scenes/main.ilmeeescene blueprint. Auto-create it with a
-    //     single Cube if missing so a fresh project still renders.
-    static std::string s_loadedForProject = "<none>";
-    const std::string activeProject = projectHandler.projectPath;
-    const std::string desired =
-        activeProject.empty()
-            ? (debug2D ? "<standalone-2d>" : "<standalone-3d>")
-            : activeProject;
-    if (s_loadedForProject != desired) {
-      sceneRenderer->ClearMeshes3D();
-      projectHandler.currentScene.objects.clear();
-
-      if (activeProject.empty()) {
-        if (debug2D) {
-          // 2D debug fallback: drop a single sprite at the world origin
-          // sized 300x300 px. The 2D orthographic projection is pixel-
-          // based (-W/2..+W/2), so this lands centered in any panel
-          // size. The mesh-pipeline 3D grid is hidden to keep the view
-          // clean — the 2D grid (toggle in the Scene toolbar) still
-          // works.
-          GameObject sprite;
-          sprite.name = "TestSprite";
-          sprite.spritePath = "assets/testimage.png";
-          sprite.x = 0.0f;
-          sprite.y = 0.0f;
-          sprite.width = 300.0f;
-          sprite.height = 300.0f;
-          projectHandler.currentScene.objects.push_back(sprite);
-          sceneRenderer->SetGrid3DVisible(false);
-          ::Log("Standalone 2D debug scene: testimage sprite loaded.",
-                Debug::LogLevel::SUCCESS);
-          s_loadedForProject = desired;
-        } else {
-          // 3D fallback (intentional — kept so engineers can boot
-          // GameEngineSDL directly for first-gen debugging).
-          // Prefer PMX model if available, fall back to OBJ.
-          bool loaded = false;
-          if (!loaded)
-            loaded =
-                sceneRenderer->LoadPMXMesh("assets/3dmodels/wise/wise.pmx");
-          if (!loaded)
-            loaded = sceneRenderer->LoadObjMesh("assets/3dmodels/belle.obj");
-          if (loaded) {
-            sceneRenderer->SetMesh3DDebugSource(
-                sceneRenderer->GetMesh3DCount() - 1, __FILE__, __LINE__);
-            s_loadedForProject = desired;
-          }
-        }
-      } else {
-        namespace fs = std::filesystem;
-        fs::path scenesDir = fs::path(activeProject) / "scenes";
-        std::error_code ec;
-        fs::create_directories(scenesDir, ec);
-        fs::path mainScene = scenesDir / "main.ilmeeescene";
-
-        ilmeee::IlmeeeScene scene;
-        if (!ilmeee::LoadScene(mainScene.string(), scene)) {
-          scene = ilmeee::DefaultScene();
-          ilmeee::SaveScene(mainScene.string(), scene);
-          ::Log("Created default scene at " + mainScene.string(),
-                Debug::LogLevel::SUCCESS);
-        } else {
-          ::Log("Loaded scene " + mainScene.string(), Debug::LogLevel::SUCCESS);
-        }
-
-        ilmeee::SceneLoadReport report =
-            ilmeee::InstantiateScene(*sceneRenderer, scene, activeProject);
-        if (report.failed > 0)
-          ::Log(std::to_string(report.failed) +
-                    " scene object(s) could not be loaded",
-                Debug::LogLevel::WARNING);
-        s_loadedForProject = desired;
-      }
-
-      // A project switch (or the first standalone bootstrap) starts a fresh
-      // in-memory history and a fresh YAML file for this engine session.
-      if (s_loadedForProject == desired)
-        StartEditorSession();
-    }
 
     // Resize the offscreen target to match the panel so the 3D viewport
     // fills the entire window without letterboxing.
     if (contentSize.x > 0 && contentSize.y > 0) {
       sceneRenderer->SetViewportSize((int)contentSize.x, (int)contentSize.y);
     }
+    LoadGameUiForProject();
+    const bool uiEditing = hasGameUiCanvas && selectedUiElement != -1 &&
+                           builder.IsStopped();
+    const bool gamePlaying = !builder.IsStopped();
+    const bool gameCameraView = uiEditing;
 
     // Gather one-frame input for the 3D camera. Only feed it when the
     // panel is hovered so editor shortcuts elsewhere keep working.
     SceneRenderer::ViewportInput vpIn;
-    vpIn.hovered = IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+    vpIn.hovered = !gameCameraView &&
+                   IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
     ImGuiIO &io = GetIO();
     vpIn.deltaTime = io.DeltaTime > 0.0f ? io.DeltaTime : 1.0f / 60.0f;
     vpIn.rmbDown = IsMouseDown(ImGuiMouseButton_Right);
@@ -1242,7 +1473,9 @@ void MainWindow::RenderSceneWindow() {
     // empty scene) we treat the viewport as a 2D editor: RMB drag pans
     // cameraPosition, wheel zooms.
     const bool sceneIs2D = !sceneRenderer->HasMesh3D();
-    if (sceneIs2D) {
+    if (gameCameraView) {
+      // UI editing and Play use the player camera, not the editor orbit camera.
+    } else if (sceneIs2D) {
       if (vpIn.hovered && vpIn.rmbDown &&
           (vpIn.mouseDeltaX != 0.0f || vpIn.mouseDeltaY != 0.0f)) {
         sceneRenderer->HandleDrag(vpIn.mouseDeltaX, vpIn.mouseDeltaY);
@@ -1275,13 +1508,117 @@ void MainWindow::RenderSceneWindow() {
 
     // Render scene dengan ukuran penuh
     sceneRenderer->RenderSceneToTexture(projectHandler.currentScene);
+    if (gameCameraView && sceneRenderer->HasPlayerCamera())
+      sceneRenderer->RenderPlayerCameraPreview();
 
     // Tampilkan offscreen image di panel. Y dibalik (ImVec2(0,1)→(1,0))
     // karena framebuffer Vulkan top-left origin sedangkan ImGui sample
     // bottom-up; tanpa flip, segitiga terbalik vertikal.
-    VkDescriptorSet sceneDesc = sceneRenderer->GetViewportDescriptorSet();
+    VkDescriptorSet sceneDesc = gameCameraView && sceneRenderer->HasPlayerCamera()
+        ? sceneRenderer->GetPlayerCameraPreviewDescriptor()
+        : sceneRenderer->GetViewportDescriptorSet();
     if (sceneDesc != VK_NULL_HANDLE && contentSize.x > 0 && contentSize.y > 0) {
-      Image((ImTextureID)sceneDesc, contentSize, ImVec2(0, 1), ImVec2(1, 0));
+      ImVec2 imageSize = contentSize;
+      if (gameCameraView && sceneRenderer->HasPlayerCamera()) {
+        const float aspect = (float)sceneRenderer->GetPreviewWidth() /
+                             (float)sceneRenderer->GetPreviewHeight();
+        imageSize.x = std::min(contentSize.x, contentSize.y * aspect);
+        imageSize.y = imageSize.x / aspect;
+        SetCursorPosX(GetCursorPosX() + (contentSize.x - imageSize.x) * 0.5f);
+        SetCursorPosY(GetCursorPosY() + (contentSize.y - imageSize.y) * 0.5f);
+      }
+      Image((ImTextureID)sceneDesc, imageSize, ImVec2(0, 1), ImVec2(1, 0));
+      if (gameCameraView) {
+        const ImVec2 imagePos = GetItemRectMin();
+        const bool overImage = IsItemHovered();
+        if (uiEditing && BeginDragDropTarget()) {
+          if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH")) {
+            const ImVec2 mouse = GetMousePos();
+            int target = -1;
+            for (int i = (int)gameUi.elements.size() - 1; i >= 0; --i) {
+              const auto rect = ilmeee::GameUIElementRect(
+                  gameUi, gameUi.elements[i], imagePos, imageSize);
+              if (mouse.x >= rect.min.x && mouse.x <= rect.max.x &&
+                  mouse.y >= rect.min.y && mouse.y <= rect.max.y) {
+                if (gameUi.elements[i].kind == ilmeee::UiKind::Image)
+                  target = i;
+                break;
+              }
+            }
+            if (target >= 0) {
+              BindUiImageAsset(target, (const char *)payload->Data);
+            } else {
+              const float scale = std::min(imageSize.x / gameUi.referenceWidth,
+                                           imageSize.y / gameUi.referenceHeight);
+              if (scale > 0.0f)
+                CreateUiImageAsset((const char *)payload->Data,
+                                   (mouse.x - imagePos.x) / scale,
+                                   (mouse.y - imagePos.y) / scale);
+            }
+          }
+          EndDragDropTarget();
+        }
+        const std::filesystem::path projectRoot(projectHandler.projectPath);
+        const auto texture = [&](const std::string &asset) -> ImTextureID {
+          if (asset.empty()) return ImTextureID{};
+          const auto path = projectRoot.empty() ? std::filesystem::path(asset)
+              : projectRoot / asset;
+          return (ImTextureID)sceneRenderer->GetUiTextureDescriptor(path.string());
+        };
+        if (hasGameUiCanvas) {
+          if (uiEditing && overImage && IsMouseClicked(ImGuiMouseButton_Left)) {
+            selectedUiElement = -2;
+            const ImVec2 mouse = GetMousePos();
+            for (int i = (int)gameUi.elements.size() - 1; i >= 0; --i) {
+              const auto rect = ilmeee::GameUIElementRect(
+                  gameUi, gameUi.elements[i], imagePos, imageSize);
+              if (mouse.x >= rect.min.x && mouse.x <= rect.max.x &&
+                  mouse.y >= rect.min.y && mouse.y <= rect.max.y) {
+                selectedUiElement = i;
+                break;
+              }
+            }
+          }
+          const std::string action = ilmeee::DrawGameUI(
+              gameUi, imagePos, imageSize, texture, gamePlaying,
+              builder.IsPaused());
+          if (gamePlaying && action == "TogglePause") {
+            if (builder.IsPaused()) builder.Resume();
+            else builder.Pause();
+            PushMessage(builder.IsPaused() ? "[INFO] Game paused" :
+                                          "[INFO] Game resumed");
+          } else if (gamePlaying && !action.empty()) {
+            PushMessage("[INFO] UI action: " + action);
+          }
+          if (uiEditing && selectedUiElement >= 0 &&
+              selectedUiElement < (int)gameUi.elements.size()) {
+            auto &element = gameUi.elements[selectedUiElement];
+            const auto rect = ilmeee::GameUIElementRect(
+                gameUi, element, imagePos, imageSize);
+            GetWindowDrawList()->AddRect(rect.min, rect.max,
+                                         IM_COL32(80, 190, 255, 255), 0, 0, 2.0f);
+            if (overImage && IsMouseDragging(ImGuiMouseButton_Left) &&
+                !SceneStructureLocked()) {
+              const float scale = std::min(imageSize.x / gameUi.referenceWidth,
+                                           imageSize.y / gameUi.referenceHeight);
+              if (scale > 0.0f) {
+                const ImVec2 delta = GetIO().MouseDelta;
+                const bool right = element.anchor == ilmeee::UiAnchor::TopRight ||
+                                   element.anchor == ilmeee::UiAnchor::BottomRight;
+                const bool bottom = element.anchor == ilmeee::UiAnchor::BottomLeft ||
+                                    element.anchor == ilmeee::UiAnchor::BottomRight;
+                element.x += (right ? -delta.x : delta.x) / scale;
+                element.y += (bottom ? -delta.y : delta.y) / scale;
+              }
+            }
+          }
+        }
+        if (!sceneRenderer->HasPlayerCamera())
+          GetWindowDrawList()->AddText(
+              ImVec2(imagePos.x + 12, imagePos.y + 12),
+              IM_COL32(255, 200, 100, 255),
+              "Add a Camera to preview the game UI");
+      } else {
 
       // Inspect Mode: raycast the cursor against the loaded meshes and
       // register the hit object as a trace region. The hover overlay
@@ -1324,7 +1661,7 @@ void MainWindow::RenderSceneWindow() {
       // Drop target: drag a file from the Explorer onto the viewport. Models
       // (.obj/.pmx/.fbx) spawn at the drop point projected onto the ground;
       // images bind as the texture of the surface under the cursor.
-      if (BeginDragDropTarget()) {
+      if (!SceneStructureLocked() && BeginDragDropTarget()) {
         if (const ImGuiPayload *pl = AcceptDragDropPayload("ASSET_PATH")) {
           std::string assetPath((const char *)pl->Data);
           const ImVec2 dmin = GetItemRectMin();
@@ -1501,7 +1838,8 @@ void MainWindow::RenderSceneWindow() {
       }
       const bool dragging = IsItemHovered() &&
                             IsMouseDragging(ImGuiMouseButton_Left) &&
-                            !IsMouseDown(ImGuiMouseButton_Right) && selIdx >= 0;
+                            !IsMouseDown(ImGuiMouseButton_Right) && selIdx >= 0 &&
+                            !SceneStructureLocked();
       if (dragging) {
         viewportDragHistoryActive = true;
         ImVec2 md = GetIO().MouseDelta;
@@ -1584,10 +1922,17 @@ void MainWindow::RenderSceneWindow() {
         if (sel >= 0)
           DeleteSceneObject((size_t)sel);
       }
+      }
     }
 
     // Render toolbar di atas viewport
-    RenderSceneToolbarView(windowPos, windowSize);
+    if (!gameCameraView)
+      RenderSceneToolbarView(windowPos, windowSize);
+    else {
+      SetCursorPos(ImVec2(12, 12));
+      TextDisabled(gamePlaying ? "Play Mode  |  Stop to edit" :
+                                 "UI Edit Mode  |  Drag elements, edit in Inspector");
+    }
 
     // Status bar dengan background semi-transparan
     SetCursorPos(ImVec2(0, windowSize.y - 25));
@@ -1602,44 +1947,64 @@ void MainWindow::RenderSceneWindow() {
 
   // Pop semua style yang di-push
   PopStyleVar(1);
+  }
 
-  // Player-camera preview: render the scene from the first camera object in
-  // the scene and show it in its own window. Only present when a camera
-  // exists, so the editor stays uncluttered otherwise.
-  if (sceneRenderer && sceneRenderer->HasPlayerCamera()) {
+  // The Game tab is the player-camera view; Scene remains the editor view.
+  if (sceneRenderer) {
     LoadGameUiForProject();
-    if (!previewGamePaused)
-      sceneRenderer->RenderPlayerCameraPreview();
-    if (Begin("Camera Preview", nullptr, ImGuiWindowFlags_NoScrollbar)) {
-      VkDescriptorSet d = sceneRenderer->GetPlayerCameraPreviewDescriptor();
-      if (d != VK_NULL_HANDLE) {
-        ImVec2 avail = GetContentRegionAvail();
-        float aspect = (float)sceneRenderer->GetPreviewWidth() /
-                       (float)sceneRenderer->GetPreviewHeight();
-        float w = avail.x;
-        float h = w / aspect;
-        if (h > avail.y && avail.y > 0.0f) {
-          h = avail.y;
-          w = h * aspect;
+    if (sceneDockId != 0)
+      SetNextWindowDockID(sceneDockId, ImGuiCond_FirstUseEver);
+    if (focusGameTab) {
+      SetNextWindowFocus();
+      focusGameTab = false;
+    }
+    if (Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar)) {
+      const bool inputFocused = IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+                                && !GetIO().WantTextInput;
+      if (builder.IsPlaying() && inputFocused)
+        gameMovementInput = ilmeee::ReadKeyboardMouseInput();
+      // On-screen sticks mirror WASD/arrows; a held stick overrides below.
+      ilmeee::EchoKeyboardOnJoysticks(*sceneRenderer, gameMovementInput);
+      if (!sceneRenderer->HasPlayerCamera()) {
+        TextDisabled("Add a Camera game object to preview the game.");
+      } else {
+        sceneRenderer->RenderPlayerCameraPreview();
+        VkDescriptorSet d = sceneRenderer->GetPlayerCameraPreviewDescriptor();
+        if (d != VK_NULL_HANDLE) {
+          ImVec2 avail = GetContentRegionAvail();
+          float aspect = (float)sceneRenderer->GetPreviewWidth() /
+                         (float)sceneRenderer->GetPreviewHeight();
+          float w = avail.x;
+          float h = w / aspect;
+          if (h > avail.y && avail.y > 0.0f) {
+            h = avail.y;
+            w = h * aspect;
+          }
+          // Flip V like the main viewport (framebuffer is top-left origin).
+          Image((ImTextureID)d, ImVec2(w, h), ImVec2(0, 1), ImVec2(1, 0));
+          const ImVec2 imagePos = GetItemRectMin();
+          const std::filesystem::path projectRoot(projectHandler.projectPath);
+          const auto texture = [&](const std::string &asset) -> ImTextureID {
+            if (asset.empty()) return ImTextureID{};
+            const auto path = projectRoot.empty() ? std::filesystem::path(asset)
+                : projectRoot / asset;
+            return (ImTextureID)sceneRenderer->GetUiTextureDescriptor(path.string());
+          };
+          const bool gamePaused = builder.IsPaused();
+          if (hasGameUiCanvas &&
+              ilmeee::DrawGameUI(gameUi, imagePos, ImVec2(w, h), texture,
+                                 !builder.IsStopped(), gamePaused,
+                                 &gameMovementInput.axes) == "TogglePause") {
+            if (builder.IsPaused()) builder.Resume();
+            else builder.Pause();
+            PushMessage(builder.IsPaused() ? "[INFO] Game paused" :
+                                             "[INFO] Game resumed");
+          }
+          if (builder.IsPaused())
+            GetWindowDrawList()->AddText(
+                ImVec2(imagePos.x + w * 0.5f - 35, imagePos.y + h * 0.5f),
+                IM_COL32(255, 255, 255, 255), "PAUSED");
         }
-        // Flip V like the main viewport (framebuffer is top-left origin).
-        Image((ImTextureID)d, ImVec2(w, h), ImVec2(0, 1), ImVec2(1, 0));
-        const ImVec2 imagePos = GetItemRectMin();
-        const std::filesystem::path projectRoot(projectHandler.projectPath);
-        const auto texture = [&](const std::string &asset) -> ImTextureID {
-          if (asset.empty()) return ImTextureID{};
-          const auto path = projectRoot.empty() ? std::filesystem::path(asset)
-              : projectRoot / asset;
-          return (ImTextureID)sceneRenderer->GetUiTextureDescriptor(path.string());
-        };
-        if (ilmeee::DrawGameUI(gameUi, imagePos, ImVec2(w, h), texture,
-                               true, previewGamePaused) ==
-            "TogglePause")
-          previewGamePaused = !previewGamePaused;
-        if (previewGamePaused)
-          GetWindowDrawList()->AddText(
-              ImVec2(imagePos.x + w * 0.5f - 35, imagePos.y + h * 0.5f),
-              IM_COL32(255, 255, 255, 255), "PAUSED");
       }
     }
     End();
@@ -1651,15 +2016,17 @@ void MainWindow::LoadGameUiForProject() {
     return;
   gameUiProject = projectHandler.projectPath;
   gameUi = ilmeee::DefaultGameUI();
+  hasGameUiCanvas = false;
   selectedUiElement = -1;
-  previewGamePaused = false;
   if (!gameUiProject.empty()) {
     const auto root = std::filesystem::path(gameUiProject);
     const auto scenePath = root / "scenes/main.ilmeeescene";
     ilmeee::IlmeeeScene scene;
     if (ilmeee::LoadScene(scenePath.string(), scene) &&
-        ilmeee::GameUIFromScene(scene, gameUi))
+        ilmeee::GameUIFromScene(scene, gameUi)) {
+      hasGameUiCanvas = true;
       return;
+    }
     // Import the earlier standalone Game UI asset when a scene has no Canvas.
     const auto path = root / "assets/ui/main.json";
     std::error_code ec;
@@ -1667,6 +2034,8 @@ void MainWindow::LoadGameUiForProject() {
       std::string error;
       if (!ilmeee::LoadGameUI(path.string(), gameUi, &error))
         ::Log("Game UI: " + error, Debug::LogLevel::WARNING);
+      else
+        hasGameUiCanvas = true;
     }
   }
 }
@@ -1685,9 +2054,19 @@ void MainWindow::RenderGameUiEditor() {
       std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
       if (InputText(label, buffer, sizeof(buffer))) value = buffer;
     };
+    const std::string oldId = e.id;
     editString("Name", e.id);
+    // Movable objects link joysticks by name; keep those links on rename.
+    if (e.id != oldId && sceneRenderer) {
+      for (auto &mesh : sceneRenderer->meshes3d) {
+        if (mesh.movementRig.moveJoystick == oldId)
+          mesh.movementRig.moveJoystick = e.id;
+        if (mesh.movementRig.lookJoystick == oldId)
+          mesh.movementRig.lookJoystick = e.id;
+      }
+    }
     int kind = (int)e.kind;
-    if (Combo("Type", &kind, "Text\0Image\0Button\0"))
+    if (Combo("Type", &kind, "Text\0Image\0Button\0Joystick\0"))
       e.kind = (ilmeee::UiKind)kind;
     int anchor = (int)e.anchor;
     if (Combo("Anchor", &anchor,
@@ -1697,12 +2076,21 @@ void MainWindow::RenderGameUiEditor() {
     DragFloat("Y", &e.y, 1.0f);
     DragFloat("Width", &e.width, 1.0f, 1.0f, 8192.0f);
     DragFloat("Height", &e.height, 1.0f, 1.0f, 8192.0f);
-    if (e.kind != ilmeee::UiKind::Image) {
+    if (e.kind == ilmeee::UiKind::Joystick) {
+      TextDisabled("Analog stick: link it from a movable object's");
+      TextDisabled("Movement Script > Move/Look Joystick");
+    } else if (e.kind != ilmeee::UiKind::Image) {
       editString("Text", e.text);
       DragFloat("Font size", &e.fontSize, 1.0f, 1.0f, 200.0f);
     } else {
       editString("Image path", e.imagePath);
+      if (!SceneStructureLocked() && BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
+          BindUiImageAsset(selectedUiElement, (const char *)payload->Data);
+        EndDragDropTarget();
+      }
       TextDisabled("Path relative to project, e.g. assets/logo.png");
+      TextDisabled("Drop an image here or onto the Scene canvas");
     }
     if (e.kind == ilmeee::UiKind::Button)
       editString("Action", e.action);
@@ -1714,7 +2102,7 @@ void MainWindow::RenderGameUiEditor() {
     }
   }
   Separator();
-  TextDisabled("Preview in Camera Preview. Save with Ctrl+S.");
+  TextDisabled("Preview in Game. Save with Ctrl+S.");
   if (Button("Save Scene")) Save3DScene();
 }
 
@@ -1902,7 +2290,10 @@ void MainWindow::RenderConsoleWindow() {
   static int selectedTab = 0;
   BeginTabBar("ConsoleTabs");
 
-  if (BeginTabItem("Output")) {
+  const ImGuiTabItemFlags outputTabFlags =
+      focusOutputTab ? ImGuiTabItemFlags_SetSelected : 0;
+  focusOutputTab = false;
+  if (BeginTabItem("Output", nullptr, outputTabFlags)) {
     // Toolbar area
     PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
     BeginChild("ConsoleToolbar", ImVec2(0, 30), false);
@@ -1911,7 +2302,7 @@ void MainWindow::RenderConsoleWindow() {
     PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
     PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
     if (Button("Clear", ImVec2(60, 24))) {
-      messages.clear();
+      ClearMessages();
     }
     PopStyleColor(2);
 
@@ -1939,11 +2330,14 @@ void MainWindow::RenderConsoleWindow() {
     PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
     PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
 
-    static char consoleBuffer[4096];
-    string combinedLog;
+    std::vector<std::string> logLines;
+    {
+      std::lock_guard<std::mutex> lock(messagesMutex);
+      logLines = messages;
+    }
     int number = 1;
-
-    for (const auto &line : messages) {
+    const bool wasAtBottom = GetScrollY() >= GetScrollMaxY() - 4.0f;
+    for (const auto &line : logLines) {
       // Filter messages based on selected filter
       if (currentFilter == 0 || // All
           (currentFilter == 1 && line.find("[INFO]") != string::npos) ||
@@ -1953,21 +2347,13 @@ void MainWindow::RenderConsoleWindow() {
         // Search filter
         if (strlen(searchBuffer) == 0 ||
             line.find(searchBuffer) != string::npos) {
-          combinedLog += "[" + to_string(number++) + "] " + line + "\n";
+          Text("[%d] %s", number++, line.c_str());
         }
       }
     }
 
-    strncpy(consoleBuffer, combinedLog.c_str(), sizeof(consoleBuffer) - 1);
-    consoleBuffer[sizeof(consoleBuffer) - 1] = '\0';
-
-    InputTextMultiline("##console", consoleBuffer, IM_ARRAYSIZE(consoleBuffer),
-                       ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
-
-    // Auto-scroll
-    if (GetScrollY() >= GetScrollMaxY()) {
+    if (wasAtBottom)
       SetScrollHereY(1.0f);
-    }
 
     PopStyleVar();
     PopStyleColor();
@@ -2291,8 +2677,14 @@ void MainWindow::RenderPlayMenu() {
                                 playBg, playTint)) {
       if (builder.IsStopped()) {
         builder.Play();
+        focusGameTab = true;
+        showConsole = true;
+        focusOutputTab = true;
+        PushMessage("[INFO] Game started in Game tab");
       } else if (isPaused) {
         builder.Resume();
+        focusGameTab = true;
+        PushMessage("[INFO] Game resumed");
       }
     }
     if (IsItemHovered())
@@ -2309,6 +2701,7 @@ void MainWindow::RenderPlayMenu() {
                                 iconSize, pauseBg, pauseTint)) {
       if (isPlaying) {
         builder.Pause();
+        PushMessage("[INFO] Game paused");
       }
     }
     if (IsItemHovered())
@@ -2323,7 +2716,9 @@ void MainWindow::RenderPlayMenu() {
 
     if (svgIcons.DrawIconButton("##Stop", "assets/icons/svg/stop.svg", iconSize,
                                 stopBg, stopTint)) {
+      if (!builder.IsStopped()) PushMessage("[INFO] Game stopped");
       builder.Stop();
+      focusSceneTab = true;
     }
     if (IsItemHovered())
       SetTooltip("Stop (Ctrl+Q)");
@@ -2331,15 +2726,30 @@ void MainWindow::RenderPlayMenu() {
     // Keyboard shortcuts
     if (GetIO().KeyCtrl && !GetIO().KeyShift &&
         IsKeyPressed(ImGuiKey_P, false)) {
-      if (builder.IsStopped())
+      if (builder.IsStopped()) {
         builder.Play();
-      else if (isPaused)
+        focusGameTab = true;
+        showConsole = true;
+        focusOutputTab = true;
+        PushMessage("[INFO] Game started in Game tab");
+      } else if (isPaused) {
         builder.Resume();
+        focusGameTab = true;
+        PushMessage("[INFO] Game resumed");
+      }
     }
     if (GetIO().KeyCtrl && GetIO().KeyShift &&
         IsKeyPressed(ImGuiKey_P, false)) {
-      if (isPlaying)
+      if (isPlaying) {
         builder.Pause();
+        PushMessage("[INFO] Game paused");
+      }
+    }
+    if (GetIO().KeyCtrl && IsKeyPressed(ImGuiKey_Q, false) &&
+        !builder.IsStopped()) {
+      builder.Stop();
+      focusSceneTab = true;
+      PushMessage("[INFO] Game stopped");
     }
   }
   End();
@@ -2390,6 +2800,10 @@ void MainWindow::ClearMessages() {
 void MainWindow::Save3DScene() {
   if (!sceneRenderer)
     return;
+  if (SceneStructureLocked()) {
+    PushMessage("[WARNING] Stop the game before saving the scene");
+    return;
+  }
   LoadGameUiForProject();
   const std::string activeProject = projectHandler.projectPath;
   if (activeProject.empty()) {
@@ -2415,6 +2829,11 @@ void MainWindow::Save3DScene() {
     e.position = sceneRenderer->GetMesh3DPosition(i);
     e.rotationEuler = sceneRenderer->GetMesh3DRotation(i);
     e.scale = sceneRenderer->GetMesh3DScale(i);
+    const auto &mesh = sceneRenderer->meshes3d[i];
+    e.movable = mesh.movable;
+    e.movementScript = mesh.movementScript;
+    e.movementSpeed = mesh.movementSpeed;
+    e.movementRig = mesh.movementRig;
 
     if (sceneRenderer->IsMesh3DLight(i)) {
       e.kind = ilmeee::PrimitiveKind::Light;
@@ -2477,7 +2896,8 @@ void MainWindow::Save3DScene() {
     scene.entities.push_back(std::move(e));
   }
 
-  ilmeee::AppendGameUIToScene(scene, gameUi);
+  if (hasGameUiCanvas)
+    ilmeee::AppendGameUIToScene(scene, gameUi);
 
   if (ilmeee::SaveScene(mainScene.string(), scene)) {
     ::Log("Saved 3D scene to " + mainScene.string(), Debug::LogLevel::SUCCESS);

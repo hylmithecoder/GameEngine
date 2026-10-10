@@ -146,6 +146,15 @@ void AppendEntitySignature(std::ostringstream &out,
   AppendVec3(out, entity.position);
   AppendVec3(out, entity.rotation);
   AppendVec3(out, entity.scale);
+  AppendBool(out, entity.movable);
+  AppendString(out, entity.movementScript);
+  AppendFloat(out, entity.movementSpeed);
+  out << entity.movementRig.camera << ';'
+      << static_cast<int>(entity.movementRig.style) << ';';
+  AppendFloat(out, entity.movementRig.distance);
+  AppendFloat(out, entity.movementRig.height);
+  AppendString(out, entity.movementRig.moveJoystick);
+  AppendString(out, entity.movementRig.lookJoystick);
   AppendBool(out, entity.isLight);
   AppendFloat(out, entity.lightGamma);
   AppendVec3(out, entity.lightColor);
@@ -305,6 +314,15 @@ void WriteEntity(std::ostream &out,
   WriteVec3(out, 10, "position", entity.position);
   WriteVec3(out, 10, "rotation", entity.rotation);
   WriteVec3(out, 10, "scale", entity.scale);
+  WriteBool(out, 10, "movable", entity.movable);
+  WriteString(out, 10, "movement_script", entity.movementScript);
+  WriteFloat(out, 10, "movement_speed", entity.movementSpeed);
+  WriteInt(out, 10, "movement_camera", entity.movementRig.camera);
+  WriteInt(out, 10, "camera_style", static_cast<int>(entity.movementRig.style));
+  WriteFloat(out, 10, "camera_distance", entity.movementRig.distance);
+  WriteFloat(out, 10, "camera_height", entity.movementRig.height);
+  WriteString(out, 10, "move_joystick", entity.movementRig.moveJoystick);
+  WriteString(out, 10, "look_joystick", entity.movementRig.lookJoystick);
 
   WriteBool(out, 10, "is_light", entity.isLight);
   WriteFloat(out, 10, "light_gamma", entity.lightGamma);

@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = "com.ilmeee.player"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "@APPLICATION_ID@"
+        minSdk = 26 // Vulkan 1.0+ and SDL3
+        targetSdk = 35
+        versionCode = @VERSION_CODE@
+        versionName = "@VERSION_NAME@"
+        ndk {
+            abiFilters '@ABIS@'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            // Signed with the debug key so the APK installs as-is; replace
+            // with a real signingConfig before publishing.
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true // extract .so files; SDL loads by name
+        }
+    }
+
+    // Scenes/models are read once at first start; storing them uncompressed
+    // makes that extraction a plain copy.
+    androidResources {
+        noCompress += ['ilmeeescene', 'pmx', 'obj', 'fbx', 'png', 'jpg', 'spv']
+    }
+}

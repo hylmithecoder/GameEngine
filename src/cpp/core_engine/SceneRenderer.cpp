@@ -121,6 +121,18 @@ void SceneRenderer::SetVulkanContext(VkDevice device,
   this->commandPool = commandPool;
   this->descriptorPool = descriptorPool;
 
+  // D32_SFLOAT is not a depth attachment on every mobile GPU; D16_UNORM is
+  // required by the spec, so it is always there to fall back to.
+  VkFormatProperties props{};
+  vkGetPhysicalDeviceFormatProperties(physicalDevice, VK_FORMAT_D32_SFLOAT,
+                                      &props);
+  if (!(props.optimalTilingFeatures &
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+    offscreen.depthFormat = VK_FORMAT_D16_UNORM;
+    preview.depthFormat = VK_FORMAT_D16_UNORM;
+    cout << "[SceneRenderer] D32_SFLOAT unsupported, using D16_UNORM" << endl;
+  }
+
   InitVulkanResources();
 }
 
@@ -2303,6 +2315,11 @@ size_t SceneRenderer::RemoveMesh3D(size_t i) {
     }
     Mesh3D m = std::move(meshes3d[k]);
     m.parent = m.parent >= 0 ? remap[(size_t)m.parent] : -1;
+    // A removed camera falls back to the Game view camera (-1).
+    m.movementRig.camera = m.movementRig.camera >= 0 &&
+                                   (size_t)m.movementRig.camera < remap.size()
+                               ? remap[(size_t)m.movementRig.camera]
+                               : -1;
     kept.push_back(std::move(m));
   }
   size_t removed = meshes3d.size() - kept.size();
@@ -3155,6 +3172,10 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     entity.position = mesh.userPosition;
     entity.rotation = mesh.userRotation;
     entity.scale = mesh.userScale;
+    entity.movable = mesh.movable;
+    entity.movementScript = mesh.movementScript;
+    entity.movementSpeed = mesh.movementSpeed;
+    entity.movementRig = mesh.movementRig;
 
     entity.isLight = mesh.isLight;
     entity.lightGamma = mesh.lightGamma;
@@ -3281,6 +3302,10 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.hasAudio = entity.hasAudio;
     mesh.audioPath = entity.audioPath;
     mesh.isPlaying = entity.isPlaying;
+    mesh.movable = entity.movable;
+    mesh.movementScript = entity.movementScript;
+    mesh.movementSpeed = entity.movementSpeed;
+    mesh.movementRig = entity.movementRig;
 
     // Loaders may auto-bind the model's original textures. Clear every
     // surface first so an undo to a deliberately cleared surface is exact.
@@ -3303,6 +3328,11 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     if (loadedAs[si] >= 0 && p >= 0 && (size_t)p < loadedAs.size() &&
         loadedAs[(size_t)p] >= 0)
       SetMesh3DParent((size_t)loadedAs[si], loadedAs[(size_t)p], false);
+    if (loadedAs[si] >= 0) {
+      const int cam = snapshot.entities[si].movementRig.camera;
+      meshes3d[(size_t)loadedAs[si]].movementRig.camera =
+          cam >= 0 && (size_t)cam < loadedAs.size() ? loadedAs[(size_t)cam] : -1;
+    }
   }
 
   return allLoaded;

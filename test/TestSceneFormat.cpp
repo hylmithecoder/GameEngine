@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.5: round trip, reading
+// .ilmeeescene v1.3–v1.7: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -106,6 +106,66 @@ int main() {
     CHECK(in.entities[1].uiColor == glm::vec4(0.2f, 0.4f, 0.8f, 1.0f));
   }
 
+  // 1d. Movement component survives a scene round trip (v1.6).
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Mover", -1)};
+    s.entities[0].movable = true;
+    s.entities[0].movementScript = "WASD XZ";
+    s.entities[0].movementSpeed = 7.5f;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1);
+    CHECK(in.entities[0].movable);
+    CHECK(in.entities[0].movementScript == "WASD XZ");
+    CHECK(in.entities[0].movementSpeed == 7.5f);
+  }
+
+  // 1e. Camera rig + joystick links and a UiJoystick survive (v1.7).
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Player", -1), Entity("Cam", -1),
+                  Entity("Canvas", -1), Entity("Stick", 2)};
+    s.entities[0].movable = true;
+    s.entities[0].movementScript = "Camera Relative";
+    s.entities[0].movementRig.camera = 1;
+    s.entities[0].movementRig.style = CameraStyle::ThirdPerson;
+    s.entities[0].movementRig.distance = 6.0f;
+    s.entities[0].movementRig.height = 1.25f;
+    s.entities[0].movementRig.moveJoystick = "Stick";
+    s.entities[0].movementRig.lookJoystick = "LookStick";
+    s.entities[1].kind = PrimitiveKind::Camera;
+    s.entities[2].kind = PrimitiveKind::Canvas;
+    s.entities[3].kind = PrimitiveKind::UiJoystick;
+    s.entities[3].uiWidth = 180.0f;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 4);
+    const MovementRig &rig = in.entities[0].movementRig;
+    CHECK(rig.camera == 1);
+    CHECK(rig.style == CameraStyle::ThirdPerson);
+    CHECK(rig.distance == 6.0f);
+    CHECK(rig.height == 1.25f);
+    CHECK(rig.moveJoystick == "Stick");
+    CHECK(rig.lookJoystick == "LookStick");
+    CHECK(in.entities[3].kind == PrimitiveKind::UiJoystick);
+    CHECK(in.entities[3].uiWidth == 180.0f);
+    CHECK(in.entities[1].movementRig.camera == -1);
+  }
+
+  // 1f. An out-of-range camera link falls back to the Game view camera.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Player", -1)};
+    s.entities[0].movementRig.camera = 9;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities[0].movementRig.camera == -1);
+  }
+
   // 2. A v1.2 file (no parent field) still loads, everything at the root.
   {
     IlmeeeScene s;
@@ -115,8 +175,8 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 2; // minor version (little-endian u16 after the magic + major)
     bytes[7] = 0;
-    // drop the v1.4 environment (16 bytes) and the v1.3 parent field (4)
-    bytes.resize(bytes.size() - 16 - 4);
+    // Drop v1.4 environment, v1.3 parent, v1.6 movement and v1.7 rig.
+    bytes.resize(bytes.size() - 16 - 4 - 10 - 20);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -124,6 +184,43 @@ int main() {
     CHECK(in.entities[0].name == "Only");
     CHECK(in.entities[0].parent == -1);
     CHECK(in.backgroundColor == IlmeeeScene().backgroundColor);
+  }
+
+  // 2b. A v1.5 scene without movement fields remains readable.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Old", -1)};
+    CHECK(SaveScene(file.string(), s));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = 5;
+    bytes[7] = 0;
+    bytes.erase(bytes.end() - 16 - 10 - 20, bytes.end() - 16);
+    WriteAll(file, bytes);
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1);
+    CHECK(!in.entities[0].movable);
+    CHECK(in.entities[0].movementScript.empty());
+  }
+
+  // 2c. A v1.6 scene without rig fields keeps the default rig.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Mover", -1)};
+    s.entities[0].movable = true;
+    s.entities[0].movementScript = "WASD XZ";
+    CHECK(SaveScene(file.string(), s));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = 6;
+    bytes[7] = 0;
+    bytes.erase(bytes.end() - 16 - 20, bytes.end() - 16);
+    WriteAll(file, bytes);
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1);
+    CHECK(in.entities[0].movementScript == "WASD XZ");
+    CHECK(in.entities[0].movementRig.camera == -1);
+    CHECK(in.entities[0].movementRig.style == CameraStyle::None);
   }
 
   // 3. Broken links are demoted to roots instead of trusted.

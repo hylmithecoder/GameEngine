@@ -61,6 +61,9 @@ int main() {
   scene.backgroundColor = {0.1f, 0.2f, 0.3f, 1.0f};
   SceneEntity cube;
   cube.name = "Cube";
+  cube.movable = true;
+  cube.movementScript = "WASD XZ";
+  cube.movementSpeed = 4.5f;
   scene.entities.push_back(cube);
   scene.entities.push_back(Model("Inside", "assets/models/inside.obj"));
   scene.entities.push_back(Model("Hero", (outside / "hero/hero.obj").string()));
@@ -132,6 +135,9 @@ int main() {
   CHECK(built.entities.size() == scene.entities.size());
   CHECK(built.backgroundColor == scene.backgroundColor);
   CHECK(built.entities[5].parent == 0);
+  CHECK(built.entities[0].movable);
+  CHECK(built.entities[0].movementScript == "WASD XZ");
+  CHECK(built.entities[0].movementSpeed == 4.5f);
   CHECK(built.entities[6].kind == PrimitiveKind::Canvas);
   CHECK(built.entities[7].kind == PrimitiveKind::UiImage);
   CHECK(built.entities[7].parent == 6);
@@ -184,6 +190,69 @@ int main() {
   r = BuildGame(noPlayer, logger);
   CHECK(!r.ok && r.error.find("player") != std::string::npos);
   CHECK(!fs::exists(tmp / "out-noplayer.building"));
+
+  // ---- 4b. Android: project prepared, game packed under APK assets -------
+  {
+    const fs::path player = tmp / "android-player";
+    Write(player / "jniLibs/arm64-v8a/libmain.so", "elf");
+    Write(player / "jniLibs/arm64-v8a/libSDL3.so", "elf");
+    Write(player / "sdl-java/org/libsdl/app/SDLActivity.java", "class");
+    const fs::path tmpl = tmp / "android-template";
+    Write(tmpl / "app/build.gradle",
+          "id=@APPLICATION_ID@ v=@VERSION_NAME@ c=@VERSION_CODE@ a='@ABIS@'");
+    Write(tmpl / "app/src/main/res/values/strings.xml", "<s>@APP_NAME@</s>");
+    Write(tmpl / "settings.gradle", "include ':app'");
+
+    GameBuildOptions a = o;
+    a.target = BuildTarget::Android;
+    a.outputDir.clear();
+    a.playerExecutable.clear();
+    a.androidPlayerDir = player;
+    a.androidTemplateDir = tmpl;
+    a.androidSdkDir = tmp / "sdk";
+    a.gradleCommand.clear(); // prepare only
+    r = BuildGame(a, logger);
+    CHECK(r.ok);
+    const fs::path aout = project / "build/android/My_First_Project";
+    CHECK(r.outputDir == fs::weakly_canonical(aout));
+    CHECK(r.applicationId == "com.ilmeee.my_first_project");
+    const fs::path game = aout / "app/src/main/assets/game";
+    CHECK(fs::exists(game / "scenes/main.ilmeeescene"));
+    CHECK(fs::exists(game / "assets/shaders/vulkan/scene_mesh.vert.spv"));
+    CHECK(fs::exists(aout / "app/src/main/jniLibs/arm64-v8a/libmain.so"));
+    CHECK(fs::exists(aout / "app/src/main/java/org/libsdl/app/SDLActivity.java"));
+    CHECK(!fs::exists(game / "bin"));
+    auto readAll = [](const fs::path &p) {
+      std::ifstream in(p);
+      return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    CHECK(readAll(aout / "app/build.gradle") ==
+          "id=com.ilmeee.my_first_project v=1.0 c=1 a='arm64-v8a'");
+    CHECK(readAll(aout / "app/src/main/res/values/strings.xml") ==
+          "<s>My First Project</s>");
+    CHECK(readAll(aout / "local.properties").find("sdk.dir=") == 0);
+    const std::string index = readAll(game / "ilmeee_files.txt");
+    CHECK(index.rfind("ilmeee-files 1 ", 0) == 0);
+    CHECK(index.find("\nscenes/main.ilmeeescene\n") != std::string::npos);
+    CHECK(index.find("\ngame.json\n") != std::string::npos);
+    CHECK(index.find("ilmeee_files.txt") == std::string::npos);
+    nlohmann::json gm = nlohmann::json::parse(readAll(game / "game.json"));
+    CHECK(gm["window"]["fullscreen"] == true);
+
+    // Rebuilding replaces the previous Android build.
+    CHECK(BuildGame(a, logger).ok);
+
+    GameBuildOptions badId = a;
+    badId.applicationId = "NoDots";
+    CHECK(!BuildGame(badId, logger).ok);
+    GameBuildOptions noLibs = a;
+    noLibs.androidPlayerDir = tmp / "nothing";
+    r = BuildGame(noLibs, logger);
+    CHECK(!r.ok && r.error.find("build-player.sh") != std::string::npos);
+  }
+  CHECK(DefaultApplicationId("My First Project") == "com.ilmeee.my_first_project");
+  CHECK(DefaultApplicationId("3D Racer!") == "com.ilmeee.g3d_racer");
+  CHECK(DefaultApplicationId("ミク") == "com.ilmeee.game");
 
   // ---- 5. names ----------------------------------------------------------
   CHECK(SafeGameName("My First Project") == "My_First_Project");

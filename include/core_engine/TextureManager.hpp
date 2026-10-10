@@ -37,7 +37,11 @@ private:
   VkSampler mipSampler = VK_NULL_HANDLE;
 
   std::string cacheDir;
+#ifdef ILMEEE_NO_KTX
+  bool useKtxCache = false;
+#else
   bool useKtxCache = true;
+#endif
 
   struct TextureResource {
     VkImage image = VK_NULL_HANDLE;

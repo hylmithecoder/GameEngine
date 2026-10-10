@@ -22,7 +22,8 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
   for (size_t ei = 0; ei < scene.entities.size(); ++ei) {
     const SceneEntity &e = scene.entities[ei];
     if (e.kind == PrimitiveKind::Canvas || e.kind == PrimitiveKind::UiText ||
-        e.kind == PrimitiveKind::UiImage || e.kind == PrimitiveKind::UiButton)
+        e.kind == PrimitiveKind::UiImage || e.kind == PrimitiveKind::UiButton ||
+        e.kind == PrimitiveKind::UiJoystick)
       continue; // Screen-space entities are handled by GameUI.
     bool ok = false;
     switch (e.kind) {
@@ -75,6 +76,10 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     if (!e.name.empty())
       renderer.meshes3d[idx].displayName = e.name;
     renderer.SetMesh3DTransform(idx, e.position, e.rotationEuler, e.scale);
+    renderer.meshes3d[idx].movable = e.movable;
+    renderer.meshes3d[idx].movementScript = e.movementScript;
+    renderer.meshes3d[idx].movementSpeed = e.movementSpeed;
+    renderer.meshes3d[idx].movementRig = e.movementRig;
     // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
     // so hover-to-source lands users on the deserializer.
     renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);
@@ -98,6 +103,12 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
         loadedAs[(size_t)p] >= 0)
       renderer.SetMesh3DParent((size_t)loadedAs[ei], loadedAs[(size_t)p],
                                false);
+    // Camera links are entity indices too.
+    if (loadedAs[ei] >= 0) {
+      const int cam = scene.entities[ei].movementRig.camera;
+      renderer.meshes3d[(size_t)loadedAs[ei]].movementRig.camera =
+          cam >= 0 && (size_t)cam < loadedAs.size() ? loadedAs[(size_t)cam] : -1;
+    }
   }
   return report;
 }

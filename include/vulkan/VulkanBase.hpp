@@ -59,6 +59,8 @@ protected:
   virtual void OnRender(VkCommandBuffer cmd) {}
   virtual void OnCleanup() {}
   virtual void OnResize(int width, int height) {}
+  // Every SDL event, after ImGui has seen it (e.g. multi-touch fingers).
+  virtual void OnEvent(const SDL_Event &event) {}
 
   // Utility methods
   VkCommandBuffer BeginSingleTimeCommands();
@@ -106,6 +108,8 @@ protected:
 
   bool isRunning = false;
   bool framebufferResized = false;
+  // Android: the app is in the background and its surface is gone.
+  bool suspended = false;
   int windowWidth, windowHeight;
 
 private:
@@ -124,6 +128,9 @@ private:
 
   // Swapchain maintenance
   void RecreateSwapChain();
+  // New VkSurfaceKHR + swapchain (Android destroys the window surface when
+  // the app goes to the background).
+  void RecreateSurface();
   void CleanupSwapChain();
 
   // Frame execution

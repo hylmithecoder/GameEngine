@@ -83,6 +83,21 @@ void VulkanBase::Run() {
           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
         framebufferResized = true;
       }
+      if (event.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+        suspended = true;
+      } else if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND && suspended) {
+        suspended = false;
+#if defined(__ANDROID__)
+        RecreateSurface();
+#endif
+      }
+      OnEvent(event);
+    }
+    if (suspended) {
+      // Nothing to draw into; don't spin the CPU while in the background.
+      SDL_Delay(50);
+      lastTime = std::chrono::high_resolution_clock::now();
+      continue;
     }
 
     auto currentTime = std::chrono::high_resolution_clock::now();
@@ -305,8 +320,23 @@ bool VulkanBase::CreateSwapChain() {
     createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
   }
 
-  createInfo.preTransform = capabilities.currentTransform;
+  // Identity lets the compositor rotate for us (Android reports a rotated
+  // currentTransform in landscape, which would need rotated rendering).
+  createInfo.preTransform =
+      (capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+          ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+          : capabilities.currentTransform;
+  // Android surfaces often only offer INHERIT, desktop ones OPAQUE.
   createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  for (VkCompositeAlphaFlagBitsKHR alpha :
+       {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
+    if (capabilities.supportedCompositeAlpha & alpha) {
+      createInfo.compositeAlpha = alpha;
+      break;
+    }
+  }
   createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
   createInfo.clipped = VK_TRUE;
 
@@ -489,6 +519,9 @@ void VulkanBase::DrawFrame() {
   if (result == VK_ERROR_OUT_OF_DATE_KHR) {
     RecreateSwapChain();
     return;
+  } else if (result == VK_ERROR_SURFACE_LOST_KHR) {
+    RecreateSurface();
+    return;
   } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
     throw std::runtime_error("failed to acquire swap chain image!");
   }
@@ -532,8 +565,10 @@ void VulkanBase::DrawFrame() {
       warpedLastFrameY = false;
     }
 
-    // 2. Wrap mouse cursor if active and dragging
-    if (ImGui::IsAnyItemActive() && ImGui::IsMouseDragging(0)) {
+    // 2. Wrap mouse cursor if active and dragging (not for a finger: it
+    // can't be warped, and an on-screen stick near the edge would jump).
+    if (ImGui::IsAnyItemActive() && ImGui::IsMouseDragging(0) &&
+        io.MouseSource != ImGuiMouseSource_TouchScreen) {
       int w = 0, h = 0;
       SDL_GetWindowSize(window, &w, &h);
       if (w > 0 && h > 0) {
@@ -698,10 +733,19 @@ void VulkanBase::DrawFrame() {
 
   result = vkQueuePresentKHR(ctx.presentQueue, &presentInfo);
 
+#if defined(__ANDROID__)
+  // Android reports SUBOPTIMAL on every present while the display is rotated
+  // relative to our IDENTITY preTransform; real size changes still arrive
+  // as OUT_OF_DATE or a resize event.
+  if (result == VK_SUBOPTIMAL_KHR)
+    result = VK_SUCCESS;
+#endif
   if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
       framebufferResized) {
     framebufferResized = false;
     RecreateSwapChain();
+  } else if (result == VK_ERROR_SURFACE_LOST_KHR) {
+    RecreateSurface();
   } else if (result != VK_SUCCESS) {
     throw std::runtime_error("failed to present swap chain image!");
   }
@@ -747,6 +791,30 @@ void VulkanBase::RecreateSwapChain() {
   // wrb->Index akan terus berputar di rentang yang sah.
 
   OnResize(w, h);
+}
+
+void VulkanBase::RecreateSurface() {
+  vkDeviceWaitIdle(ctx.device);
+  CleanupSwapChain();
+  swapChain = VK_NULL_HANDLE;
+  vkDestroySurfaceKHR(ctx.instance, surface, nullptr);
+  surface = VK_NULL_HANDLE;
+  if (!SDL_Vulkan_CreateSurface(window, ctx.instance, nullptr, &surface)) {
+    ::Log("Failed to recreate surface: " + std::string(SDL_GetError()),
+          Debug::LogLevel::CRASH);
+    isRunning = false;
+    return;
+  }
+  int w = 0, h = 0;
+  SDL_GetWindowSizeInPixels(window, &w, &h);
+  if (w > 0 && h > 0) {
+    windowWidth = w;
+    windowHeight = h;
+  }
+  CreateSwapChain();
+  CreateImageViews();
+  CreateFramebuffers();
+  OnResize(windowWidth, windowHeight);
 }
 
 void VulkanBase::CleanupSwapChain() {

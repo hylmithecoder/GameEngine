@@ -4,6 +4,7 @@
 #include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
+#include "../core_engine/MovementScript.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
@@ -46,14 +47,23 @@ private:
   void renderVideoFrame();
   void LoadGameUiForProject();
   void RenderGameUiEditor();
+  void EnsureSceneLoaded();
+  bool BindUiImageAsset(int index, const std::string &sourcePath);
+  void CreateUiImageAsset(const std::string &sourcePath, float x, float y);
   void set_mainbackground();
 
   VulkanHandler vulkanHandler;
   ilmeee::GameUI gameUi = ilmeee::DefaultGameUI();
   std::string gameUiProject;
+  std::string loadedSceneProject;
+  bool hasGameUiCanvas = false;
   // -1 = world object/none, -2 = Canvas, >=0 = UI child index.
   int selectedUiElement = -1;
-  bool previewGamePaused = false;
+  bool focusGameTab = false;
+  bool focusSceneTab = false;
+  ilmeee::MovementInput gameMovementInput;
+  ilmeee::MovementSystem movementSystem;
+  bool gameWasStopped = true;
 
   // Vulkan members are now inherited from VulkanBase (ctx, window, etc.)
 
@@ -125,6 +135,7 @@ public:
   bool showInspector = true;
   bool showScene = true;
   bool showConsole = true;
+  bool focusOutputTab = false;
   bool showHierarchy = true;
   bool showMainView = true;
   string currentFilter = "";
@@ -181,8 +192,9 @@ public:
   void RenderHierarchyWindow();
 
   // ---- Game build (Build menu + Console > Build tab) -------------------
-  // Saves the scene, then builds <project>/build/linux/<Game> on a worker
-  // thread; with runWhenDone the game is started once it succeeds.
+  // Saves the scene, then builds <project>/build/<linux|android>/<Game> on a
+  // worker thread; with runWhenDone the game is started once it succeeds
+  // (Android: installed on the USB device with adb, logcat streamed back).
   void StartGameBuild(bool runWhenDone);
   void LaunchBuiltGame();
   // Per frame: pick up a finished build, start the game, reap it on exit.
@@ -200,8 +212,13 @@ public:
   ilmeee::GameBuildResult gameBuildResult;
   bool gameBuildRunAfter = false;
   bool gameBuildPortable = false;
-  std::filesystem::path lastGameLauncher;
+  ilmeee::BuildTarget gameBuildTarget = ilmeee::BuildTarget::Linux;
+  std::filesystem::path lastGameLauncher; // binary, or .apk for Android
+  ilmeee::BuildTarget lastGameTarget = ilmeee::BuildTarget::Linux;
+  std::string lastGameApplicationId;
   pid_t gameProcess = -1;
+  int gameOutputFd = -1;
+  std::string gameOutputPending;
   // Short-lived helpers (xdg-open) waiting to be reaped.
   std::vector<pid_t> gameProcessHelpers;
   bool focusBuildTab = false;

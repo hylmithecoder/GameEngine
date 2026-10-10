@@ -52,19 +52,68 @@ The 2D fallback drops a single sprite at world origin (300x300 px) and shows a d
 
 ## In-game UI
 
-Open a project and expand **Scene → Canvas** in the Hierarchy. Right-click
-Canvas to add Text, Image, or Button children; select an object to edit its
-properties in the Inspector. Set its anchor and offsets in reference pixels
-(default 1280×720). The **Camera Preview** shows the same UI used by the built
-game. Save with **Ctrl+S**: Canvas and its children are stored in
+Open a project, right-click empty space or the Scene root in **Hierarchy**, and
+choose **Create → Canvas**. Right-click Canvas to add Text, Image, or Button
+children. Select Canvas or one of its children to edit the UI directly over
+the player camera in the **Scene** tab: click an element to select it and drag
+to reposition it. Drag an image from **Explorer** onto an Image element to
+replace its texture, or onto empty Canvas space to create a new Image at the
+drop position. You can also drop onto the Image node in Hierarchy or its
+**Image path** field in Inspector. The **Inspector** edits its exact properties, anchor and
+reference-pixel offsets (default 1280×720). The **Game** tab shows the same
+UI without editor outlines. Save with **Ctrl+S**: Canvas and its children are stored in
 `scenes/main.ilmeeescene`. Image paths are relative to the project folder,
 for example `assets/logo.png`. Older `assets/ui/main.json` files are imported
 when the scene does not contain a Canvas yet.
 
-The default canvas contains an HP label and a Pause button. `TogglePause` is
-the built-in button action; it freezes the displayed scene and shows a pause
-overlay in preview and player. The HP value is placeholder text until gameplay
-state is connected to the UI.
+An explicitly created Canvas starts empty. `TogglePause` is the built-in
+button action; other action names currently appear in the Console log but
+need gameplay code to perform an effect. The top Play button opens the **Game**
+tab and runs the camera view and UI there; the **Scene** tab stays editable
+after Stop. Pause and Stop events appear in
+**Console → Output**. For a separate game window, choose **Build → Build and
+Run** (or Ctrl+Shift+B); the running player's stdout/stderr is streamed into
+**Console → Build** and **Console → Output**.
+
+## Movement scripts
+
+Select a mesh game object in Hierarchy, enable **Movement Script → Movable**
+in Inspector, choose `WASD XZ`, set its speed, and save with **Ctrl+S**. Play
+opens Game; click inside it and use WASD. Movement uses fixed 60 Hz steps and
+Stop restores editor transforms. The same component runs in a built game.
+
+To add a native movement function, edit
+`src/cpp/core_engine/UserMovementScripts.cpp`: implement a function taking
+`ilmeee::MovementContext&`, then call `RegisterMovementScript("MyMove", MyMove)`
+inside `RegisterUserMovementScripts()`. The context exposes parent-local
+position, rotation, scale, speed, delta seconds and input. Rebuild both
+`GameEngineSDL` and `IlmeeePlayer`, then pick the registered name in Inspector.
+This is a compiled C++ API; project `.cpp` assets are not hot-loaded yet.
+
+**Camera & UI input.** Each movable object can reference a camera and pick a
+**POV Style** — Third Person, First Person, Side Scroller (with the
+`Platformer` script) or Top Down — plus distance/height. Add on-screen sticks
+with Canvas → Create Child → **Joystick** and link them as *Move Joystick* /
+*Look Joystick*. Keyboard (WASD, Space, arrows, right-drag look) and the sticks
+stay in sync; on a phone both sticks work at once and swiping the open screen
+turns the camera.
+
+## Android
+
+1. Once per engine checkout (needs the Android SDK + NDK, default `~/Android/Sdk`):
+   ```sh
+   nix-shell shell.nix --run scripts/android/build-player.sh
+   ```
+   This builds IlmeeePlayer as `build-android/jniLibs/arm64-v8a/libmain.so`
+   (plus SDL3, same version as the desktop one).
+2. In the editor: **Build → Target: Android (APK)**, then **Build Game**.
+   The APK lands in `<project>/build/android/<Game>/<Game>.apk`
+   (the first build downloads the Android Gradle plugin).
+3. Plug in a phone with USB debugging on and press **Run**: the editor
+   installs the APK with `adb`, starts it and shows its log in Console → Build.
+
+Everything in `assets/` goes into the APK; on first start the game is
+extracted to the app's internal storage. Keep mobile projects' assets small.
 
 ## Scene & Viewport Controls
 
@@ -129,4 +178,4 @@ The editor (`GameEngineSDL`) communicates with the engine runner (`HandlerIlmeee
 - Surfaces & Per-surface Texture Overrides (v1.2 Scene Graph): ✅
 - Ray-Triangle Picking & Viewport Drag-and-Drop: ✅
 - Audio engine integration: ⏳ planned
-- Android target: ⏳ planned
+- Android target: ✅ experimental (arm64 APK, Vulkan phones)

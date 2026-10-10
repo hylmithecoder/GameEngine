@@ -210,6 +210,10 @@ target_link_libraries(TestTransformMath PRIVATE glm::glm)
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
 
+add_executable(TestMovementScripts test/TestMovementScripts.cpp
+    src/cpp/core_engine/MovementScript.cpp)
+target_link_libraries(TestMovementScripts PRIVATE glm::glm)
+
 add_executable(TestGameBuild test/TestGameBuild.cpp
     src/cpp/core_engine/GameBuilder.cpp)
 target_link_libraries(TestGameBuild PRIVATE glm::glm)
@@ -219,6 +223,9 @@ target_link_libraries(TestGameBuild PRIVATE glm::glm)
 add_executable(IlmeeePlayer
     src/cpp/player/PlayerMain.cpp
     src/cpp/core_engine/GameUI.cpp
+    src/cpp/core_engine/MovementScript.cpp
+    src/cpp/core_engine/MovementRuntime.cpp
+    src/cpp/core_engine/UserMovementScripts.cpp
     src/cpp/core_engine/SceneLoader.cpp
     src/cpp/core_engine/SceneRenderer.cpp
     src/cpp/core_engine/TextureManager.cpp

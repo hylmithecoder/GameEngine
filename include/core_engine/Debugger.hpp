@@ -7,7 +7,9 @@
 #include <unistd.h>
 #include <vector>
 
-#ifdef __linux__
+// Android also defines __linux__ but has no GTK/libnotify; its player sends
+// stdout/stderr to logcat instead (see PlayerMain.cpp).
+#if defined(__linux__) && !defined(__ANDROID__)
 #include <gtk/gtk.h>
 #include <libnotify/notify.h>
 #ifdef __WIN32__
@@ -295,7 +297,8 @@ static void ShowMsgBoxWithLocation(const wchar_t *title,
 #endif
 
 // If not windows or apple is used gtk
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__) ||     \
+    defined(__FreeBSD__)
 // Helper macros for stringification
 #define _MSGBOX_STRINGIFY(x) #x
 #define _MSGBOX_TOSTRING(x) _MSGBOX_STRINGIFY(x)

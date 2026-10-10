@@ -23,6 +23,11 @@
 //   float32 backgroundColor[4]   clear colour the scene is shown against
 //   -- v1.5 UI entities: Canvas/UiText/UiImage/UiButton carry screen-space
 //      properties after their parent field; world entities have no extra data --
+//   -- v1.6 every entity carries movable, movementScript, movementSpeed
+//      after its optional UI fields --
+//   -- v1.7 then int32 rigCamera (entity index, -1 = Game view camera),
+//      uint32 cameraStyle, float32 distance, float32 height,
+//      string moveJoystick, string lookJoystick; UiJoystick entities --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -32,6 +37,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include "MovementScript.hpp"
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -50,7 +56,13 @@ enum class PrimitiveKind : uint8_t {
   UiText = 8,
   UiImage = 9,
   UiButton = 10,
+  UiJoystick = 11,
 };
+
+inline bool IsUiElementKind(PrimitiveKind kind) {
+  return kind == PrimitiveKind::UiText || kind == PrimitiveKind::UiImage ||
+         kind == PrimitiveKind::UiButton || kind == PrimitiveKind::UiJoystick;
+}
 
 // One per-surface texture override: which material/surface index of the
 // entity's mesh, and the texture path (relative to project root when it
@@ -89,6 +101,13 @@ struct SceneEntity {
 
   // Index of the parent in IlmeeeScene::entities, -1 for a root (v1.3).
   int32_t parent = -1;
+
+  // v1.6 native movement component. Empty script means no movement.
+  bool movable = false;
+  std::string movementScript;
+  float movementSpeed = 3.0f;
+  // v1.7 camera rig + joystick links; rig.camera is an entity index.
+  MovementRig movementRig;
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
   // child elements use them as their displayed size.
@@ -173,7 +192,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 5); // minor
+  detail::WriteU16(f, 7); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -210,9 +229,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     if (e.kind == PrimitiveKind::Canvas) {
       detail::WriteF32(f, e.uiWidth);
       detail::WriteF32(f, e.uiHeight);
-    } else if (e.kind == PrimitiveKind::UiText ||
-               e.kind == PrimitiveKind::UiImage ||
-               e.kind == PrimitiveKind::UiButton) {
+    } else if (IsUiElementKind(e.kind)) {
       detail::WriteBytes(f, &e.uiAnchor, 1);
       detail::WriteF32(f, e.uiX);
       detail::WriteF32(f, e.uiY);
@@ -225,6 +242,17 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
       detail::WriteVec4(f, e.uiColor);
       detail::WriteVec4(f, e.uiBackground);
     }
+    // Version 1.6: movement component, including inactive/default values.
+    detail::WriteU32(f, e.movable ? 1u : 0u);
+    detail::WriteString(f, e.movementScript);
+    detail::WriteF32(f, e.movementSpeed);
+    // Version 1.7: camera rig and joystick links.
+    detail::WriteU32(f, (uint32_t)e.movementRig.camera);
+    detail::WriteU32(f, (uint32_t)e.movementRig.style);
+    detail::WriteF32(f, e.movementRig.distance);
+    detail::WriteF32(f, e.movementRig.height);
+    detail::WriteString(f, e.movementRig.moveJoystick);
+    detail::WriteString(f, e.movementRig.lookJoystick);
   }
 
   // Version 1.4: environment
@@ -324,9 +352,7 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       if (e.kind == PrimitiveKind::Canvas) {
         if (!detail::ReadF32(f, e.uiWidth) ||
             !detail::ReadF32(f, e.uiHeight)) return false;
-      } else if (e.kind == PrimitiveKind::UiText ||
-                 e.kind == PrimitiveKind::UiImage ||
-                 e.kind == PrimitiveKind::UiButton) {
+      } else if (IsUiElementKind(e.kind)) {
         if (!detail::ReadBytes(f, &e.uiAnchor, 1) ||
             !detail::ReadF32(f, e.uiX) || !detail::ReadF32(f, e.uiY) ||
             !detail::ReadF32(f, e.uiWidth) ||
@@ -338,6 +364,24 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
             !detail::ReadVec4(f, e.uiColor) ||
             !detail::ReadVec4(f, e.uiBackground)) return false;
       }
+    }
+    if (minor >= 6) {
+      uint32_t movable = 0;
+      if (!detail::ReadU32(f, movable) ||
+          !detail::ReadString(f, e.movementScript) ||
+          !detail::ReadF32(f, e.movementSpeed)) return false;
+      e.movable = movable != 0;
+    }
+    if (minor >= 7) {
+      uint32_t camera = 0, style = 0;
+      if (!detail::ReadU32(f, camera) || !detail::ReadU32(f, style) ||
+          !detail::ReadF32(f, e.movementRig.distance) ||
+          !detail::ReadF32(f, e.movementRig.height) ||
+          !detail::ReadString(f, e.movementRig.moveJoystick) ||
+          !detail::ReadString(f, e.movementRig.lookJoystick)) return false;
+      e.movementRig.camera = (int32_t)camera;
+      e.movementRig.style = style <= (uint32_t)CameraStyle::TopDown
+                                ? (CameraStyle)style : CameraStyle::None;
     }
     out.entities.push_back(std::move(e));
   }
@@ -352,6 +396,9 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
   // A link that points outside the file, at itself, or into a loop would
   // hang or confuse the hierarchy; demote such entities to roots.
   const int32_t n = (int32_t)out.entities.size();
+  for (auto &e : out.entities)
+    if (e.movementRig.camera < -1 || e.movementRig.camera >= n)
+      e.movementRig.camera = -1;
   for (int32_t i = 0; i < n; ++i) {
     int32_t p = out.entities[i].parent;
     if (p < -1 || p >= n || p == i) {

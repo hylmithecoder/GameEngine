@@ -9,6 +9,9 @@
 //     game.json                {"name", "version", "startScene", "window": {...}}
 //     scenes/  assets/         (project data + engine shaders)
 //
+// On Android the same folder is packed into the APK (assets/game/) and
+// extracted to internal storage on first start; see AndroidAssets.hpp.
+//
 // Usage: <Game> [--game <dir>] [--screenshot <out.png> [--frames N]]
 //   --game        game folder (default: the folder holding game.json next to
 //                 or one above this binary)
@@ -16,6 +19,7 @@
 //                 exit — used by the build tests to check what a game shows.
 
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
@@ -29,6 +33,13 @@
 #include <fstream>
 #include <memory>
 #include <string>
+
+#if defined(__ANDROID__)
+#include "AndroidAssets.hpp"
+#include <SDL3/SDL_main.h> // turns main() into SDL_main for SDLActivity
+#endif
+
+using namespace ImGui;
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -90,8 +101,9 @@ public:
 
 protected:
   void OnInit() override {
+    ilmeee::RegisterUserMovementScripts();
     // The player has no UI layout to remember; don't touch the editor's.
-    ImGui::GetIO().IniFilename = nullptr;
+    GetIO().IniFilename = nullptr;
 
     renderer_ = std::make_unique<SceneRenderer>(windowWidth, windowHeight);
     renderer_->SetVulkanContext(ctx.device, ctx.physicalDevice,
@@ -118,7 +130,7 @@ protected:
       ::Log(error_, Debug::LogLevel::ERROR);
     }
 
-    gameUi_ = ilmeee::DefaultGameUI();
+    gameUi_ = ilmeee::GameUI{};
     if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
       // Older projects stored the canvas as a separate asset.
       const fs::path uiPath = root_ / "assets/ui/main.json";
@@ -134,20 +146,51 @@ protected:
       SDL_SetWindowFullscreen(window, true);
   }
 
-  void OnUpdate(float) override {
-    if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) {
-      bool fs = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-      SDL_SetWindowFullscreen(window, !fs);
+  void OnEvent(const SDL_Event &event) override {
+    // Multi-touch: DrawGameUI hands fingers to joysticks/buttons; the rest
+    // swipe the camera like right-drag does with a mouse.
+    const ImVec2 display = GetIO().DisplaySize;
+    switch (event.type) {
+    case SDL_EVENT_FINGER_DOWN:
+      fingers_[(int64_t)event.tfinger.fingerID] = {
+          ImVec2(event.tfinger.x * display.x, event.tfinger.y * display.y)};
+      break;
+    case SDL_EVENT_FINGER_MOTION: {
+      auto it = fingers_.find((int64_t)event.tfinger.fingerID);
+      if (it == fingers_.end()) break;
+      it->second.pos =
+          ImVec2(event.tfinger.x * display.x, event.tfinger.y * display.y);
+      if (!it->second.fresh && it->second.element.empty())
+        touchLook_ += glm::vec2(event.tfinger.dx * display.x,
+                                event.tfinger.dy * display.y);
+      break;
+    }
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:
+      fingers_.erase((int64_t)event.tfinger.fingerID);
+      break;
+    default:
+      break;
     }
   }
 
+  void OnUpdate(float deltaTime) override {
+    if (IsKeyPressed(ImGuiKey_F11, false)) {
+      bool fs = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+      SDL_SetWindowFullscreen(window, !fs);
+    }
+    // Input gathered while drawing the previous frame (keyboard + sticks).
+    if (renderer_ && !paused_ && error_.empty())
+      movement_.Update(*renderer_, input_, deltaTime);
+  }
+
   void OnRender(VkCommandBuffer) override {
-    ImGuiViewport *vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->Pos);
-    ImGui::SetNextWindowSize(vp->Size);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::Begin("##game", nullptr,
+    ImGuiViewport *vp = GetMainViewport();
+    SetNextWindowPos(vp->Pos);
+    SetNextWindowSize(vp->Size);
+    PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    Begin("##game", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus |
@@ -168,32 +211,40 @@ protected:
       }
       if (rendered) {
         // V flipped exactly like the editor's viewport.
-        ImGui::Image((ImTextureID)renderer_->GetViewportDescriptorSet(),
+        Image((ImTextureID)renderer_->GetViewportDescriptorSet(),
                      vp->Size, ImVec2(0, 1), ImVec2(1, 0));
-        const ImVec2 imagePos = ImGui::GetItemRectMin();
+        const ImVec2 imagePos = GetItemRectMin();
         const auto texture = [&](const std::string &asset) -> ImTextureID {
           if (asset.empty()) return ImTextureID{};
           return (ImTextureID)renderer_->GetUiTextureDescriptor(
               (root_ / asset).string());
         };
-        if (ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true, paused_) ==
+        input_ = paused_ ? ilmeee::MovementInput{}
+                         : ilmeee::ReadKeyboardMouseInput();
+        if (!paused_) input_.lookDelta += touchLook_;
+        touchLook_ = glm::vec2(0.0f);
+        // Same flow as the editor's Game tab: sticks mirror the keyboard,
+        // a held stick overrides it.
+        ilmeee::EchoKeyboardOnJoysticks(*renderer_, input_);
+        if (ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true,
+                               paused_, &input_.axes, &fingers_) ==
             "TogglePause")
           paused_ = !paused_;
         if (paused_)
-          ImGui::GetWindowDrawList()->AddText(
+          GetWindowDrawList()->AddText(
               ImVec2(imagePos.x + vp->Size.x * 0.5f - 35,
                      imagePos.y + vp->Size.y * 0.5f),
               IM_COL32(255, 255, 255, 255), "PAUSED");
       }
     }
     if (!error_.empty()) {
-      ImVec2 ts = ImGui::CalcTextSize(error_.c_str());
-      ImGui::SetCursorPos(
+      ImVec2 ts = CalcTextSize(error_.c_str());
+      SetCursorPos(
           ImVec2((vp->Size.x - ts.x) * 0.5f, (vp->Size.y - ts.y) * 0.5f));
-      ImGui::TextUnformatted(error_.c_str());
+      TextUnformatted(error_.c_str());
     }
-    ImGui::End();
-    ImGui::PopStyleVar(2);
+    End();
+    PopStyleVar(2);
 
     if (!screenshotPath_.empty() && ++frame_ >= screenshotFrames_) {
       exitCode_ = rendered && WriteScreenshot() ? 0 : 1;
@@ -228,6 +279,10 @@ private:
   GameManifest manifest_;
   ilmeee::GameUI gameUi_;
   bool paused_ = false;
+  ilmeee::MovementSystem movement_;
+  ilmeee::MovementInput input_;
+  ilmeee::UiFingers fingers_;
+  glm::vec2 touchLook_{0.0f};
   bool hasFrame_ = false;
   int lastRenderWidth_ = 0;
   int lastRenderHeight_ = 0;
@@ -242,6 +297,21 @@ private:
 } // namespace
 
 int main(int argc, char *argv[]) {
+#if defined(__ANDROID__)
+  // No command line or game folder next to a binary: the game comes out of
+  // the APK, always fullscreen landscape.
+  ilmeee::android::RedirectStdioToLogcat();
+  std::string androidError;
+  fs::path androidRoot = ilmeee::android::PrepareGameFiles(androidError);
+  if (androidRoot.empty()) {
+    std::fprintf(stderr, "%s\n", androidError.c_str());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Ilmeee",
+                             androidError.c_str(), nullptr);
+    return 2;
+  }
+  SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+  argc = 1; // ignore whatever the activity passed
+#endif
   fs::path root;
   std::string screenshot;
   int frames = 5;
@@ -254,6 +324,9 @@ int main(int argc, char *argv[]) {
     else if (a == "--frames" && i + 1 < argc)
       frames = std::max(1, std::atoi(argv[++i]));
   }
+#if defined(__ANDROID__)
+  root = androidRoot;
+#endif
   if (root.empty())
     root = FindGameRoot();
   if (root.empty()) {
@@ -282,6 +355,9 @@ int main(int argc, char *argv[]) {
     return 2;
   }
 
+#if defined(__ANDROID__)
+  manifest.fullscreen = true;
+#endif
   GamePlayer player(root, manifest, screenshot, frames);
   if (!player.Init(manifest.name, manifest.width, manifest.height))
     return 1;

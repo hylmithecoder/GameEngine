@@ -1,9 +1,14 @@
 #include "../../../include/core_engine/GameBuilder.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../vendor/nlohmann/json.hpp"
+#include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <sstream>
+#include <vector>
 #include <map>
 #include <set>
 #include <sys/wait.h>
@@ -140,9 +145,9 @@ public:
       fs::path rel = abs.lexically_relative(root_);
       if (isModel && CanCopyWhole(abs.parent_path())) {
         if (copiedDirs_.insert({abs.parent_path(), rel.parent_path()}).second)
-          CopyTree(abs.parent_path(), stage_ / rel.parent_path());
+          CopyTree(abs.parent_path(), gameDir_ / rel.parent_path());
       } else {
-        CopyFile(abs, stage_ / rel);
+        CopyFile(abs, gameDir_ / rel);
       }
       return rel.generic_string();
     }
@@ -160,7 +165,7 @@ public:
         copiedDirs_[srcDir] = dstDir;
         if (CanCopyWhole(srcDir)) {
           Say("  + external model folder " + srcDir.string());
-          CopyTree(srcDir, stage_ / dstDir);
+          CopyTree(srcDir, gameDir_ / dstDir);
         } else {
           Say("  ! " + srcDir.string() +
               " is too large to copy whole; copying only " +
@@ -169,8 +174,8 @@ public:
       }
       fs::path dst = dstDir / abs.filename();
       std::error_code ec2;
-      if (!fs::exists(stage_ / dst, ec2))
-        CopyFile(abs, stage_ / dst);
+      if (!fs::exists(gameDir_ / dst, ec2))
+        CopyFile(abs, gameDir_ / dst);
       return dst.generic_string();
     }
 
@@ -180,7 +185,7 @@ public:
     fs::path dst = fs::path("assets/external/textures") /
                    UniqueExternalName(abs.filename().string());
     Say("  + external texture " + abs.string());
-    CopyFile(abs, stage_ / dst);
+    CopyFile(abs, gameDir_ / dst);
     copiedFiles_[abs] = dst;
     return dst.generic_string();
   }
@@ -193,7 +198,7 @@ public:
       if (!it->is_regular_file())
         continue;
       fs::path rel = it->path().lexically_relative(src);
-      fs::path dst = stage_ / "scenes" / rel;
+      fs::path dst = gameDir_ / "scenes" / rel;
       IlmeeeScene scene;
       if (it->path().extension() != ".ilmeeescene" ||
           !LoadScene(it->path().string(), scene)) {
@@ -221,11 +226,16 @@ public:
   }
 
   bool Bundle() {
-    std::string cmd = "bash " + ShellQuote(o_.bundleScript.string()) + " " +
-                      ShellQuote(stage_.string()) + " 2>&1";
+    return RunLogged("bash " + ShellQuote(o_.bundleScript.string()) + " " +
+                     ShellQuote(stage_.string()));
+  }
+
+  // Runs a shell command, streaming its output into the build log.
+  bool RunLogged(const std::string &command) {
+    const std::string cmd = command + " 2>&1";
     FILE *pipe = popen(cmd.c_str(), "r");
     if (!pipe) {
-      Say("  ! could not run " + o_.bundleScript.string());
+      Say("  ! could not run " + command);
       return false;
     }
     char line[1024];
@@ -239,6 +249,138 @@ public:
     return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
   }
 
+  // ---- Android -----------------------------------------------------------
+
+  static void ReplaceInFile(const fs::path &file,
+                            const std::map<std::string, std::string> &vars) {
+    std::ifstream in(file, std::ios::binary);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    std::string text = buffer.str();
+    for (const auto &[key, value] : vars)
+      for (size_t at = text.find(key); at != std::string::npos;
+           at = text.find(key, at + value.size()))
+        text.replace(at, key.size(), value);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << text;
+  }
+
+  static bool ValidApplicationId(const std::string &id) {
+    int segments = 0;
+    bool start = true;
+    for (char c : id) {
+      if (c == '.') {
+        if (start) return false;
+        start = true;
+        continue;
+      }
+      if (start ? !std::isalpha((unsigned char)c)
+                : !(std::isalnum((unsigned char)c) || c == '_'))
+        return false;
+      if (start) ++segments;
+      start = false;
+    }
+    return !start && segments >= 2;
+  }
+
+  std::vector<std::string> AndroidAbis() const {
+    std::vector<std::string> abis;
+    std::error_code ec;
+    for (const auto &entry :
+         fs::directory_iterator(o_.androidPlayerDir / "jniLibs", ec))
+      if (fs::is_regular_file(entry.path() / "libmain.so", ec) &&
+          fs::is_regular_file(entry.path() / "libSDL3.so", ec))
+        abis.push_back(entry.path().filename().string());
+    std::sort(abis.begin(), abis.end());
+    return abis;
+  }
+
+  fs::path AndroidSdk() const {
+    if (!o_.androidSdkDir.empty()) return o_.androidSdkDir;
+    for (const char *var : {"ANDROID_HOME", "ANDROID_SDK_ROOT"})
+      if (const char *v = std::getenv(var); v && *v) return v;
+    const char *home = std::getenv("HOME");
+    return home ? fs::path(home) / "Android" / "Sdk" : fs::path();
+  }
+
+  // The player finds the game inside the APK through this index (APK assets
+  // can't be listed recursively); the build id makes it re-extract updates.
+  void WriteFileIndex() {
+    std::vector<std::string> files;
+    std::uintmax_t bytes = 0;
+    for (auto it = fs::recursive_directory_iterator(gameDir_);
+         it != fs::recursive_directory_iterator(); ++it) {
+      if (!it->is_regular_file()) continue;
+      files.push_back(it->path().lexically_relative(gameDir_).generic_string());
+      bytes += it->file_size();
+    }
+    std::sort(files.begin(), files.end());
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    char id[64];
+    std::snprintf(id, sizeof id, "%llx-%zx-%llx",
+                  (unsigned long long)std::chrono::duration_cast<
+                      std::chrono::milliseconds>(now).count(),
+                  files.size(), (unsigned long long)bytes);
+    std::ofstream index(gameDir_ / "ilmeee_files.txt", std::ios::binary);
+    index << "ilmeee-files 1 " << id << "\n";
+    for (const std::string &f : files) index << f << "\n";
+    if (!index.flush())
+      throw std::runtime_error("cannot write ilmeee_files.txt");
+  }
+
+  void PrepareAndroidProject(const std::string &name,
+                             const std::vector<std::string> &abis) {
+    const fs::path main = stage_ / "app" / "src" / "main";
+    Say("Adding the Android player (" + [&] {
+      std::string list;
+      for (const auto &abi : abis) list += (list.empty() ? "" : ", ") + abi;
+      return list;
+    }() + ") ...");
+    for (const std::string &abi : abis)
+      CopyTree(o_.androidPlayerDir / "jniLibs" / abi, main / "jniLibs" / abi);
+    CopyTree(o_.androidPlayerDir / "sdl-java" / "org", main / "java" / "org");
+
+    std::string abiList;
+    for (const auto &abi : abis)
+      abiList += (abiList.empty() ? "" : "', '") + abi;
+    std::string label;
+    for (char c : name) // strings.xml text: keep it plain
+      if (c != '<' && c != '>' && c != '&' && c != '"' && c != '\'' &&
+          c != '\\' && c != '@')
+        label += c;
+    const std::map<std::string, std::string> vars = {
+        {"@APPLICATION_ID@", r_.applicationId},
+        {"@APP_NAME@", label.empty() ? "Ilmeee Game" : label},
+        {"@VERSION_NAME@", o_.versionName},
+        {"@VERSION_CODE@", std::to_string(std::max(1, o_.versionCode))},
+        {"@ABIS@", abiList}};
+    ReplaceInFile(stage_ / "app" / "build.gradle", vars);
+    ReplaceInFile(main / "res" / "values" / "strings.xml", vars);
+
+    const fs::path sdk = AndroidSdk();
+    if (!sdk.empty())
+      std::ofstream(stage_ / "local.properties")
+          << "sdk.dir=" << sdk.generic_string() << "\n";
+    WriteFileIndex();
+    std::ofstream(stage_ / ".ilmeee-android") << r_.applicationId << "\n";
+  }
+
+  bool RunGradle(const fs::path &project, const std::string &safe) {
+    Say("Running Gradle (first time downloads the Android build tools) ...");
+    if (!RunLogged("cd " + ShellQuote(project.string()) + " && " +
+                   o_.gradleCommand + " assembleDebug --console=plain"))
+      return false;
+    const fs::path apk =
+        project / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk";
+    std::error_code ec;
+    if (!fs::is_regular_file(apk, ec)) {
+      Say("  ! Gradle finished but " + apk.string() + " is missing");
+      return false;
+    }
+    r_.launcher = project / (safe + ".apk");
+    fs::copy_file(apk, r_.launcher, fs::copy_options::overwrite_existing, ec);
+    return !ec;
+  }
+
   void Run() {
     std::error_code ec;
     root_ = Canonical(o_.projectRoot);
@@ -247,8 +389,9 @@ public:
                                  ? root_.filename().string()
                                  : o_.gameName;
     const std::string safe = SafeGameName(name);
+    const bool android = o_.target == BuildTarget::Android;
     fs::path out = o_.outputDir.empty()
-                       ? root_ / "build" / "linux" / safe
+                       ? root_ / "build" / (android ? "android" : "linux") / safe
                        : fs::absolute(o_.outputDir);
     out = Canonical(out);
     out_ = out;
@@ -259,9 +402,30 @@ public:
     if (!LoadScene(mainScene.string(), probe))
       return Fail("cannot read " + mainScene.string() +
                   " — save the scene first");
-    if (!fs::is_regular_file(o_.playerExecutable, ec))
+    std::vector<std::string> abis;
+    if (android) {
+      abis = AndroidAbis();
+      if (abis.empty())
+        return Fail("Android player not built: no jniLibs/<abi>/libmain.so in " +
+                    o_.androidPlayerDir.string() +
+                    " (run scripts/android/build-player.sh)");
+      if (!fs::is_directory(o_.androidPlayerDir / "sdl-java" / "org", ec))
+        return Fail("SDL3 Java files missing in " + o_.androidPlayerDir.string() +
+                    "/sdl-java (run scripts/android/build-player.sh)");
+      if (!fs::is_regular_file(o_.androidTemplateDir / "app" / "build.gradle", ec))
+        return Fail("Android template not found at " +
+                    o_.androidTemplateDir.string());
+      r_.applicationId = o_.applicationId.empty()
+                             ? DefaultApplicationId(name)
+                             : o_.applicationId;
+      if (!ValidApplicationId(r_.applicationId))
+        return Fail("'" + r_.applicationId +
+                    "' is not a valid Android application id "
+                    "(like com.studio.game)");
+    } else if (!fs::is_regular_file(o_.playerExecutable, ec)) {
       return Fail("player runtime not found at " +
                   o_.playerExecutable.string() + " (build IlmeeePlayer)");
+    }
     if (!fs::is_directory(o_.engineShaderDir, ec))
       return Fail("engine shaders not found at " + o_.engineShaderDir.string());
     if (out == root_ || IsWithin(root_, out))
@@ -272,7 +436,8 @@ public:
     if (fs::exists(out, ec)) {
       if (!fs::is_directory(out, ec))
         return Fail(out.string() + " exists and is not a folder");
-      if (!fs::is_empty(out, ec) && !fs::exists(out / "game.json", ec))
+      const char *marker = android ? ".ilmeee-android" : "game.json";
+      if (!fs::is_empty(out, ec) && !fs::exists(out / marker, ec))
         return Fail("refusing to replace " + out.string() +
                     ": it is not empty and not a previous build");
     }
@@ -280,17 +445,26 @@ public:
     stage_ = out.parent_path() / (out.filename().string() + ".building");
     fs::remove_all(stage_);
     fs::create_directories(stage_);
-    Say("Building '" + name + "' from " + root_.string());
+    Say("Building '" + name + "' (" + (android ? "Android" : "Linux") +
+        ") from " + root_.string());
+    gameDir_ = stage_;
+    if (android) {
+      Say("Copying the Android project template ...");
+      CopyTree(o_.androidTemplateDir, stage_);
+      fs::remove(stage_ / "README.md", ec);
+      gameDir_ = stage_ / "app" / "src" / "main" / "assets" / "game";
+      fs::create_directories(gameDir_);
+    }
 
     // ---- data ---------------------------------------------------------
     if (fs::is_directory(assets_, ec)) {
       Say("Copying assets/ ...");
-      CopyTree(assets_, stage_ / "assets");
+      CopyTree(assets_, gameDir_ / "assets");
     }
     Say("Writing scenes/ ...");
     CopyScenes();
 
-    fs::path shaderDst = stage_ / "assets" / "shaders" / "vulkan";
+    fs::path shaderDst = gameDir_ / "assets" / "shaders" / "vulkan";
     if (fs::exists(shaderDst, ec))
       Say("  ! the project has its own assets/shaders/vulkan; the engine's "
           "shaders replace it in the build");
@@ -298,13 +472,15 @@ public:
     CopyTree(o_.engineShaderDir, shaderDst);
 
     // ---- runtime ------------------------------------------------------
-    fs::path bin = stage_ / "bin" / safe;
-    CopyFile(o_.playerExecutable, bin);
-    fs::permissions(bin,
-                    fs::perms::owner_exec | fs::perms::group_exec |
-                        fs::perms::others_exec,
-                    fs::perm_options::add);
-    fs::create_symlink(fs::path("bin") / safe, stage_ / safe);
+    if (!android) {
+      fs::path bin = stage_ / "bin" / safe;
+      CopyFile(o_.playerExecutable, bin);
+      fs::permissions(bin,
+                      fs::perms::owner_exec | fs::perms::group_exec |
+                          fs::perms::others_exec,
+                      fs::perm_options::add);
+      fs::create_symlink(fs::path("bin") / safe, stage_ / safe);
+    }
 
     nlohmann::json manifest = {
         {"name", name},
@@ -312,10 +488,12 @@ public:
         {"window",
          {{"width", o_.windowWidth},
           {"height", o_.windowHeight},
-          {"fullscreen", o_.fullscreen}}}};
-    std::ofstream(stage_ / "game.json") << manifest.dump(2) << "\n";
+          {"fullscreen", android || o_.fullscreen}}}};
+    std::ofstream(gameDir_ / "game.json") << manifest.dump(2) << "\n";
 
-    if (!o_.bundleScript.empty()) {
+    if (android) {
+      PrepareAndroidProject(name, abis);
+    } else if (!o_.bundleScript.empty()) {
       Say("Bundling libraries (portable build) ...");
       r_.librariesBundled = Bundle();
       if (!r_.librariesBundled)
@@ -327,9 +505,20 @@ public:
     fs::rename(stage_, out);
     stage_.clear();
 
-    r_.ok = true;
     r_.outputDir = out;
-    r_.launcher = out / safe;
+    if (android) {
+      // The project stays in place even if Gradle fails, to open it in
+      // Android Studio or rerun Gradle by hand.
+      if (o_.gradleCommand.empty()) {
+        Say("Android project ready (Gradle not run): " + out.string());
+      } else if (!RunGradle(out, safe)) {
+        return Fail("Gradle could not build the APK; the project is in " +
+                    out.string());
+      }
+    } else {
+      r_.launcher = out / safe;
+    }
+    r_.ok = true;
     Say("Done: " + std::to_string(r_.filesCopied) + " files, " +
         HumanBytes(r_.bytesCopied) + " -> " + out.string());
     if (r_.missingReferences)
@@ -356,6 +545,7 @@ private:
   const BuildLog &log_;
   GameBuildResult &r_;
   fs::path root_, assets_, stage_, out_;
+  fs::path gameDir_; // where the game folder goes: stage_, or APK assets
   std::map<fs::path, fs::path> copiedDirs_;
   std::map<fs::path, fs::path> copiedFiles_;
   std::set<std::string> usedExternalNames_;
@@ -376,6 +566,20 @@ std::string SafeGameName(const std::string &name) {
   while (!out.empty() && out.front() == '.')
     out.erase(out.begin());
   return out.empty() ? "Game" : out;
+}
+
+std::string DefaultApplicationId(const std::string &name) {
+  std::string segment;
+  for (unsigned char c : name) {
+    if (std::isalnum(c))
+      segment += (char)std::tolower(c);
+    else if (!segment.empty() && segment.back() != '_')
+      segment += '_';
+  }
+  while (!segment.empty() && segment.back() == '_') segment.pop_back();
+  if (segment.empty()) segment = "game";
+  if (!std::isalpha((unsigned char)segment[0])) segment = "g" + segment;
+  return "com.ilmeee." + segment;
 }
 
 GameBuildResult BuildGame(const GameBuildOptions &options,

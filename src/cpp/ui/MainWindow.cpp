@@ -1,6 +1,7 @@
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/audio/FFmpegWrapper.hpp"
 #include "../../../include/core_engine/Debugger.hpp"
+#include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/InspectMode.hpp"
 #include "../../../include/core_engine/core_editor/EditorDockSpace.hpp"
 #include "../../../include/core_engine/core_editor/EditorTheme.hpp"
@@ -101,6 +102,7 @@ void MainWindow::RedoEditor() {
 
 void MainWindow::OnInit() {
   ::Log("MainWindow::OnInit - Initializing Project Specific Resources");
+  ilmeee::RegisterUserMovementScripts();
 
   set_window_icon();
 
@@ -161,7 +163,16 @@ void MainWindow::OnUpdate(float deltaTime) {
   // scene and UI state.
   if (ipcBus)
     ipcBus->Poll();
+  EnsureSceneLoaded();
   PollGameBuild();
+  // Each play session starts with fresh rig angles and jump state; Builder
+  // restores the transforms (camera included) on Stop.
+  if (gameWasStopped && !builder.IsStopped())
+    movementSystem.Reset();
+  gameWasStopped = builder.IsStopped();
+  if (builder.IsPlaying() && sceneRenderer)
+    movementSystem.Update(*sceneRenderer, gameMovementInput,
+                          std::max(0.0f, deltaTime));
 
   if (projectHandler.fileChangesDetected) {
     projectHandler.fileChangesDetected = false;
@@ -174,6 +185,7 @@ void MainWindow::OnUpdate(float deltaTime) {
 
 void MainWindow::OnRender(VkCommandBuffer cmd) {
   ImGuiIO &io = ImGui::GetIO();
+  gameMovementInput = {};
 
   // Keep text fields' native Ctrl+Z behavior intact. Outside text input,
   // Ctrl+Z/Ctrl+Y operate on the current editor session history.
@@ -217,8 +229,7 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 
   if (showMainView)
     RenderMainViewWindow();
-  if (showScene)
-    RenderSceneWindow();
+  RenderSceneWindow(); // Also owns the independent Game tab.
   if (showHierarchy)
     RenderHierarchyWindow();
   if (showExplorer) {
@@ -249,6 +260,10 @@ void MainWindow::OnCleanup() {
   // game is left alone — it is a separate program.
   if (gameBuildThread.joinable())
     gameBuildThread.join();
+  if (gameOutputFd >= 0) {
+    close(gameOutputFd);
+    gameOutputFd = -1;
+  }
 
   if (sceneRenderer) {
     delete sceneRenderer;

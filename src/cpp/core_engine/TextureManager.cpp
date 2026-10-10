@@ -7,7 +7,9 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#ifndef ILMEEE_NO_KTX
 #include <ktx.h>
+#endif
 #include <stb/stb_image.h>
 #include <stdexcept>
 #include <vector>
@@ -336,6 +338,17 @@ std::string TextureManager::CacheKtxPathFor(const std::string &srcPath) {
   return (fs::path(dir) / name).string();
 }
 
+#ifdef ILMEEE_NO_KTX
+// Builds without libktx (Android): GetTextureDescriptor's stb fallback
+// handles every image.
+bool TextureManager::BuildKtxCache(const std::string &, const std::string &) {
+  return false;
+}
+TextureManager::TextureResource
+TextureManager::LoadTextureFromKTX(const std::string &) {
+  throw std::runtime_error("KTX support not built in");
+}
+#else
 bool TextureManager::BuildKtxCache(const std::string &srcPath,
                                    const std::string &outKtx) {
   int w = 0, h = 0, ch = 0;
@@ -566,3 +579,4 @@ TextureManager::LoadTextureFromKTX(const std::string &ktxPath) {
   vkFreeMemory(device, stagingMem, nullptr);
   return res;
 }
+#endif // ILMEEE_NO_KTX

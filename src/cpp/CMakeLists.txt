@@ -34,6 +34,9 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneLoader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GameUI.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementScript.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/UserMovementScripts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GameBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/EditorSessionHistory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Builder.cpp

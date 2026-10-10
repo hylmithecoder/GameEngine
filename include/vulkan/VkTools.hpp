@@ -28,8 +28,10 @@
 #include <io.h>
 #include <windows.h>
 #elif defined(__ANDROID__)
-#include "VulkanAndroid.h"
-#include <android/asset_manager.h>
+// Android reads shaders from files like desktop: the player extracts the
+// APK's assets to internal storage before the renderer starts.
+#include <android/log.h>
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "Ilmeee", __VA_ARGS__)
 #endif
 
 // Custom define for better code readability
@@ -124,12 +126,7 @@ void exitFatal(const std::string &message, int32_t exitCode);
 void exitFatal(const std::string &message, VkResult resultCode);
 
 // Load a SPIR-V shader (binary)
-#if defined(__ANDROID__)
-VkShaderModule loadShader(AAssetManager *assetManager, const char *fileName,
-                          VkDevice device);
-#else
 VkShaderModule loadShader(const char *fileName, VkDevice device);
-#endif
 
 /** @brief Checks if a file exists */
 bool fileExists(const std::string &filename);
