@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.7: round trip, reading
+// .ilmeeescene v1.3–v1.8: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -24,6 +24,10 @@ static int g_checks = 0;
       std::fprintf(stderr, "  FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond);   \
     }                                                                          \
   } while (0)
+
+// Bytes the v1.8 media fields add to an entity with empty clips:
+// audio u32+str+f32+u32+f32+f32, video u32+str+u32+f32+i32.
+static constexpr int kMediaBytes = 22 + 18;
 
 static SceneEntity Entity(const char *name, int parent) {
   SceneEntity e;
@@ -166,6 +170,74 @@ int main() {
     CHECK(in.entities[0].movementRig.camera == -1);
   }
 
+  // 1g. Audio Source / Video Player components and media kinds (v1.8).
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Speaker", -1), Entity("TV", -1), Entity("Box", -1)};
+    s.entities[0].kind = PrimitiveKind::AudioSource;
+    s.entities[0].audio.enabled = true;
+    s.entities[0].audio.clip = "assets/audio/rain.ogg";
+    s.entities[0].audio.volume = 0.5f;
+    s.entities[0].audio.loop = true;
+    s.entities[0].audio.playOnStart = false;
+    s.entities[0].audio.spatial = true;
+    s.entities[0].audio.minDistance = 2.0f;
+    s.entities[0].audio.maxDistance = 30.0f;
+    s.entities[1].kind = PrimitiveKind::Screen;
+    s.entities[1].video.enabled = true;
+    s.entities[1].video.clip = "assets/video/intro.mp4";
+    s.entities[1].video.loop = false;
+    s.entities[1].video.unlit = false;
+    s.entities[1].video.volume = 0.8f;
+    s.entities[2].video.enabled = true;
+    s.entities[2].video.surface = 3;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 3);
+    const AudioSourceComponent &a = in.entities[0].audio;
+    CHECK(in.entities[0].kind == PrimitiveKind::AudioSource);
+    CHECK(a.enabled && a.clip == "assets/audio/rain.ogg");
+    CHECK(a.volume == 0.5f && a.loop && !a.playOnStart && a.spatial);
+    CHECK(a.minDistance == 2.0f && a.maxDistance == 30.0f);
+    const VideoPlayerComponent &v = in.entities[1].video;
+    CHECK(in.entities[1].kind == PrimitiveKind::Screen);
+    CHECK(v.enabled && v.clip == "assets/video/intro.mp4");
+    CHECK(!v.loop && v.playOnStart && !v.unlit && v.volume == 0.8f);
+    CHECK(v.surface == -1);
+    CHECK(in.entities[2].video.surface == 3);
+    CHECK(!in.entities[2].audio.enabled);
+  }
+
+  // 1h. A v1.7 scene (no media fields) loads with components off.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Old", -1)};
+    CHECK(SaveScene(file.string(), s));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = 7;
+    bytes[7] = 0;
+    bytes.erase(bytes.end() - 16 - kMediaBytes, bytes.end() - 16);
+    WriteAll(file, bytes);
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1);
+    CHECK(!in.entities[0].audio.enabled && !in.entities[0].video.enabled);
+  }
+
+  // 1i. A newer minor than this code knows is refused, not misread.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Future", -1)};
+    CHECK(SaveScene(file.string(), s));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = (char)(kSceneFormatMinor + 1);
+    bytes[7] = 0;
+    WriteAll(file, bytes);
+    IlmeeeScene in;
+    CHECK(!LoadScene(file.string(), in));
+  }
+
   // 2. A v1.2 file (no parent field) still loads, everything at the root.
   {
     IlmeeeScene s;
@@ -175,8 +247,9 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 2; // minor version (little-endian u16 after the magic + major)
     bytes[7] = 0;
-    // Drop v1.4 environment, v1.3 parent, v1.6 movement and v1.7 rig.
-    bytes.resize(bytes.size() - 16 - 4 - 10 - 20);
+    // Drop v1.4 environment, v1.3 parent, v1.6 movement, v1.7 rig and v1.8
+    // media.
+    bytes.resize(bytes.size() - 16 - 4 - 10 - 20 - kMediaBytes);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -194,7 +267,7 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 5;
     bytes[7] = 0;
-    bytes.erase(bytes.end() - 16 - 10 - 20, bytes.end() - 16);
+    bytes.erase(bytes.end() - 16 - 10 - 20 - kMediaBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -213,7 +286,7 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 6;
     bytes[7] = 0;
-    bytes.erase(bytes.end() - 16 - 20, bytes.end() - 16);
+    bytes.erase(bytes.end() - 16 - 20 - kMediaBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));

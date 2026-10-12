@@ -173,6 +173,13 @@ void MainWindow::OnUpdate(float deltaTime) {
   if (builder.IsPlaying() && sceneRenderer)
     movementSystem.Update(*sceneRenderer, gameMovementInput,
                           std::max(0.0f, deltaTime));
+  if (sceneRenderer) {
+    media.SetProjectRoot(projectHandler.projectPath);
+    const auto state = builder.IsStopped()  ? ilmeee::MediaSystem::State::Stopped
+                       : builder.IsPaused() ? ilmeee::MediaSystem::State::Paused
+                                            : ilmeee::MediaSystem::State::Playing;
+    media.Update(*sceneRenderer, state, deltaTime);
+  }
 
   if (projectHandler.fileChangesDetected) {
     projectHandler.fileChangesDetected = false;
@@ -266,6 +273,7 @@ void MainWindow::OnCleanup() {
   }
 
   if (sceneRenderer) {
+    media.Shutdown(*sceneRenderer);
     delete sceneRenderer;
     sceneRenderer = nullptr;
   }

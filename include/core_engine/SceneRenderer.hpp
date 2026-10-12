@@ -1,4 +1,5 @@
 #pragma once
+#include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
@@ -32,6 +33,7 @@ public:
 
   // Method untuk interaksi
   void SetEditMode(EditMode mode);
+  EditMode GetEditMode() const { return currentMode; }
   void SetGridVisible(bool visible);
   void SetGridSize(float size);
   void SetSnapToGrid(bool snap);
@@ -250,10 +252,15 @@ public:
     float gravityY = -9.81f;
     glm::vec3 velocity = glm::vec3(0.0f);
 
-    // Audio specific properties
-    bool hasAudio = false;
-    std::string audioPath = "";
-    bool isPlaying = false;
+    // Audio Source / Video Player components (played by ilmeee::MediaSystem).
+    ilmeee::AudioSourceComponent audio;
+    ilmeee::VideoPlayerComponent video;
+    // Pure "Audio Source" object: its mesh is only an editor marker (hidden
+    // in the game, like light/camera markers).
+    bool isAudioEmitter = false;
+    // Current video frame, set every frame by MediaSystem; overrides the
+    // texture of video.surface while non-null. Not part of the scene data.
+    VkDescriptorSet videoTexture = VK_NULL_HANDLE;
 
     // Optional source location for the call site that spawned this mesh.
     // Populated via SetMesh3DDebugSource() and surfaced by Inspect Mode
@@ -300,6 +307,25 @@ private:
 
   // Texture manager
   TextureManager textureManager;
+
+  struct DynamicTexture {
+    int width = 0, height = 0;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    void *mapped = nullptr;
+    VkDescriptorSet descriptor = VK_NULL_HANDLE;
+    bool pending = false;  // staging holds a frame not yet copied
+    bool uploaded = false; // image has been written at least once
+  };
+  std::unordered_map<int, DynamicTexture> dynamicTextures;
+  int nextDynamicTexture = 1;
+  // Own sampler: offscreen.sampler is recreated on every viewport resize.
+  VkSampler dynamicSampler = VK_NULL_HANDLE;
+  void FreeDynamicTexture(DynamicTexture &t);
+  void RecordDynamicTextureUploads(VkCommandBuffer cmd);
 
   // Initialize components
   void Init();
@@ -389,6 +415,14 @@ public:
                  float intensity = 1.0f, float range = 10.0f,
                  float spotAngle = 30.0f, float gamma = 1.05f);
 
+  // Vertical 16:9 quad in the XY plane facing +Z, UVs upright — the
+  // "Video Screen" object (with its Video Player component switched on).
+  bool LoadScreen(const std::string &name = "Video Screen",
+                  float width = 1.6f, float height = 0.9f);
+  // "Audio Source" object: an editor-only marker carrying an Audio Source
+  // component.
+  bool LoadAudioSource(const std::string &name = "Audio Source");
+
   // In-scene player camera (separate from the editor free-cam). Appears as
   // a small marker mesh plus a dashed frustum gizmo, and can be previewed.
   bool LoadCamera(const std::string &name = "Camera", int projection = 0,
@@ -463,6 +497,10 @@ public:
   // Build a world-space ray from a panel pixel using the current 3D camera.
   bool ScreenToRay(float pxX, float pxY, glm::vec3 &outOrigin,
                    glm::vec3 &outDir) const;
+  // Editor 3D camera matrices for the current viewport size — the same ones
+  // RenderSceneToTexture draws with (used by the ImGui gizmo overlays).
+  glm::mat4 GetCamera3DView() const;
+  glm::mat4 GetCamera3DProj() const;
 
   // Light property accessors
   bool IsMesh3DLight(size_t i) const;
@@ -496,6 +534,18 @@ public:
   // Player-camera preview. Render the scene from the first camera object
   // into the preview target; the Scene UI shows it in a small window.
   bool HasPlayerCamera() const;
+  // World pose of the game camera (the audio listener). False without one.
+  bool GetPlayerCameraPose(glm::vec3 &position, glm::vec3 &right,
+                           glm::vec3 &forward) const;
+
+  // Streaming RGBA8 textures (video frames), bindable on meshes. Ids stay
+  // valid until destroyed. Update copies into a staging buffer; the GPU
+  // upload is recorded at the start of the next render.
+  int CreateDynamicTexture(int width, int height);
+  void UpdateDynamicTexture(int id, const uint8_t *rgba);
+  // Null until the first frame has been handed over.
+  VkDescriptorSet GetDynamicTextureDescriptor(int id) const;
+  void DestroyDynamicTexture(int id);
   void RenderPlayerCameraPreview();
   VkDescriptorSet GetPlayerCameraPreviewDescriptor() const;
   // Render the whole viewport target (size set by SetViewportSize) from the
@@ -603,9 +653,9 @@ public:
     float gravityY = -9.81f;
     glm::vec3 velocity{0.0f};
 
-    bool hasAudio = false;
-    std::string audioPath;
-    bool isPlaying = false;
+    ilmeee::AudioSourceComponent audio;
+    ilmeee::VideoPlayerComponent video;
+    bool isAudioEmitter = false;
 
     std::string debugSrcFile;
     int debugSrcLine = 0;
@@ -662,7 +712,8 @@ private:
   bool snapToGrid = true;
 
   // Edit properties
-  EditMode currentMode = EditMode::SELECT;
+  // MOVE by default so selecting an object shows the transform gizmo.
+  EditMode currentMode = EditMode::MOVE;
   GameObject *selectedObject = nullptr;
   int selectedObjectIndex = -1;
 

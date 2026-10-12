@@ -4,12 +4,14 @@
 #include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
+#include "../core_engine/MediaSystem.hpp"
 #include "../core_engine/MovementScript.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
 #include "SvgIconManager.hpp"
 #include "VideoPlayer.hpp"
+#include "ViewportGizmo.hpp"
 #include "assets.hpp"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -63,6 +65,8 @@ private:
   bool focusSceneTab = false;
   ilmeee::MovementInput gameMovementInput;
   ilmeee::MovementSystem movementSystem;
+  // Audio Source / Video Player playback (Play mode + editor posters).
+  ilmeee::MediaSystem media;
   bool gameWasStopped = true;
 
   // Vulkan members are now inherited from VulkanBase (ctx, window, etc.)
@@ -81,6 +85,8 @@ private:
   int selectedSurface = -1;
   EditorSessionHistory editorSessionHistory;
   bool viewportDragHistoryActive = false;
+  ilmeee::TransformGizmoState transformGizmo;
+  ilmeee::OrientationGizmoState orientationGizmo;
   bool viewportCameraHistoryActive = false;
   static constexpr float MIN_PANEL_WIDTH = 100.0f;
   float explorerSplitPosition = 200.0f;
@@ -212,6 +218,10 @@ public:
   ilmeee::GameBuildResult gameBuildResult;
   bool gameBuildRunAfter = false;
   bool gameBuildPortable = false;
+  // Ship the whole assets/ folder instead of only what the scenes use.
+  bool gameBuildIncludeUnused = false;
+  // Android: re-encode videos taller than this to H.264 (0 = unchanged).
+  int gameBuildAndroidVideoHeight = 720;
   ilmeee::BuildTarget gameBuildTarget = ilmeee::BuildTarget::Linux;
   std::filesystem::path lastGameLauncher; // binary, or .apk for Android
   ilmeee::BuildTarget lastGameTarget = ilmeee::BuildTarget::Linux;

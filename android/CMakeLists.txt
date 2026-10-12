@@ -40,11 +40,16 @@ add_library(main SHARED
     ${ENGINE_ROOT}/src/cpp/core_engine/UserMovementScripts.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneLoader.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneRenderer.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AudioEngine.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/VideoDecoder.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/MediaSystem.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AndroidMedia.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/TextureManager.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/PMXLoader.cpp
     ${ENGINE_ROOT}/src/cpp/vulkan/VulkanBase.cpp
     ${ENGINE_ROOT}/src/cpp/vulkan/VkTools.cpp
     ${ENGINE_ROOT}/vendor/stb_impl.c
+    ${ENGINE_ROOT}/vendor/stb_vorbis_impl.c
     ${ENGINE_ROOT}/vendor/ufbx/ufbx.c
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
@@ -63,6 +68,15 @@ target_include_directories(main PRIVATE
     ${GLM_INCLUDE_DIR}
     ${STB_INCLUDE_DIR}
 )
+# Per-pixel video conversion and audio resampling stay fast in Debug builds.
+set_source_files_properties(
+    ${ENGINE_ROOT}/src/cpp/core_engine/VideoDecoder.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AndroidMedia.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AudioEngine.cpp
+    PROPERTIES COMPILE_OPTIONS "-O2")
 # No libktx on Android: textures go through stb (TextureManager fallback).
+# No FFmpeg either: .wav/.ogg decode in-engine, everything else (mp3, aac,
+# mp4/H.264...) through the platform's MediaCodec (libmediandk).
 target_compile_definitions(main PRIVATE ILMEEE_NO_KTX)
-target_link_libraries(main PRIVATE SDL3::SDL3-shared vulkan android log m)
+target_link_libraries(main PRIVATE SDL3::SDL3-shared vulkan android log m
+    mediandk)

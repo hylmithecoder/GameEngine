@@ -62,6 +62,14 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
       ok = renderer.LoadCamera(e.name, e.camProjection, e.camFov,
                                e.camOrthoSize, e.camNear, e.camFar);
       break;
+    case PrimitiveKind::AudioSource:
+      ok = renderer.LoadAudioSource(e.name);
+      break;
+    case PrimitiveKind::Screen:
+      ok = renderer.LoadScreen(e.name);
+      break;
+    default:
+      break;
     }
     if (!ok) {
       ++report.failed;
@@ -80,6 +88,8 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     renderer.meshes3d[idx].movementScript = e.movementScript;
     renderer.meshes3d[idx].movementSpeed = e.movementSpeed;
     renderer.meshes3d[idx].movementRig = e.movementRig;
+    renderer.meshes3d[idx].audio = e.audio;
+    renderer.meshes3d[idx].video = e.video;
     // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
     // so hover-to-source lands users on the deserializer.
     renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);

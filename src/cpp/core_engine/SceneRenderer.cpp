@@ -33,6 +33,11 @@ SceneRenderer::SceneRenderer(int width, int height)
 SceneRenderer::~SceneRenderer() {
   if (device != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(device);
+    for (auto &[id, t] : dynamicTextures)
+      FreeDynamicTexture(t);
+    dynamicTextures.clear();
+    if (dynamicSampler != VK_NULL_HANDLE)
+      vkDestroySampler(device, dynamicSampler, nullptr);
     DestroyOffscreenResources();
 
     // Destroy pipelines
@@ -476,6 +481,7 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
   vkBeginCommandBuffer(cmd, &beginInfo);
+  RecordDynamicTextureUploads(cmd);
 
   VkRenderPassBeginInfo renderPassInfo{};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -528,13 +534,8 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   // VP matrix when we have a 3D context so the grid follows the camera
   // even without meshes loaded.
   {
-    float aspect = (height > 0) ? (float)width / (float)height : 1.0f;
-    glm::vec3 forward = GetCameraForward();
-    glm::mat4 view3d =
-        glm::lookAt(camera3d.position, camera3d.position + forward,
-                    glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 proj3d = glm::perspective(glm::radians(camera3d.fovDeg), aspect,
-                                        camera3d.nearPlane, camera3d.farPlane);
+    glm::mat4 view3d = GetCamera3DView();
+    glm::mat4 proj3d = GetCamera3DProj();
     // No Y-flip on projection: the Scene panel already flips the sampled
     // image via ImGui UVs (V from 1→0). Editor view draws gizmos.
     RecordWorld(cmd, view3d, proj3d, WorldView::Editor);
@@ -1371,7 +1372,7 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     const Mesh3D &m = meshes3d[mi];
     if (m.indexCount == 0)
       continue;
-    if (!drawMarkers && (m.isLight || m.isCamera))
+    if (!drawMarkers && (m.isLight || m.isCamera || m.isAudioEmitter))
       continue;
     glm::mat4 model = GetMesh3DWorldModel(mi);
     glm::mat4 mvp = viewProj * model;
@@ -1391,12 +1392,13 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     pc.mvp = mvp;
     pc.model = model;
 
-    if (m.isLight) {
+    if (m.isLight || m.isAudioEmitter) {
       // Draw the light source itself as an unlit solid sphere matching its
-      // light color
+      // light color (audio markers: a fixed cyan).
       pc.lightPosOrDir = glm::vec4(0.0f);
       pc.lightColorType =
-          glm::vec4(m.lightColor, -1.0f); // -1.0 signals unlit emissive shading
+          glm::vec4(m.isLight ? m.lightColor : glm::vec3(0.35f, 0.80f, 1.0f),
+                    -1.0f); // -1.0 signals unlit emissive shading
       pc.lightDir = glm::vec4(0.0f);
       pc.lightParams = glm::vec4(0.0f);
     } else {
@@ -1410,10 +1412,11 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     vkCmdBindVertexBuffers(cmd, 0, 1, &m.vertexBuffer, offsets);
     vkCmdBindIndexBuffer(cmd, m.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+    // texMode: 0 untextured, 1 textured (lit), 2 textured unlit (video).
     auto drawRange = [&](uint32_t indexOffset, uint32_t indexCount,
-                         const glm::vec3 &diffuse, bool hasTex,
+                         const glm::vec3 &diffuse, float texMode,
                          VkDescriptorSet tex) {
-      pc.material = glm::vec4(diffuse, hasTex ? 1.0f : 0.0f);
+      pc.material = glm::vec4(diffuse, texMode);
       VkDescriptorSet ds = (tex != VK_NULL_HANDLE) ? tex : whiteDescriptor;
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               meshPipelineLayout, 0, 1, &ds, 0, nullptr);
@@ -1427,14 +1430,22 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     // One draw per surface (submesh) so each binds its own texture. Older
     // meshes with no submeshes fall back to a single untextured draw.
     if (m.submeshes.empty()) {
-      drawRange(0, m.indexCount, glm::vec3(0.84f, 0.80f, 0.74f), false,
+      drawRange(0, m.indexCount, glm::vec3(0.84f, 0.80f, 0.74f), 0.0f,
                 whiteDescriptor);
     } else {
-      for (const auto &sm : m.submeshes) {
+      for (size_t si = 0; si < m.submeshes.size(); ++si) {
+        const SubMesh &sm = m.submeshes[si];
         if (sm.indexCount == 0)
           continue;
-        drawRange(sm.indexOffset, sm.indexCount, sm.diffuse, sm.hasTexture,
-                  sm.textureDescriptor);
+        // A playing video replaces the surface's texture.
+        if (m.videoTexture != VK_NULL_HANDLE &&
+            (m.video.surface < 0 || m.video.surface == (int)si)) {
+          drawRange(sm.indexOffset, sm.indexCount, glm::vec3(1.0f),
+                    m.video.unlit ? 2.0f : 1.0f, m.videoTexture);
+          continue;
+        }
+        drawRange(sm.indexOffset, sm.indexCount, sm.diffuse,
+                  sm.hasTexture ? 1.0f : 0.0f, sm.textureDescriptor);
       }
     }
   }
@@ -2455,17 +2466,23 @@ void SceneRenderer::ClearMesh3DSubmeshTexture(size_t i, uint32_t sub) {
   sm.hasTexture = false;
 }
 
+glm::mat4 SceneRenderer::GetCamera3DView() const {
+  glm::vec3 forward = GetCameraForward();
+  return glm::lookAt(camera3d.position, camera3d.position + forward,
+                     glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+glm::mat4 SceneRenderer::GetCamera3DProj() const {
+  float aspect = (height > 0) ? (float)width / (float)height : 1.0f;
+  return glm::perspective(glm::radians(camera3d.fovDeg), aspect,
+                          camera3d.nearPlane, camera3d.farPlane);
+}
+
 bool SceneRenderer::ScreenToRay(float pxX, float pxY, glm::vec3 &outOrigin,
                                 glm::vec3 &outDir) const {
   if (width <= 0 || height <= 0)
     return false;
-  float aspect = (float)width / (float)height;
-  glm::vec3 forward = GetCameraForward();
-  glm::mat4 view = glm::lookAt(camera3d.position, camera3d.position + forward,
-                               glm::vec3(0.0f, 1.0f, 0.0f));
-  glm::mat4 proj = glm::perspective(glm::radians(camera3d.fovDeg), aspect,
-                                    camera3d.nearPlane, camera3d.farPlane);
-  glm::mat4 invVP = glm::inverse(proj * view);
+  glm::mat4 invVP = glm::inverse(GetCamera3DProj() * GetCamera3DView());
   // Panel pixel -> NDC (display is V-flipped, same as ScreenToGround).
   float ndcX = 2.0f * (pxX / (float)width) - 1.0f;
   float ndcY = 1.0f - 2.0f * (pxY / (float)height);
@@ -3200,9 +3217,9 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     entity.gravityY = mesh.gravityY;
     entity.velocity = mesh.velocity;
 
-    entity.hasAudio = mesh.hasAudio;
-    entity.audioPath = mesh.audioPath;
-    entity.isPlaying = mesh.isPlaying;
+    entity.audio = mesh.audio;
+    entity.video = mesh.video;
+    entity.isAudioEmitter = mesh.isAudioEmitter;
 
     entity.debugSrcFile = mesh.debugSrcFile;
     entity.debugSrcLine = mesh.debugSrcLine;
@@ -3251,9 +3268,13 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     } else if (entity.isCamera) {
       loaded = LoadCamera(entity.name, entity.camProjection, entity.camFov,
                           entity.camOrthoSize, entity.camNear, entity.camFar);
+    } else if (entity.isAudioEmitter) {
+      loaded = LoadAudioSource(entity.name);
     } else if (entity.path.rfind("<primitive:", 0) == 0) {
       if (entity.path.find("sphere") != std::string::npos)
         loaded = LoadSphere(entity.name);
+      else if (entity.path.find("screen") != std::string::npos)
+        loaded = LoadScreen(entity.name);
       else if (entity.path.find("plane") != std::string::npos)
         loaded = LoadPlane(entity.name);
       else
@@ -3299,9 +3320,8 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.drag = entity.drag;
     mesh.gravityY = entity.gravityY;
     mesh.velocity = entity.velocity;
-    mesh.hasAudio = entity.hasAudio;
-    mesh.audioPath = entity.audioPath;
-    mesh.isPlaying = entity.isPlaying;
+    mesh.audio = entity.audio;
+    mesh.video = entity.video;
     mesh.movable = entity.movable;
     mesh.movementScript = entity.movementScript;
     mesh.movementSpeed = entity.movementSpeed;
@@ -3935,6 +3955,7 @@ void SceneRenderer::SubmitOffscreenPass(
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   vkBeginCommandBuffer(cmd, &beginInfo);
+  RecordDynamicTextureUploads(cmd);
 
   VkRenderPassBeginInfo rp{};
   rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -4274,4 +4295,270 @@ void SceneRenderer::RenderPlayerCameraPreview() {
 
 VkDescriptorSet SceneRenderer::GetPlayerCameraPreviewDescriptor() const {
   return preview.descriptorSet;
+}
+
+// ---------------------------------------------------------------------------
+// Media objects: video screen + audio source marker
+// ---------------------------------------------------------------------------
+
+bool SceneRenderer::LoadScreen(const std::string &name, float width,
+                               float height) {
+  if (device == VK_NULL_HANDLE)
+    return false;
+  const float w = width * 0.5f, h = height * 0.5f;
+  const glm::vec3 n(0.0f, 0.0f, 1.0f);
+  // Image row 0 is the top of the frame, so the top edge gets v = 0.
+  std::vector<MeshVertex> verts = {
+      {{-w, -h, 0.0f}, n, {0.0f, 1.0f}},
+      {{w, -h, 0.0f}, n, {1.0f, 1.0f}},
+      {{w, h, 0.0f}, n, {1.0f, 0.0f}},
+      {{-w, h, 0.0f}, n, {0.0f, 0.0f}},
+  };
+  std::vector<uint32_t> idx = {0, 1, 2, 0, 2, 3};
+  Mesh3D mesh;
+  mesh.path = "<primitive:screen>";
+  mesh.displayName = name;
+  mesh.aabbMin = glm::vec3(-w, -h, 0.0f);
+  mesh.aabbMax = glm::vec3(w, h, 0.0f);
+  mesh.autoFit = glm::mat4(1.0f);
+  if (!UploadMeshBuffers(mesh, verts, idx)) {
+    DestroyMesh(mesh);
+    return false;
+  }
+  // Dark "screen off" colour until a video frame arrives.
+  for (SubMesh &sm : mesh.submeshes)
+      sm.diffuse = glm::vec3(0.06f, 0.06f, 0.08f);
+  mesh.video.enabled = true;
+  meshes3d.push_back(std::move(mesh));
+  return true;
+}
+
+bool SceneRenderer::LoadAudioSource(const std::string &name) {
+  if (device == VK_NULL_HANDLE)
+    return false;
+  // Octahedron marker with flat faces, distinct from the light sphere and
+  // the camera box.
+  const float r = 0.18f;
+  const glm::vec3 p[6] = {{r, 0, 0},  {-r, 0, 0}, {0, r, 0},
+                          {0, -r, 0}, {0, 0, r},  {0, 0, -r}};
+  const int faces[8][3] = {{0, 2, 4}, {4, 2, 1}, {1, 2, 5}, {5, 2, 0},
+                           {4, 3, 0}, {1, 3, 4}, {5, 3, 1}, {0, 3, 5}};
+  std::vector<MeshVertex> verts;
+  std::vector<uint32_t> idx;
+  for (const auto &f : faces) {
+    const glm::vec3 n =
+        glm::normalize(glm::cross(p[f[1]] - p[f[0]], p[f[2]] - p[f[0]]));
+    for (int k = 0; k < 3; ++k) {
+      idx.push_back((uint32_t)verts.size());
+      verts.push_back({p[f[k]], n});
+    }
+  }
+  Mesh3D mesh;
+  mesh.path = "<primitive:audio>";
+  mesh.displayName = name;
+  mesh.aabbMin = glm::vec3(-r);
+  mesh.aabbMax = glm::vec3(r);
+  mesh.autoFit = glm::mat4(1.0f);
+  mesh.isAudioEmitter = true;
+  mesh.audio.enabled = true;
+  if (!UploadMeshBuffers(mesh, verts, idx)) {
+    DestroyMesh(mesh);
+    return false;
+  }
+  meshes3d.push_back(std::move(mesh));
+  return true;
+}
+
+bool SceneRenderer::GetPlayerCameraPose(glm::vec3 &position, glm::vec3 &right,
+                                        glm::vec3 &forward) const {
+  glm::mat4 view, proj;
+  if (!ComputePlayerCameraMatrices(1.0f, view, proj))
+    return false;
+  const glm::mat4 world = glm::inverse(view);
+  position = glm::vec3(world[3]);
+  right = glm::normalize(glm::vec3(world[0]));
+  forward = -glm::normalize(glm::vec3(world[2]));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic (streaming) textures
+// ---------------------------------------------------------------------------
+
+int SceneRenderer::CreateDynamicTexture(int w, int h) {
+  if (device == VK_NULL_HANDLE || w <= 0 || h <= 0)
+    return 0;
+  if (dynamicSampler == VK_NULL_HANDLE) {
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 0.0f;
+    if (vkCreateSampler(device, &si, nullptr, &dynamicSampler) != VK_SUCCESS)
+      return 0;
+  }
+
+  DynamicTexture t;
+  t.width = w;
+  t.height = h;
+  const VkDeviceSize bytes = (VkDeviceSize)w * h * 4;
+
+  VkBufferCreateInfo bi{};
+  bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bi.size = bytes;
+  bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VkMemoryRequirements mr;
+  VkMemoryAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+
+  VkImageCreateInfo ii{};
+  ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.extent = {(uint32_t)w, (uint32_t)h, 1};
+  ii.mipLevels = 1;
+  ii.arrayLayers = 1;
+  ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+
+  bool ok = vkCreateBuffer(device, &bi, nullptr, &t.staging) == VK_SUCCESS;
+  if (ok) {
+    vkGetBufferMemoryRequirements(device, t.staging, &mr);
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex =
+        findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ok = vkAllocateMemory(device, &ai, nullptr, &t.stagingMemory) ==
+             VK_SUCCESS &&
+         vkBindBufferMemory(device, t.staging, t.stagingMemory, 0) ==
+             VK_SUCCESS &&
+         vkMapMemory(device, t.stagingMemory, 0, bytes, 0, &t.mapped) ==
+             VK_SUCCESS;
+  }
+  if (ok)
+    ok = vkCreateImage(device, &ii, nullptr, &t.image) == VK_SUCCESS;
+  if (ok) {
+    vkGetImageMemoryRequirements(device, t.image, &mr);
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex =
+        findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    ok = vkAllocateMemory(device, &ai, nullptr, &t.memory) == VK_SUCCESS &&
+         vkBindImageMemory(device, t.image, t.memory, 0) == VK_SUCCESS;
+  }
+  if (ok) {
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = t.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.layerCount = 1;
+    ok = vkCreateImageView(device, &vi, nullptr, &t.view) == VK_SUCCESS;
+  }
+  if (ok)
+    t.descriptor = ImGui_ImplVulkan_AddTexture(
+        dynamicSampler, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  if (!ok || t.descriptor == VK_NULL_HANDLE) {
+    FreeDynamicTexture(t);
+    return 0;
+  }
+  const int id = nextDynamicTexture++;
+  dynamicTextures.emplace(id, t);
+  return id;
+}
+
+void SceneRenderer::UpdateDynamicTexture(int id, const uint8_t *rgba) {
+  auto it = dynamicTextures.find(id);
+  if (it == dynamicTextures.end() || !rgba)
+    return;
+  // Safe without a fence: every render submits and waits for the queue
+  // before returning, so the GPU is never reading this staging buffer here.
+  std::memcpy(it->second.mapped, rgba,
+              (size_t)it->second.width * it->second.height * 4);
+  it->second.pending = true;
+}
+
+VkDescriptorSet SceneRenderer::GetDynamicTextureDescriptor(int id) const {
+  auto it = dynamicTextures.find(id);
+  if (it == dynamicTextures.end())
+    return VK_NULL_HANDLE;
+  // A pending frame is copied at the start of the same command buffer that
+  // draws with it, so it is valid as soon as it is pending.
+  return (it->second.uploaded || it->second.pending) ? it->second.descriptor
+                                                     : VK_NULL_HANDLE;
+}
+
+void SceneRenderer::FreeDynamicTexture(DynamicTexture &t) {
+  if (t.descriptor != VK_NULL_HANDLE)
+    ImGui_ImplVulkan_RemoveTexture(t.descriptor);
+  if (t.view != VK_NULL_HANDLE)
+    vkDestroyImageView(device, t.view, nullptr);
+  if (t.image != VK_NULL_HANDLE)
+    vkDestroyImage(device, t.image, nullptr);
+  if (t.memory != VK_NULL_HANDLE)
+    vkFreeMemory(device, t.memory, nullptr);
+  if (t.staging != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, t.staging, nullptr);
+  if (t.stagingMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, t.stagingMemory, nullptr); // also unmaps
+  t = DynamicTexture{};
+}
+
+void SceneRenderer::DestroyDynamicTexture(int id) {
+  auto it = dynamicTextures.find(id);
+  if (it == dynamicTextures.end())
+    return;
+  vkDeviceWaitIdle(device);
+  // Meshes may still point at it until MediaSystem's next update.
+  for (Mesh3D &m : meshes3d)
+    if (m.videoTexture == it->second.descriptor)
+      m.videoTexture = VK_NULL_HANDLE;
+  FreeDynamicTexture(it->second);
+  dynamicTextures.erase(it);
+}
+
+void SceneRenderer::RecordDynamicTextureUploads(VkCommandBuffer cmd) {
+  for (auto &[id, t] : dynamicTextures) {
+    if (!t.pending)
+      continue;
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.oldLayout = t.uploaded ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = t.image;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    b.srcAccessMask = t.uploaded ? VK_ACCESS_SHADER_READ_BIT : 0;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd,
+                         t.uploaded ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                    : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &b);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {(uint32_t)t.width, (uint32_t)t.height, 1};
+    vkCmdCopyBufferToImage(cmd, t.staging, t.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &b);
+    t.pending = false;
+    t.uploaded = true;
+  }
 }

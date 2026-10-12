@@ -26,6 +26,10 @@ struct GameBuildOptions {
   // scripts/bundle-deps.sh. Empty: don't bundle libraries — the game then
   // runs on this machine only.
   std::filesystem::path bundleScript;
+  // false (default): only the files the scenes reference (models with the
+  // textures they load, surface/UI images, audio and video clips). true:
+  // the whole assets/ folder, as before.
+  bool includeUnusedAssets = false;
   int windowWidth = 1280;
   int windowHeight = 720;
   bool fullscreen = false;
@@ -40,6 +44,13 @@ struct GameBuildOptions {
   std::string applicationId;
   std::string versionName = "1.0";
   int versionCode = 1;
+  // Video clips of Video Player components are re-encoded for phones when
+  // taller than this or not 8-bit H.264 (→ H.264 + AAC .mp4 at this height,
+  // cached under ~/.ilmeeeengine/videocache). 0 = ship videos unchanged.
+  // Needs the ffmpeg/ffprobe programs; without them videos ship as-is.
+  int androidMaxVideoHeight = 720;
+  std::string ffmpegCommand = "ffmpeg";
+  std::string ffprobeCommand = "ffprobe";
   // Gradle to run in the generated project. Empty: only prepare the project
   // (no APK) — what the tests do.
   std::string gradleCommand = "gradle";
@@ -56,6 +67,9 @@ struct GameBuildResult {
   std::uintmax_t bytesCopied = 0;
   size_t relocatedReferences = 0; // scene paths that pointed outside assets/
   size_t missingReferences = 0;   // ... and whose file did not exist
+  size_t videosTranscoded = 0;    // Android: videos re-encoded (or cached)
+  size_t unusedFilesSkipped = 0;  // files in assets/ no scene uses
+  std::uintmax_t unusedBytesSkipped = 0;
   bool librariesBundled = false;
 };
 

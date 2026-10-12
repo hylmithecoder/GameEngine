@@ -10,7 +10,7 @@ layout(location = 3) in vec4 vLightColorType; // xyz = color, w = type (special 
 layout(location = 4) in vec4 vLightDir;       // xyz = spotlight forward vector, w = unused
 layout(location = 5) in vec4 vLightParams;    // x = range, y = spotAngleRad, z = gamma, w = spotCosOuter
 layout(location = 6) in vec2 vUV;
-layout(location = 7) in vec4 vMaterial;       // xyz = diffuse tint, w = hasTexture
+layout(location = 7) in vec4 vMaterial;       // xyz = diffuse tint, w = 0 untextured / 1 textured / 2 textured unlit
 
 layout(set = 0, binding = 0) uniform sampler2D albedoTex;
 
@@ -19,6 +19,12 @@ layout(location = 0) out vec4 outColor;
 void main() {
     vec3 N = normalize(vNormalWorld);
     if (!gl_FrontFacing) N = -N;
+
+    // Unlit textured surface (video screens): the frame as-is.
+    if (vMaterial.w > 1.5) {
+        outColor = vec4(texture(albedoTex, vUV).rgb * vMaterial.xyz, 1.0);
+        return;
+    }
 
     // Check for special unlit emissive mode (drawn light source sphere itself)
     if (vLightColorType.w < -0.5) {

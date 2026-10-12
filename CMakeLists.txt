@@ -168,7 +168,8 @@ target_link_libraries(ufbx PUBLIC m)
 
 # stb_image — header-only; compiled once here so every target links the same
 # single definition instead of each TU trying to emit its own.
-add_library(stb_impl STATIC ${CMAKE_SOURCE_DIR}/vendor/stb_impl.c)
+add_library(stb_impl STATIC ${CMAKE_SOURCE_DIR}/vendor/stb_impl.c
+    ${CMAKE_SOURCE_DIR}/vendor/stb_vorbis_impl.c)
 target_include_directories(stb_impl PUBLIC ${STB_INCLUDE_DIRS})
 target_link_libraries(stb_impl PUBLIC m)
 
@@ -210,18 +211,37 @@ target_link_libraries(TestTransformMath PRIVATE glm::glm)
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
 
+add_executable(TestMedia test/TestMedia.cpp
+    src/cpp/core_engine/AudioEngine.cpp
+    src/cpp/core_engine/VideoDecoder.cpp)
+target_include_directories(TestMedia PRIVATE ${STB_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS})
+target_compile_definitions(TestMedia PRIVATE ILMEEE_HAS_FFMPEG)
+target_link_libraries(TestMedia PRIVATE PkgConfig::SDL3 ${FFMPEG_LIBRARIES}
+    stb_impl pthread)
+
 add_executable(TestMovementScripts test/TestMovementScripts.cpp
     src/cpp/core_engine/MovementScript.cpp)
 target_link_libraries(TestMovementScripts PRIVATE glm::glm)
 
 add_executable(TestGameBuild test/TestGameBuild.cpp
-    src/cpp/core_engine/GameBuilder.cpp)
-target_link_libraries(TestGameBuild PRIVATE glm::glm)
+    src/cpp/core_engine/GameBuilder.cpp
+    src/cpp/core_engine/ModelDependencies.cpp
+    src/cpp/core_engine/PMXLoader.cpp)
+target_include_directories(TestGameBuild PRIVATE ${CMAKE_SOURCE_DIR}/include
+    ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
+target_link_libraries(TestGameBuild PRIVATE glm::glm ufbx ${GTK3_LIBRARIES}
+    ${LIBNOTIFY_LIBRARIES})
 
 # IlmeeePlayer — the runtime a built game ships with. Only the engine pieces
-# that load and draw a scene: no editor UI, no IPC, no video.
+# that load, draw and play a scene: no editor UI, no IPC. FFmpeg is linked
+# for Video Player components and non-wav/ogg audio (the Android build of
+# the same sources goes without).
 add_executable(IlmeeePlayer
     src/cpp/player/PlayerMain.cpp
+    src/cpp/core_engine/AudioEngine.cpp
+    src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaSystem.cpp
     src/cpp/core_engine/GameUI.cpp
     src/cpp/core_engine/MovementScript.cpp
     src/cpp/core_engine/MovementRuntime.cpp
@@ -241,13 +261,16 @@ target_include_directories(IlmeeePlayer PRIVATE
     ${CMAKE_SOURCE_DIR}/include/vulkan
     ${LIBNOTIFY_INCLUDE_DIRS}
     ${STB_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
 )
+target_compile_definitions(IlmeeePlayer PRIVATE ILMEEE_HAS_FFMPEG)
 target_link_libraries(IlmeeePlayer PRIVATE
     PkgConfig::SDL3
     Vulkan::Vulkan
     KTX::ktx
     glm::glm
     ufbx
+    ${FFMPEG_LIBRARIES}
     ${GTK3_LIBRARIES}
 )
 
@@ -628,6 +651,8 @@ if(WIN32)
 else()
     set(CPACK_GENERATOR "TGZ")
 endif()
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE ILMEEE_HAS_FFMPEG)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE

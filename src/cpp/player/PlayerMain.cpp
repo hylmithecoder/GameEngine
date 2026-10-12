@@ -21,6 +21,7 @@
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/GameUI.hpp"
+#include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
@@ -113,12 +114,15 @@ protected:
     fs::path scenePath = root_ / manifest_.startScene;
     ilmeee::IlmeeeScene scene;
     if (!ilmeee::LoadScene(scenePath.string(), scene)) {
-      error_ = "Cannot load scene " + scenePath.string();
+      error_ = "Cannot load scene " + scenePath.string() +
+               " (missing, damaged, or made by a newer engine than this "
+               "player; rebuild the player)";
       ::Log(error_, Debug::LogLevel::ERROR);
       return;
     }
     ilmeee::SceneLoadReport report =
         ilmeee::InstantiateScene(*renderer_, scene, root_);
+    media_.SetProjectRoot(root_);
     ::Log("Loaded " + std::to_string(report.loaded) + " object(s) from " +
               scenePath.string(),
           Debug::LogLevel::SUCCESS);
@@ -182,6 +186,12 @@ protected:
     // Input gathered while drawing the previous frame (keyboard + sticks).
     if (renderer_ && !paused_ && error_.empty())
       movement_.Update(*renderer_, input_, deltaTime);
+    // A game is always playing; sounds and videos start on the first frame.
+    if (renderer_ && error_.empty())
+      media_.Update(*renderer_,
+                    paused_ ? ilmeee::MediaSystem::State::Paused
+                            : ilmeee::MediaSystem::State::Playing,
+                    deltaTime);
   }
 
   void OnRender(VkCommandBuffer) override {
@@ -252,7 +262,11 @@ protected:
     }
   }
 
-  void OnCleanup() override { renderer_.reset(); }
+  void OnCleanup() override {
+    if (renderer_)
+      media_.Shutdown(*renderer_);
+    renderer_.reset();
+  }
 
 private:
   bool WriteScreenshot() {
@@ -280,6 +294,7 @@ private:
   ilmeee::GameUI gameUi_;
   bool paused_ = false;
   ilmeee::MovementSystem movement_;
+  ilmeee::MediaSystem media_;
   ilmeee::MovementInput input_;
   ilmeee::UiFingers fingers_;
   glm::vec2 touchLook_{0.0f};

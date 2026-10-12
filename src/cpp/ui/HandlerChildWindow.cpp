@@ -17,8 +17,11 @@
 #include <nfd.h>
 #include <stb/stb_image.h>
 
-static const char *kSpawnNames[] = {"Cube", "Sphere", "Plane", "Light",
-                                    "Camera", "Canvas"};
+static const char *kSpawnNames[] = {"Cube",   "Sphere",       "Plane",
+                                    "Light",  "Camera",       "Audio Source",
+                                    "Video Screen", "Canvas"};
+// Scene objects SpawnSceneObject can create; the entry after them is Canvas.
+static constexpr int kSpawnObjectCount = 7;
 
 namespace {
 // Explorer sends absolute file paths. Keep scene references project-relative
@@ -47,6 +50,25 @@ std::string ProjectUiImagePath(const std::string &project,
   if (!stbi_info(image.string().c_str(), &width, &height, &channels) ||
       width <= 0 || height <= 0) return {};
   return image.lexically_relative(root).generic_string();
+}
+
+// Audio/video clip reference as stored in the scene: relative to the project
+// when the file is inside it (so built games find it), absolute otherwise
+// (the game build then gathers it under assets/external/).
+std::string ProjectMediaPath(const std::string &project,
+                             const std::string &source) {
+  namespace fs = std::filesystem;
+  if (project.empty())
+    return source;
+  std::error_code ec;
+  const fs::path root = fs::weakly_canonical(project, ec);
+  const fs::path file = fs::weakly_canonical(source, ec);
+  if (ec)
+    return source;
+  const fs::path rel = file.lexically_relative(root);
+  if (rel.empty() || *rel.begin() == "..")
+    return file.string();
+  return rel.generic_string();
 }
 } // namespace
 
@@ -121,7 +143,8 @@ bool MainWindow::DeletingRemovesLastCamera(size_t index) const {
 
 int MainWindow::SpawnSceneObject(int kind, int parent,
                                  const glm::vec3 &localPosition) {
-  if (!sceneRenderer || kind < 0 || kind > 4 || SceneStructureLocked())
+  if (!sceneRenderer || kind < 0 || kind >= kSpawnObjectCount ||
+      SceneStructureLocked())
     return -1;
   const char *base = kSpawnNames[kind];
   // Auto-number so repeated adds don't collide by name (selection is by name).
@@ -145,14 +168,27 @@ int MainWindow::SpawnSceneObject(int kind, int parent,
   else if (kind == 3)
     ok = sceneRenderer->LoadLight(name, 0, glm::vec3(1.0f, 0.96f, 0.88f), 1.0f,
                                   10.0f, 30.0f, 1.05f);
-  else
+  else if (kind == 4)
     ok = sceneRenderer->LoadCamera(name);
+  else if (kind == 5)
+    ok = sceneRenderer->LoadAudioSource(name);
+  else
+    ok = sceneRenderer->LoadScreen(name);
   if (!ok)
     return -1;
 
   size_t idx = sceneRenderer->GetMesh3DCount() - 1;
-  sceneRenderer->SetMesh3DTransform(idx, localPosition, glm::vec3(0.0f),
-                                    glm::vec3(1.0f));
+  glm::vec3 spawnPos = localPosition;
+  glm::vec3 spawnRot(0.0f);
+  if (kind == 6 && parent < 0) {
+    // Stand the screen on the ground, turned toward the editor camera.
+    spawnPos.y += 0.45f + 0.5f;
+    const glm::vec3 toCam = sceneRenderer->camera3d.position - spawnPos;
+    spawnRot.y = glm::degrees(std::atan2(toCam.x, toCam.z));
+  } else if (kind == 5 && parent < 0) {
+    spawnPos.y += 0.5f;
+  }
+  sceneRenderer->SetMesh3DTransform(idx, spawnPos, spawnRot, glm::vec3(1.0f));
   if (parent >= 0)
     sceneRenderer->SetMesh3DParent(idx, parent, false);
   // Record where this object was spawned so Inspect Mode (F2) can answer
@@ -204,13 +240,13 @@ void MainWindow::RenderHierarchyWindow() {
   const bool locked = SceneStructureLocked();
 
   auto createMenu = [&](int parent) {
-    for (int k = 0; k < 5; ++k)
+    for (int k = 0; k < kSpawnObjectCount; ++k)
       if (MenuItem(kSpawnNames[k], nullptr, false, !locked)) {
         op = Op::Spawn;
         opKind = k;
         opParent = parent;
       }
-    if (parent < 0 && MenuItem(kSpawnNames[5], nullptr, false,
+    if (parent < 0 && MenuItem(kSpawnNames[kSpawnObjectCount], nullptr, false,
                                 !locked && !hasGameUiCanvas))
       op = Op::SpawnCanvas;
   };
@@ -253,6 +289,10 @@ void MainWindow::RenderHierarchyWindow() {
       } else if (isLight) {
         svgPath = "assets/icons/svg/flash.svg";
         prefix = "[Light] ";
+      } else if (sceneRenderer->meshes3d[i].isAudioEmitter) {
+        svgPath = "assets/icons/svg/music.svg";
+      } else if (sceneRenderer->meshes3d[i].video.enabled) {
+        svgPath = "assets/icons/svg/video.svg";
       }
 
       // Draw icon
@@ -1088,42 +1128,147 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
-  // Audio Source component (if attached)
-  if (meshSelected && sceneRenderer->meshes3d[meshIdx].hasAudio) {
-    if (CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
-      TextWrapped("Audio File: %s",
-                  sceneRenderer->meshes3d[meshIdx].audioPath.empty()
-                      ? "(none)"
-                      : sceneRenderer->meshes3d[meshIdx].audioPath.c_str());
-      if (Button("Browse Audio...")) {
-        NFD_Init();
-        nfdchar_t *outPath = nullptr;
-        nfdfilteritem_t filters[1] = {{"Audio", "mp3,wav,ogg,flac,aac"}};
-        if (NFD_OpenDialog(&outPath, filters, 1, nullptr) == NFD_OKAY &&
-            outPath) {
-          sceneRenderer->meshes3d[meshIdx].audioPath = outPath;
-          RecordEditorHistory();
-          NFD_FreePath(outPath);
+  // Clip picker shared by Audio Source and Video Player: Browse, drop from
+  // the Explorer, Clear. Stores project-relative paths when possible.
+  const auto clipField = [&](const char *id, std::string &clip, bool video) {
+    bool changed = false;
+    PushID(id);
+    TextWrapped("Clip: %s", clip.empty() ? "(none - drop a file here)"
+                                         : clip.c_str());
+    if (BeginDragDropTarget()) {
+      if (const ImGuiPayload *pl = AcceptDragDropPayload("ASSET_PATH")) {
+        const std::string path((const char *)pl->Data);
+        if (video ? ilmeee::IsVideoClipPath(path)
+                  : ilmeee::IsAudioClipPath(path)) {
+          clip = ProjectMediaPath(projectHandler.projectPath, path);
+          changed = true;
+        } else {
+          PushMessage(std::string("[WARNING] Not a supported ") +
+                      (video ? "video" : "audio") + " file: " + path);
         }
-        NFD_Quit();
       }
+      EndDragDropTarget();
+    }
+    if (Button("Browse...")) {
+      NFD_Init();
+      nfdchar_t *outPath = nullptr;
+      nfdfilteritem_t audioFilter[1] = {
+          {"Audio", "wav,ogg,mp3,flac,m4a,aac,opus"}};
+      nfdfilteritem_t videoFilter[1] = {{"Video", "mp4,mkv,webm,mov,avi"}};
+      if (NFD_OpenDialog(&outPath, video ? videoFilter : audioFilter, 1,
+                         nullptr) == NFD_OKAY &&
+          outPath) {
+        clip = ProjectMediaPath(projectHandler.projectPath, outPath);
+        changed = true;
+        NFD_FreePath(outPath);
+      }
+      NFD_Quit();
+    }
+    SameLine();
+    if (Button("Clear") && !clip.empty()) {
+      clip.clear();
+      changed = true;
+    }
+    const std::string err = media.ErrorFor(clip);
+    if (!clip.empty() && !err.empty())
+      TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s", err.c_str());
+    PopID();
+    return changed;
+  };
+
+  // Audio Source component (if attached)
+  if (meshSelected && sceneRenderer->meshes3d[meshIdx].audio.enabled) {
+    auto &mesh = sceneRenderer->meshes3d[meshIdx];
+    auto &a = mesh.audio;
+    bool keep = true;
+    if (CollapsingHeader("Audio Source", mesh.isAudioEmitter ? nullptr : &keep,
+                         ImGuiTreeNodeFlags_DefaultOpen)) {
+      bool record = clipField("audioClip", a.clip, false);
+      if (!SceneStructureLocked() && !a.clip.empty()) {
+        SameLine();
+        if (media.IsPreviewing()) {
+          if (Button("Stop Preview"))
+            media.StopPreview();
+        } else if (Button("Preview")) {
+          std::string err;
+          if (!media.Preview(a.clip, &err))
+            PushMessage("[WARNING] Cannot play " + a.clip + ": " + err);
+        }
+      }
+      SliderFloat("Volume##audio", &a.volume, 0.0f, 2.0f, "%.2f");
+      record |= IsItemDeactivatedAfterEdit();
+      record |= Checkbox("Loop##audio", &a.loop);
       SameLine();
-      if (Button("Play/Pause")) {
-        sceneRenderer->meshes3d[meshIdx].isPlaying =
-            !sceneRenderer->meshes3d[meshIdx].isPlaying;
-        RecordEditorHistory();
+      record |= Checkbox("Play On Start##audio", &a.playOnStart);
+      record |= Checkbox("3D (spatial)", &a.spatial);
+      if (a.spatial) {
+        DragFloat("Min Distance", &a.minDistance, 0.05f, 0.0f, a.maxDistance,
+                  "%.2f");
+        record |= IsItemDeactivatedAfterEdit();
+        DragFloat("Max Distance", &a.maxDistance, 0.1f, a.minDistance + 0.01f,
+                  1000.0f, "%.1f");
+        record |= IsItemDeactivatedAfterEdit();
+        TextDisabled("Heard from the game camera: full volume inside Min,");
+        TextDisabled("fading to silent at Max, panned left/right.");
       }
+      TextDisabled(".wav/.ogg play everywhere; other formats need FFmpeg");
+      TextDisabled("(not available in Android builds).");
+      if (record)
+        RecordEditorHistory();
+    }
+    if (!keep) {
+      a.enabled = false;
+      RecordEditorHistory();
+    }
+  }
+
+  // Video Player component (if attached)
+  if (meshSelected && sceneRenderer->meshes3d[meshIdx].video.enabled) {
+    auto &mesh = sceneRenderer->meshes3d[meshIdx];
+    auto &v = mesh.video;
+    bool keep = true;
+    if (CollapsingHeader("Video Player", &keep,
+                         ImGuiTreeNodeFlags_DefaultOpen)) {
+      bool record = clipField("videoClip", v.clip, true);
+      if (!ilmeee::MediaSystem::VideoSupported())
+        TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
+                    "This build has no FFmpeg: video cannot play.");
+      record |= Checkbox("Loop##video", &v.loop);
       SameLine();
-      if (Button("Clear")) {
-        sceneRenderer->meshes3d[meshIdx].audioPath = "";
-        sceneRenderer->meshes3d[meshIdx].isPlaying = false;
+      record |= Checkbox("Play On Start##video", &v.playOnStart);
+      record |= Checkbox("Unlit (screen glow)", &v.unlit);
+      SliderFloat("Volume##video", &v.volume, 0.0f, 2.0f, "%.2f");
+      record |= IsItemDeactivatedAfterEdit();
+      const uint32_t surfaces =
+          sceneRenderer->GetMesh3DSubmeshCount((size_t)meshIdx);
+      std::string current =
+          v.surface < 0 ? std::string("All surfaces")
+                        : std::to_string(v.surface) + " " +
+                              sceneRenderer->GetMesh3DSubmeshName(
+                                  (size_t)meshIdx, (uint32_t)v.surface);
+      if (BeginCombo("Surface", current.c_str())) {
+        if (Selectable("All surfaces", v.surface < 0)) {
+          v.surface = -1;
+          record = true;
+        }
+        for (uint32_t s = 0; s < surfaces; ++s) {
+          const std::string label =
+              std::to_string(s) + " " +
+              sceneRenderer->GetMesh3DSubmeshName((size_t)meshIdx, s);
+          if (Selectable(label.c_str(), v.surface == (int)s)) {
+            v.surface = (int)s;
+            record = true;
+          }
+        }
+        EndCombo();
+      }
+      TextDisabled("Stopped: shows the first frame. Play: plays with sound.");
+      if (record)
         RecordEditorHistory();
-      }
-      if (sceneRenderer->meshes3d[meshIdx].isPlaying) {
-        TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Playing...");
-      } else {
-        TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Stopped");
-      }
+    }
+    if (!keep) {
+      v.enabled = false;
+      RecordEditorHistory();
     }
   }
 
@@ -1142,7 +1287,13 @@ void MainWindow::RenderInspectorWindow() {
     }
     if (Selectable("Audio Source")) {
       if (meshSelected) {
-        sceneRenderer->meshes3d[meshIdx].hasAudio = true;
+        sceneRenderer->meshes3d[meshIdx].audio.enabled = true;
+        RecordEditorHistory();
+      }
+    }
+    if (Selectable("Video Player")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].video.enabled = true;
         RecordEditorHistory();
       }
     }
@@ -1240,6 +1391,26 @@ void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
   // Begin floating toolbar
   if (Begin("Scene Toolbar", nullptr, toolbar_flags)) {
     DEBUG_TRACE_PANEL("Scene Toolbar (Reset/Zoom/Grid/Snap)");
+    // Transform tool: which gizmo the selected object shows (keys 1-4).
+    {
+      static const char *kTools[4] = {"Select", "Move", "Rotate", "Scale"};
+      const int cur = (int)sceneRenderer->GetEditMode();
+      for (int k = 0; k < 4; ++k) {
+        if (k > 0)
+          SameLine(0, 2);
+        const bool on = cur == k;
+        if (on)
+          PushStyleColor(ImGuiCol_Button, GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (Button(kTools[k]))
+          sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
+        if (on)
+          PopStyleColor();
+        if (IsItemHovered())
+          SetTooltip("%s tool (%d)%s", kTools[k], k + 1,
+                     k == 0 ? " - drag to move in screen plane"
+                            : " - Ctrl to snap");
+      }
+    }
     // Reset View Button
     if (Button("Reset View")) {
       ::Log("Resetting camera view", Debug::LogLevel::INFO);
@@ -1620,6 +1791,46 @@ void MainWindow::RenderSceneWindow() {
               "Add a Camera to preview the game UI");
       } else {
 
+      // Transform gizmo on the selection + orientation gizmo in the top-right
+      // corner. Run first so a press on a handle never reaches the pick /
+      // free-drag code below.
+      bool gizmoOwnsMouse = false;
+      if (sceneRenderer->HasMesh3D()) {
+        const ImVec2 vpMin = GetItemRectMin();
+        const ImVec2 vpSize = GetItemRectSize();
+        const bool vpFree = IsItemHovered() && !vpIn.rmbDown;
+        // Tool shortcuts (WASD/QE fly the camera, so Unity's QWER can't be
+        // used): 1 Select, 2 Move, 3 Rotate, 4 Scale.
+        if (vpIn.hovered && !io.WantTextInput && transformGizmo.active < 0) {
+          const ImGuiKey toolKeys[4] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3,
+                                        ImGuiKey_4};
+          for (int k = 0; k < 4; ++k)
+            if (IsKeyPressed(toolKeys[k], false))
+              sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
+        }
+        const int sel = SelectedMeshIndex();
+        if (sel >= 0 && !SceneStructureLocked()) {
+          const ilmeee::GizmoResult g = ilmeee::TransformGizmo(
+              *sceneRenderer, (size_t)sel, sceneRenderer->GetEditMode(), vpMin,
+              vpSize, vpFree, transformGizmo);
+          gizmoOwnsMouse |= g.usingMouse;
+          if (g.editFinished)
+            RecordEditorHistory();
+        } else {
+          transformGizmo.active = -1;
+        }
+        const bool flying = vpIn.rmbDown || vpIn.wDown || vpIn.aDown ||
+                            vpIn.sDown || vpIn.dDown || vpIn.qDown ||
+                            vpIn.eDown || (vpIn.hovered && vpIn.scroll != 0.0f);
+        const ilmeee::GizmoResult o = ilmeee::OrientationGizmo(
+            *sceneRenderer, sel, vpMin, vpSize,
+            vpFree && transformGizmo.active < 0, flying, vpIn.deltaTime,
+            orientationGizmo);
+        gizmoOwnsMouse |= o.usingMouse;
+        if (o.editFinished)
+          RecordEditorHistory();
+      }
+
       // Inspect Mode: raycast the cursor against the loaded meshes and
       // register the hit object as a trace region. The hover overlay
       // (rendered at the end of OnRender) will outline the viewport and
@@ -1680,9 +1891,18 @@ void MainWindow::RenderSceneWindow() {
               (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
                ext == ".bmp" || ext == ".tga" || ext == ".gif" ||
                ext == ".psd");
-          const bool isVideo =
-              (ext == ".mp4" || ext == ".mkv" || ext == ".avi" ||
-               ext == ".mov" || ext == ".webm");
+          const bool isVideo = ilmeee::IsVideoClipPath(assetPath);
+          const bool isAudio = ilmeee::IsAudioClipPath(assetPath);
+          // Ground point under the drop (or a few units ahead of the camera).
+          const auto dropPoint = [&]() {
+            glm::vec3 world(0.0f);
+            if (!sceneRenderer->ScreenToGround(lx, ly, world)) {
+              const glm::vec3 f = sceneRenderer->GetCameraForward();
+              world = sceneRenderer->camera3d.position + f * 6.0f;
+              world.y = 0.0f;
+            }
+            return world;
+          };
 
           if (isModel) {
             bool ok = (ext == ".pmx")   ? sceneRenderer->LoadPMXMesh(assetPath)
@@ -1729,9 +1949,48 @@ void MainWindow::RenderSceneWindow() {
                   ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
             }
           } else if (isVideo) {
-            projectHandler.ShowNotification("Video texture",
-                                            "Video-as-texture is coming next",
-                                            ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+            // On a model surface: that surface becomes the screen. On empty
+            // ground: a new Video Screen.
+            const std::string clip =
+                ProjectMediaPath(projectHandler.projectPath, assetPath);
+            int hm = -1, hs = -1;
+            const bool onSurface =
+                sceneRenderer->PickMesh3DSurface(lx, ly, hm, hs) && hm >= 0 &&
+                !sceneRenderer->IsMesh3DLight((size_t)hm) &&
+                !sceneRenderer->IsMesh3DCamera((size_t)hm) &&
+                !sceneRenderer->meshes3d[(size_t)hm].isAudioEmitter;
+            int target = -1;
+            if (onSurface) {
+              target = hm;
+              auto &video = sceneRenderer->meshes3d[(size_t)hm].video;
+              const bool isScreen = sceneRenderer->GetMesh3DPath((size_t)hm) ==
+                                    "<primitive:screen>";
+              video.surface = isScreen ? -1 : hs;
+            } else {
+              target = SpawnSceneObject(6, -1, dropPoint());
+            }
+            if (target >= 0) {
+              auto &video = sceneRenderer->meshes3d[(size_t)target].video;
+              video.enabled = true;
+              video.clip = clip;
+              std::snprintf(objectName, sizeof(objectName), "%s",
+                            sceneRenderer->GetMesh3DName((size_t)target).c_str());
+              selectedUiElement = -1;
+              RecordEditorHistory();
+              projectHandler.ShowNotification(
+                  "Video assigned",
+                  fname + " → " + sceneRenderer->GetMesh3DName((size_t)target),
+                  ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            }
+          } else if (isAudio) {
+            const int idx = SpawnSceneObject(5, -1, dropPoint());
+            if (idx >= 0) {
+              sceneRenderer->meshes3d[(size_t)idx].audio.clip =
+                  ProjectMediaPath(projectHandler.projectPath, assetPath);
+              RecordEditorHistory();
+              projectHandler.ShowNotification("Audio Source added", fname,
+                                              ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            }
           } else {
             projectHandler.ShowNotification("Unsupported",
                                             "Can't drop " + ext + " here",
@@ -1816,7 +2075,8 @@ void MainWindow::RenderSceneWindow() {
       // cursor. Populates the Inspector Name field (which drives the
       // Hierarchy highlight) and records the hit surface so the Inspector
       // can target it for texturing.
-      if (IsItemClicked(ImGuiMouseButton_Left) && sceneRenderer->HasMesh3D()) {
+      if (!gizmoOwnsMouse && IsItemClicked(ImGuiMouseButton_Left) &&
+          sceneRenderer->HasMesh3D()) {
         const ImVec2 pickMin = GetItemRectMin();
         ImVec2 mp = GetMousePos();
         int hitMesh = -1, hitSurface = -1;
@@ -1828,7 +2088,8 @@ void MainWindow::RenderSceneWindow() {
           selectedSurface = hitSurface;
         }
       }
-      // LMB drag → move the currently-selected mesh in screen plane.
+      // LMB drag → move the currently-selected mesh in screen plane. Only
+      // in the Select tool; Move/Rotate/Scale go through the gizmo.
       int selIdx = -1;
       for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
         if (sceneRenderer->GetMesh3DName(i) == objectName) {
@@ -1836,7 +2097,9 @@ void MainWindow::RenderSceneWindow() {
           break;
         }
       }
-      const bool dragging = IsItemHovered() &&
+      const bool dragging = IsItemHovered() && !gizmoOwnsMouse &&
+                            sceneRenderer->GetEditMode() ==
+                                SceneRenderer::EditMode::SELECT &&
                             IsMouseDragging(ImGuiMouseButton_Left) &&
                             !IsMouseDown(ImGuiMouseButton_Right) && selIdx >= 0 &&
                             !SceneStructureLocked();
@@ -1898,7 +2161,7 @@ void MainWindow::RenderSceneWindow() {
             }
             SpawnSceneObject(kind, -1, world);
           };
-          for (int k = 0; k < 5; ++k)
+          for (int k = 0; k < kSpawnObjectCount; ++k)
             if (MenuItem(kSpawnNames[k]))
               spawn(k);
           EndMenu();
@@ -2834,8 +3097,12 @@ void MainWindow::Save3DScene() {
     e.movementScript = mesh.movementScript;
     e.movementSpeed = mesh.movementSpeed;
     e.movementRig = mesh.movementRig;
+    e.audio = mesh.audio;
+    e.video = mesh.video;
 
-    if (sceneRenderer->IsMesh3DLight(i)) {
+    if (mesh.isAudioEmitter) {
+      e.kind = ilmeee::PrimitiveKind::AudioSource;
+    } else if (sceneRenderer->IsMesh3DLight(i)) {
       e.kind = ilmeee::PrimitiveKind::Light;
       e.lightGamma = sceneRenderer->GetMesh3DLightGamma(i);
       e.lightColor = sceneRenderer->GetMesh3DLightColor(i);
@@ -2859,6 +3126,8 @@ void MainWindow::Save3DScene() {
           e.kind = ilmeee::PrimitiveKind::Sphere;
         else if (path.find("plane") != std::string::npos)
           e.kind = ilmeee::PrimitiveKind::Plane;
+        else if (path.find("screen") != std::string::npos)
+          e.kind = ilmeee::PrimitiveKind::Screen;
         else
           e.kind = ilmeee::PrimitiveKind::Cube;
       } else if (path.empty()) {

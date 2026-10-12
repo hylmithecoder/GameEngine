@@ -28,6 +28,11 @@
 //   -- v1.7 then int32 rigCamera (entity index, -1 = Game view camera),
 //      uint32 cameraStyle, float32 distance, float32 height,
 //      string moveJoystick, string lookJoystick; UiJoystick entities --
+//   -- v1.8 then Audio Source: uint32 enabled, string clip, float32 volume,
+//      uint32 flags (1 loop, 2 playOnStart, 4 spatial), float32 minDistance,
+//      float32 maxDistance; Video Player: uint32 enabled, string clip,
+//      uint32 flags (1 loop, 2 playOnStart, 4 unlit), float32 volume,
+//      int32 surface; AudioSource / Screen entities --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -37,12 +42,18 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
 
 namespace ilmeee {
+
+// Newest minor version this code reads and writes. A newer file is refused:
+// its extra per-entity fields would be misread as the next entity (garbage
+// counts → huge allocations), e.g. an old Android player with a new scene.
+constexpr uint16_t kSceneFormatMinor = 8;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -57,6 +68,8 @@ enum class PrimitiveKind : uint8_t {
   UiImage = 9,
   UiButton = 10,
   UiJoystick = 11,
+  AudioSource = 12, // editor-only marker + Audio Source component (v1.8)
+  Screen = 13,      // 16:9 video screen quad (v1.8)
 };
 
 inline bool IsUiElementKind(PrimitiveKind kind) {
@@ -108,6 +121,9 @@ struct SceneEntity {
   float movementSpeed = 3.0f;
   // v1.7 camera rig + joystick links; rig.camera is an entity index.
   MovementRig movementRig;
+  // v1.8 media components (any entity may carry them).
+  AudioSourceComponent audio;
+  VideoPlayerComponent video;
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
   // child elements use them as their displayed size.
@@ -192,7 +208,7 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
-  detail::WriteU16(f, 7); // minor
+  detail::WriteU16(f, kSceneFormatMinor); // minor
   detail::WriteU32(f, (uint32_t)scene.entities.size());
   for (const auto &e : scene.entities) {
     detail::WriteString(f, e.name);
@@ -253,6 +269,22 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteF32(f, e.movementRig.height);
     detail::WriteString(f, e.movementRig.moveJoystick);
     detail::WriteString(f, e.movementRig.lookJoystick);
+    // Version 1.8: media components.
+    detail::WriteU32(f, e.audio.enabled ? 1u : 0u);
+    detail::WriteString(f, e.audio.clip);
+    detail::WriteF32(f, e.audio.volume);
+    detail::WriteU32(f, (e.audio.loop ? 1u : 0u) |
+                            (e.audio.playOnStart ? 2u : 0u) |
+                            (e.audio.spatial ? 4u : 0u));
+    detail::WriteF32(f, e.audio.minDistance);
+    detail::WriteF32(f, e.audio.maxDistance);
+    detail::WriteU32(f, e.video.enabled ? 1u : 0u);
+    detail::WriteString(f, e.video.clip);
+    detail::WriteU32(f, (e.video.loop ? 1u : 0u) |
+                            (e.video.playOnStart ? 2u : 0u) |
+                            (e.video.unlit ? 4u : 0u));
+    detail::WriteF32(f, e.video.volume);
+    detail::WriteU32(f, (uint32_t)e.video.surface);
   }
 
   // Version 1.4: environment
@@ -273,8 +305,8 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
   uint16_t major = 0, minor = 0;
   if (!detail::ReadU16(f, major) || !detail::ReadU16(f, minor))
     return false;
-  if (major != 1)
-    return false; // v1 only for now
+  if (major != 1 || minor > kSceneFormatMinor)
+    return false; // v1 only; newer minors need a newer engine
   uint32_t count = 0;
   if (!detail::ReadU32(f, count))
     return false;
@@ -382,6 +414,25 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       e.movementRig.camera = (int32_t)camera;
       e.movementRig.style = style <= (uint32_t)CameraStyle::TopDown
                                 ? (CameraStyle)style : CameraStyle::None;
+    }
+    if (minor >= 8) {
+      uint32_t aOn = 0, aFlags = 0, vOn = 0, vFlags = 0, surface = 0;
+      if (!detail::ReadU32(f, aOn) || !detail::ReadString(f, e.audio.clip) ||
+          !detail::ReadF32(f, e.audio.volume) || !detail::ReadU32(f, aFlags) ||
+          !detail::ReadF32(f, e.audio.minDistance) ||
+          !detail::ReadF32(f, e.audio.maxDistance) ||
+          !detail::ReadU32(f, vOn) || !detail::ReadString(f, e.video.clip) ||
+          !detail::ReadU32(f, vFlags) || !detail::ReadF32(f, e.video.volume) ||
+          !detail::ReadU32(f, surface)) return false;
+      e.audio.enabled = aOn != 0;
+      e.audio.loop = (aFlags & 1u) != 0;
+      e.audio.playOnStart = (aFlags & 2u) != 0;
+      e.audio.spatial = (aFlags & 4u) != 0;
+      e.video.enabled = vOn != 0;
+      e.video.loop = (vFlags & 1u) != 0;
+      e.video.playOnStart = (vFlags & 2u) != 0;
+      e.video.unlit = (vFlags & 4u) != 0;
+      e.video.surface = (int32_t)surface;
     }
     out.entities.push_back(std::move(e));
   }

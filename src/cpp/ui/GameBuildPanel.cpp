@@ -72,7 +72,8 @@ if [ "$("$ADB" get-state 2>/dev/null)" != "device" ]; then
   echo "No Android device found. Connect a phone with USB debugging enabled (check: adb devices)."
   exit 1
 fi
-echo "Installing $(basename "$apk") on $("$ADB" shell getprop ro.product.model | tr -d '') ..."
+echo "Installing $(basename "$apk") on $("$ADB" shell getprop ro.product.model | tr -d '
+') ..."
 "$ADB" install -r "$apk" || exit 1
 "$ADB" logcat -c
 "$ADB" shell am start -n "$app/$activity" || exit 1
@@ -153,6 +154,8 @@ void MainWindow::StartGameBuild(bool runWhenDone) {
   ilmeee::GameBuildOptions options;
   options.target = gameBuildTarget;
   options.projectRoot = project;
+  options.includeUnusedAssets = gameBuildIncludeUnused;
+  options.androidMaxVideoHeight = gameBuildAndroidVideoHeight;
   if (gameBuildTarget == ilmeee::BuildTarget::Android) {
     options.androidPlayerDir = FindEngineDir("build-android");
     options.androidTemplateDir = FindEngineDir(fs::path("android") / "template");
@@ -360,6 +363,11 @@ void MainWindow::RenderBuildMenu() {
     SetTooltip(canBundle ? "Copy the libraries the game needs into it, so the "
                            "folder runs on other Linux machines too."
                          : "scripts/bundle-deps.sh was not found.");
+  MenuItem("Include unused assets", nullptr, &gameBuildIncludeUnused, !busy);
+  if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    SetTooltip("Off: the game gets only the files its scenes use (models with "
+               "their textures, images, audio, video).\nOn: the whole "
+               "assets/ folder, e.g. for files a script loads by name.");
   const fs::path folder =
       hasProject ? DefaultBuildDir(project, gameBuildTarget) : fs::path();
   if (MenuItem("Open Build Folder", nullptr, false,
@@ -404,7 +412,26 @@ void MainWindow::RenderBuildTab() {
   if (gameBuildTarget == ilmeee::BuildTarget::Linux) {
     SameLine();
     Checkbox("Portable", &gameBuildPortable);
+  } else {
+    SameLine();
+    static const int kHeights[] = {720, 1080, 0};
+    static const char *kLabels[] = {"Video 720p", "Video 1080p",
+                                    "Video original"};
+    int sel = gameBuildAndroidVideoHeight == 1080 ? 1
+              : gameBuildAndroidVideoHeight == 0  ? 2
+                                                  : 0;
+    SetNextItemWidth(130);
+    if (Combo("##PhoneVideo", &sel, kLabels, IM_ARRAYSIZE(kLabels)))
+      gameBuildAndroidVideoHeight = kHeights[sel];
+    if (IsItemHovered())
+      SetTooltip("Videos taller than this, or not H.264, are re-encoded to "
+                 "H.264 for the APK\n(cached, so only the first build is "
+                 "slow). Your project files are not changed.");
   }
+  SameLine();
+  Checkbox("Include unused assets", &gameBuildIncludeUnused);
+  if (IsItemHovered())
+    SetTooltip("Off: only the files the scenes use. On: all of assets/.");
   SameLine();
   if (busy)
     TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Building...");

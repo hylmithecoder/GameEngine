@@ -7,6 +7,7 @@
 #include "../include/core_engine/IlmeeeScene.hpp"
 #include "../vendor/nlohmann/json.hpp"
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 
 using namespace ilmeee;
@@ -50,10 +51,22 @@ int main() {
         "\"text\":\"HP: 100\"}]}");
   Write(project / "assets/models/inside.obj", "o inside");
   Write(project / "assets/logo.png", "png");
-  Write(project / "extra/thing.obj", "o thing");
+  Write(project / "extra/thing.obj", "mtllib thing.mtl\no thing");
   Write(project / "extra/thing.mtl", "newmtl m");
-  Write(outside / "hero/hero.obj", "o hero");
+  Write(project / "extra/unused.obj", "o unused");
+  Write(outside / "hero/hero.obj", "mtllib hero.mtl\no hero");
+  Write(outside / "hero/hero.mtl", "newmtl m\nmap_Kd -s 1 1 1 hero_tex.png");
   Write(outside / "hero/hero_tex.png", "png");
+  Write(outside / "hero/not_used.png", "png");
+  // Media and a model folder with textures it does not use.
+  Write(project / "assets/audio/rain.ogg", "ogg");
+  Write(project / "assets/audio/unused.wav", "wav");
+  Write(project / "assets/videos/intro.mp4", "mp4");
+  Write(project / "assets/videos/huge_unused.mp4", std::string(4096, 'x'));
+  Write(project / "assets/models/inside.mtl", "map_Kd tex/inside.png");
+  Write(project / "assets/models/tex/inside.png", "png");
+  Write(project / "assets/models/tex/other.png", "png");
+  Write(project / "assets/models/inside.obj", "mtllib inside.mtl\no inside");
   Write(outside / "skin.png", "png");
   Write(project / "model_at_root.obj", "o root");
 
@@ -83,6 +96,18 @@ int main() {
   uiImage.parent = 6;
   uiImage.uiImagePath = "assets/logo.png";
   scene.entities.push_back(uiImage);
+  SceneEntity speaker;
+  speaker.name = "Speaker";
+  speaker.kind = PrimitiveKind::AudioSource;
+  speaker.audio.enabled = true;
+  speaker.audio.clip = "assets/audio/rain.ogg";
+  scene.entities.push_back(speaker);
+  SceneEntity tv;
+  tv.name = "TV";
+  tv.kind = PrimitiveKind::Screen;
+  tv.video.enabled = true;
+  tv.video.clip = "assets/videos/intro.mp4";
+  scene.entities.push_back(tv);
   fs::create_directories(project / "scenes");
   CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
 
@@ -109,7 +134,18 @@ int main() {
   CHECK(fs::read_symlink(out / "My_First_Project") == "bin/My_First_Project");
   CHECK((fs::status(out / "bin/My_First_Project").permissions() &
          fs::perms::owner_exec) != fs::perms::none);
-  CHECK(fs::exists(out / "assets/readme.txt"));
+  // Only what the scenes use: no readme, no unused clips or textures.
+  CHECK(!fs::exists(out / "assets/readme.txt"));
+  CHECK(fs::exists(out / "assets/audio/rain.ogg"));
+  CHECK(!fs::exists(out / "assets/audio/unused.wav"));
+  CHECK(fs::exists(out / "assets/videos/intro.mp4"));
+  CHECK(!fs::exists(out / "assets/videos/huge_unused.mp4"));
+  CHECK(fs::exists(out / "assets/models/inside.mtl"));
+  CHECK(fs::exists(out / "assets/models/tex/inside.png"));
+  CHECK(!fs::exists(out / "assets/models/tex/other.png"));
+  // readme.txt, unused.wav, huge_unused.mp4, tex/other.png
+  CHECK(r.unusedFilesSkipped == 4);
+  CHECK(r.unusedBytesSkipped > 4096);
   {
     std::ifstream in(out / "assets/ui/main.json");
     CHECK(in.good());
@@ -150,10 +186,13 @@ int main() {
   CHECK(present(built.entities[1].externalPath));
   CHECK(present(built.entities[2].externalPath));
   CHECK(built.entities[2].externalPath == "assets/external/hero/hero.obj");
-  CHECK(fs::exists(out / "assets/external/hero/hero_tex.png")); // its folder
+  CHECK(fs::exists(out / "assets/external/hero/hero_tex.png")); // via .mtl
+  CHECK(fs::exists(out / "assets/external/hero/hero.mtl"));
+  CHECK(!fs::exists(out / "assets/external/hero/not_used.png"));
   CHECK(present(built.entities[2].surfaceTextures[0].texturePath));
   CHECK(built.entities[3].externalPath == "extra/thing.obj");
   CHECK(fs::exists(out / "extra/thing.mtl"));
+  CHECK(!fs::exists(out / "extra/unused.obj"));
   CHECK(present(built.entities[5].externalPath));
   CHECK(built.entities[4].externalPath == "assets/models/missing.obj");
   CHECK(r.missingReferences == 1);
@@ -164,6 +203,19 @@ int main() {
   r = BuildGame(o, logger);
   CHECK(r.ok);
   CHECK(!fs::exists(out / "stale.txt"));
+
+  // ---- 2b. "Include unused assets" ships all of assets/ ------------------
+  {
+    GameBuildOptions all = o;
+    all.includeUnusedAssets = true;
+    r = BuildGame(all, logger);
+    CHECK(r.ok);
+    CHECK(fs::exists(out / "assets/readme.txt"));
+    CHECK(fs::exists(out / "assets/videos/huge_unused.mp4"));
+    CHECK(r.unusedFilesSkipped == 0);
+    r = BuildGame(o, logger); // back to the lean build for what follows
+    CHECK(r.ok);
+  }
 
   // ---- 3. safety: never wipe something that is not a build ---------------
   const fs::path precious = tmp / "precious";
@@ -241,6 +293,62 @@ int main() {
 
     // Rebuilding replaces the previous Android build.
     CHECK(BuildGame(a, logger).ok);
+
+    // Phone video: an unreadable clip ships unchanged...
+    setenv("HOME", (tmp / "home").c_str(), 1); // isolate ~/.ilmeeeengine
+    r = BuildGame(a, logger);
+    CHECK(r.ok && r.videosTranscoded == 0);
+    CHECK(readAll(game / "assets/videos/intro.mp4") == "mp4");
+    // ...a real 1080p clip becomes 720p H.264, cached for the next build.
+    if (std::system("ffmpeg -version >/dev/null 2>&1") == 0) {
+      const fs::path clip = project / "assets/videos/intro.mp4";
+      const std::string gen =
+          "ffmpeg -nostdin -y -v error -f lavfi -i testsrc=size=1920x1080:"
+          "rate=24 -f lavfi -i sine -t 1 -c:v libx264 -pix_fmt yuv420p "
+          "-c:a aac '" + clip.string() + "'";
+      CHECK(std::system(gen.c_str()) == 0);
+      r = BuildGame(a, logger);
+      CHECK(r.ok && r.videosTranscoded == 1);
+      auto probe = [](const fs::path &f) {
+        std::string cmd = "ffprobe -v error -select_streams v:0 -show_entries "
+                          "stream=codec_name,height -of csv=p=0 '" +
+                          f.string() + "'";
+        std::string out;
+        if (FILE *pp = popen(cmd.c_str(), "r")) {
+          char buf[128];
+          while (std::fgets(buf, sizeof buf, pp)) out += buf;
+          pclose(pp);
+        }
+        return out;
+      };
+      CHECK(probe(game / "assets/videos/intro.mp4") == "h264,720\n");
+      CHECK(probe(clip) == "h264,1080\n"); // the project keeps its file
+      log.clear();
+      r = BuildGame(a, logger);
+      CHECK(r.ok && r.videosTranscoded == 1);
+      bool fromCache = false;
+      for (const auto &l : log)
+        fromCache |= l.find("from cache") != std::string::npos;
+      CHECK(fromCache);
+      // A clip that already suits phones is shipped as-is.
+      const std::string gen720 =
+          "ffmpeg -nostdin -y -v error -f lavfi -i testsrc=size=1280x720:"
+          "rate=24 -t 1 -c:v libx264 -pix_fmt yuv420p '" + clip.string() + "'";
+      CHECK(std::system(gen720.c_str()) == 0);
+      r = BuildGame(a, logger);
+      CHECK(r.ok && r.videosTranscoded == 0);
+      CHECK(fs::file_size(game / "assets/videos/intro.mp4") ==
+            fs::file_size(clip));
+      CHECK(std::system(gen.c_str()) == 0); // back to the 1080p clip
+      // "Video original" ships it untouched.
+      GameBuildOptions orig = a;
+      orig.androidMaxVideoHeight = 0;
+      r = BuildGame(orig, logger);
+      CHECK(r.ok && r.videosTranscoded == 0);
+      CHECK(probe(game / "assets/videos/intro.mp4") == "h264,1080\n");
+    } else {
+      std::printf("  (ffmpeg not found: skipping the video re-encode check)\n");
+    }
 
     GameBuildOptions badId = a;
     badId.applicationId = "NoDots";

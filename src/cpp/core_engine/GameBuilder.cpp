@@ -1,5 +1,7 @@
 #include "../../../include/core_engine/GameBuilder.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/ModelDependencies.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../vendor/nlohmann/json.hpp"
 #include <algorithm>
 #include <cctype>
@@ -72,12 +74,44 @@ public:
   void CopyFile(const fs::path &src, const fs::path &dst) {
     fs::create_directories(dst.parent_path());
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
+    copiedTargets_.insert(dst.lexically_normal());
     ++r_.filesCopied;
     std::error_code ec;
     r_.bytesCopied += fs::file_size(dst, ec);
     if (r_.filesCopied % 500 == 0)
       Say("  ... " + std::to_string(r_.filesCopied) + " files (" +
           HumanBytes(r_.bytesCopied) + ")");
+  }
+
+  // CopyFile, once per destination (scenes share models and textures).
+  void CopyOnce(const fs::path &src, const fs::path &dst) {
+    if (!copiedTargets_.count(dst.lexically_normal()))
+      CopyFile(src, dst);
+  }
+
+  // Copies a model and only the files it loads (see ModelDependencies) to
+  // <game>/<dstRel>. False if the model can't be parsed: the caller then
+  // falls back to copying its folder.
+  bool CopyModel(const fs::path &src, const fs::path &dstRel) {
+    std::vector<ModelDependency> deps;
+    std::string err;
+    if (!ListModelDependencies(src, deps, &err)) {
+      Say("  ! cannot read " + src.filename().string() + " (" + err +
+          "); copying its folder instead");
+      return false;
+    }
+    CopyOnce(src, gameDir_ / dstRel);
+    const fs::path dstDir = (gameDir_ / dstRel).parent_path();
+    for (const ModelDependency &d : deps) {
+      const fs::path dst = (dstDir / d.relative).lexically_normal();
+      if (!IsWithin(dst, gameDir_)) {
+        Say("  ! " + d.relative.generic_string() + " (used by " +
+            src.filename().string() + ") lies outside the game; skipped");
+        continue;
+      }
+      CopyOnce(d.source, dst);
+    }
+    return true;
   }
 
   void CopyTree(const fs::path &src, const fs::path &dst) {
@@ -125,7 +159,10 @@ public:
 
   // Makes a scene reference valid inside the built game and returns the path
   // to store in its scene file (relative to the game root).
-  std::string Relocate(const std::string &ref, bool isModel) {
+  // `externalDir`: where a lone file from outside the project is gathered
+  // (assets/external/<externalDir>/).
+  std::string Relocate(const std::string &ref, bool isModel,
+                       const char *externalDir = "textures") {
     if (ref.empty())
       return ref;
     fs::path p(ref);
@@ -136,18 +173,35 @@ public:
       Say("  ! missing file referenced by the scene: " + ref);
       return ref;
     }
-    if (IsWithin(abs, assets_)) // copied with assets/ already
-      return abs.lexically_relative(root_).generic_string();
+    if (IsWithin(abs, assets_)) {
+      const fs::path rel = abs.lexically_relative(root_);
+      if (o_.includeUnusedAssets) // copied with assets/ already
+        return rel.generic_string();
+      if (!isModel) {
+        CopyOnce(abs, gameDir_ / rel);
+      } else if (!CopyModel(abs, rel)) {
+        // Unreadable model: its folder, unless that is assets/ itself.
+        if (abs.parent_path() != assets_ && CanCopyWhole(abs.parent_path())) {
+          if (copiedDirs_.insert({abs.parent_path(), rel.parent_path()}).second)
+            CopyTree(abs.parent_path(), gameDir_ / rel.parent_path());
+        } else {
+          CopyOnce(abs, gameDir_ / rel);
+        }
+      }
+      return rel.generic_string();
+    }
 
     ++r_.relocatedReferences;
     if (IsWithin(abs, root_)) {
       // In the project but outside assets/: same relative place in the game.
       fs::path rel = abs.lexically_relative(root_);
-      if (isModel && CanCopyWhole(abs.parent_path())) {
+      if (isModel && CopyModel(abs, rel)) {
+        // model + the files it loads
+      } else if (isModel && CanCopyWhole(abs.parent_path())) {
         if (copiedDirs_.insert({abs.parent_path(), rel.parent_path()}).second)
           CopyTree(abs.parent_path(), gameDir_ / rel.parent_path());
       } else {
-        CopyFile(abs, gameDir_ / rel);
+        CopyOnce(abs, gameDir_ / rel);
       }
       return rel.generic_string();
     }
@@ -163,7 +217,9 @@ public:
         dstDir = fs::path("assets/external") /
                  UniqueExternalName(srcDir.filename().string());
         copiedDirs_[srcDir] = dstDir;
-        if (CanCopyWhole(srcDir)) {
+        if (CopyModel(abs, dstDir / abs.filename())) {
+          Say("  + external model " + abs.string());
+        } else if (CanCopyWhole(srcDir)) {
           Say("  + external model folder " + srcDir.string());
           CopyTree(srcDir, gameDir_ / dstDir);
         } else {
@@ -182,9 +238,9 @@ public:
     auto found = copiedFiles_.find(abs);
     if (found != copiedFiles_.end())
       return found->second.generic_string();
-    fs::path dst = fs::path("assets/external/textures") /
+    fs::path dst = fs::path("assets/external") / externalDir /
                    UniqueExternalName(abs.filename().string());
-    Say("  + external texture " + abs.string());
+    Say(std::string("  + external ") + externalDir + " " + abs.string());
     CopyFile(abs, gameDir_ / dst);
     copiedFiles_[abs] = dst;
     return dst.generic_string();
@@ -215,6 +271,16 @@ public:
           t.texturePath = Relocate(t.texturePath, false);
         if (e.kind == PrimitiveKind::UiImage && !e.uiImagePath.empty())
           e.uiImagePath = Relocate(e.uiImagePath, false);
+        if (!e.audio.clip.empty())
+          e.audio.clip = Relocate(e.audio.clip, false, "audio");
+        if (!e.video.clip.empty()) {
+          const fs::path original = Canonical(
+              fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)
+                                                   : root_ / e.video.clip);
+          e.video.clip = Relocate(e.video.clip, false, "video");
+          if (o_.target == BuildTarget::Android && o_.androidMaxVideoHeight > 0)
+            PrepareVideoForPhone(original, gameDir_ / e.video.clip);
+        }
       }
       fs::create_directories(dst.parent_path());
       if (!SaveScene(dst.string(), scene))
@@ -223,6 +289,174 @@ public:
       Say("  scene " + rel.generic_string() + " (" +
           std::to_string(scene.entities.size()) + " objects)");
     }
+  }
+
+  // What stayed behind in assets/: reported so a missing file is easy to
+  // spot (e.g. one a script loads by name).
+  void CountUnusedAssets() {
+    std::error_code ec;
+    if (!fs::is_directory(assets_, ec))
+      return;
+    for (auto it = fs::recursive_directory_iterator(
+             assets_, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+      if (!it->is_regular_file(ec))
+        continue;
+      const fs::path dst =
+          (gameDir_ / it->path().lexically_relative(root_)).lexically_normal();
+      if (copiedTargets_.count(dst) || IsWithin(it->path(), out_) ||
+          IsWithin(dst, gameDir_ / "assets" / "shaders"))
+        continue;
+      ++r_.unusedFilesSkipped;
+      r_.unusedBytesSkipped += it->file_size(ec);
+    }
+  }
+
+  // ---- Android video re-encoding -----------------------------------------
+
+  // Runs a command and hands every output line (\r or \n separated, so
+  // ffmpeg's progress counts) to `onLine`. True on exit status 0.
+  bool RunLines(const std::string &command,
+                const std::function<void(const std::string &)> &onLine) {
+    FILE *pipe = popen((command + " 2>&1").c_str(), "r");
+    if (!pipe)
+      return false;
+    std::string line;
+    for (int c; (c = std::fgetc(pipe)) != EOF;) {
+      if (c == '\n' || c == '\r') {
+        if (!line.empty())
+          onLine(line);
+        line.clear();
+      } else {
+        line += (char)c;
+      }
+    }
+    if (!line.empty())
+      onLine(line);
+    const int status = pclose(pipe);
+    return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  }
+
+  struct VideoInfo {
+    std::string codec, pixFmt;
+    int height = 0;
+  };
+  // First video stream of `src`; false if ffprobe can't read it. Parsed as
+  // key=value: ffprobe orders fields its own way, not as requested.
+  bool ProbeVideo(const fs::path &src, VideoInfo &info) {
+    RunLines(o_.ffprobeCommand +
+                 " -v error -select_streams v:0 -show_entries "
+                 "stream=codec_name,pix_fmt,height -of "
+                 "default=noprint_wrappers=1 " +
+                 ShellQuote(src.string()),
+             [&](const std::string &l) {
+               const size_t eq = l.find('=');
+               if (eq == std::string::npos)
+                 return;
+               const std::string key = l.substr(0, eq), value = l.substr(eq + 1);
+               if (key == "codec_name")
+                 info.codec = value;
+               else if (key == "pix_fmt")
+                 info.pixFmt = value;
+               else if (key == "height")
+                 info.height = std::atoi(value.c_str());
+             });
+    return !info.codec.empty() && info.height > 0;
+  }
+
+  // Replaces the copied clip at `dst` with a phone-friendly encode when the
+  // original is not 8-bit H.264 or is taller than androidMaxVideoHeight.
+  // Encodes are cached by source path, size, mtime and target height.
+  void PrepareVideoForPhone(const fs::path &src, const fs::path &dst) {
+    std::error_code ec;
+    if (!fs::is_regular_file(src, ec) || !fs::exists(dst, ec) ||
+        !preparedVideos_.insert(dst.lexically_normal()).second)
+      return;
+    VideoInfo vi;
+    if (!ProbeVideo(src, vi)) {
+      Say("  ! cannot inspect " + src.filename().string() + " (is " +
+          o_.ffprobeCommand + " installed?); shipping it unchanged");
+      return;
+    }
+    const std::string &codec = vi.codec, &pixFmt = vi.pixFmt;
+    const int height = vi.height;
+    const int maxH = o_.androidMaxVideoHeight;
+    if (codec == "h264" && pixFmt == "yuv420p" && height <= maxH) {
+      Say("  video " + src.filename().string() + " (" + codec + " " +
+          std::to_string(height) + "p) is fine for phones");
+      return;
+    }
+
+    // Cache key: FNV-1a over what defines the output.
+    const auto mtime = fs::last_write_time(src, ec).time_since_epoch().count();
+    const std::string keySrc = src.string() + "|" +
+                               std::to_string(fs::file_size(src, ec)) + "|" +
+                               std::to_string((long long)mtime) + "|" +
+                               std::to_string(maxH) + "|h264-aac-v1";
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : keySrc)
+      h = (h ^ c) * 1099511628211ull;
+    char key[32];
+    std::snprintf(key, sizeof key, "%016llx", (unsigned long long)h);
+    const fs::path cacheDir = UserDataRoot() / "videocache";
+    const fs::path cached = cacheDir / (std::string(key) + ".mp4");
+
+    if (!fs::is_regular_file(cached, ec)) {
+      fs::create_directories(cacheDir, ec);
+      const fs::path tmp = cacheDir / (std::string(key) + ".part.mp4");
+      Say("  video " + src.filename().string() + " (" + codec + " " +
+          pixFmt + " " + std::to_string(height) + "p) -> H.264 " +
+          std::to_string(std::min(height, maxH)) +
+          "p for phones (first time only, may take a while) ...");
+      // Even width, at most maxH tall, never upscaled; sound to AAC when
+      // present (the '?' keeps silent videos working).
+      const std::string cmd =
+          o_.ffmpegCommand + " -nostdin -y -v error -stats -i " +
+          ShellQuote(src.string()) +
+          " -map 0:v:0 -map 0:a:0? -vf " +
+          ShellQuote("scale=-2:'min(" + std::to_string(maxH) + ",ih)'") +
+          " -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p"
+          " -profile:v high -c:a aac -b:a 128k -ac 2 -movflags +faststart " +
+          ShellQuote(tmp.string());
+      auto last = std::chrono::steady_clock::now();
+      std::string lastErr;
+      const bool ok = RunLines(cmd, [&](const std::string &l) {
+        if (l.rfind("frame=", 0) != 0) { // not a progress line
+          lastErr = l;
+          return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(5)) {
+          last = now;
+          Say("    " + l);
+        }
+      });
+      if (!ok || !fs::is_regular_file(tmp, ec)) {
+        fs::remove(tmp, ec);
+        Say("  ! re-encoding failed" +
+            (lastErr.empty() ? std::string() : " (" + lastErr + ")") +
+            "; shipping " + src.filename().string() + " unchanged");
+        return;
+      }
+      fs::rename(tmp, cached, ec);
+      if (ec) {
+        Say("  ! cannot store the encoded video in " + cacheDir.string());
+        return;
+      }
+    } else {
+      Say("  video " + src.filename().string() +
+          " -> phone version from cache");
+    }
+    const auto before = fs::file_size(dst, ec);
+    fs::copy_file(cached, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+      Say("  ! cannot copy the encoded video: " + ec.message());
+      return;
+    }
+    const auto after = fs::file_size(dst, ec);
+    r_.bytesCopied = r_.bytesCopied - before + after;
+    ++r_.videosTranscoded;
+    Say("    " + HumanBytes(before) + " -> " + HumanBytes(after));
   }
 
   bool Bundle() {
@@ -457,12 +691,21 @@ public:
     }
 
     // ---- data ---------------------------------------------------------
-    if (fs::is_directory(assets_, ec)) {
-      Say("Copying assets/ ...");
+    if (o_.includeUnusedAssets && fs::is_directory(assets_, ec)) {
+      Say("Copying assets/ (all of it) ...");
       CopyTree(assets_, gameDir_ / "assets");
+    } else {
+      Say("Copying only the assets the scenes use ...");
+      // Canvas of projects from before scenes stored the UI (read by the
+      // player when the scene has none).
+      const fs::path legacyUi = assets_ / "ui" / "main.json";
+      if (fs::is_regular_file(legacyUi, ec))
+        CopyOnce(legacyUi, gameDir_ / "assets" / "ui" / "main.json");
     }
     Say("Writing scenes/ ...");
     CopyScenes();
+    if (!o_.includeUnusedAssets)
+      CountUnusedAssets();
 
     fs::path shaderDst = gameDir_ / "assets" / "shaders" / "vulkan";
     if (fs::exists(shaderDst, ec))
@@ -521,6 +764,11 @@ public:
     r_.ok = true;
     Say("Done: " + std::to_string(r_.filesCopied) + " files, " +
         HumanBytes(r_.bytesCopied) + " -> " + out.string());
+    if (r_.unusedFilesSkipped)
+      Say("Left out " + std::to_string(r_.unusedFilesSkipped) +
+          " unused file(s) from assets/ (" +
+          HumanBytes(r_.unusedBytesSkipped) +
+          "); enable \"Include unused assets\" to ship everything");
     if (r_.missingReferences)
       Say("Warning: " + std::to_string(r_.missingReferences) +
           " referenced file(s) were missing; those objects will not appear");
@@ -548,6 +796,8 @@ private:
   fs::path gameDir_; // where the game folder goes: stage_, or APK assets
   std::map<fs::path, fs::path> copiedDirs_;
   std::map<fs::path, fs::path> copiedFiles_;
+  std::set<fs::path> copiedTargets_; // destinations already written
+  std::set<fs::path> preparedVideos_; // Android: videos already handled
   std::set<std::string> usedExternalNames_;
 };
 
