@@ -3,6 +3,7 @@
 #include "../core_engine/Discordrich.hpp"
 #include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/net/WsTransport.hpp"
+#include "../core_engine/net/McpServer.hpp"
 #include "MainWindow.hpp"
 #include <atomic>
 #include <functional>
@@ -25,6 +26,7 @@ private:
   // any later tool) connects to it; see core_engine/net/Protocol.hpp.
   std::unique_ptr<ilmeee::net::WsServerTransport> ipcTransport;
   std::unique_ptr<ilmeee::net::MessageBus> ipcBus;
+  std::unique_ptr<ilmeee::net::McpServer> mcpServer;
   std::string ipcToken;
 
   MainWindow *window;
@@ -53,6 +55,8 @@ public:
   }
   bool Initialize();
   bool LaunchEngine();
+  bool StartMcpServer();
+  void SetMcpPort(int port) { mcpPort = port; }
   void Shutdown();
 
   // Set the project path before Initialize() so the editor opens
@@ -70,4 +74,5 @@ public:
 private:
   std::string projectPath;
   bool debug2D = false;
+  int mcpPort = 0;
 };

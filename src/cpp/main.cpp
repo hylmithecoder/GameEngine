@@ -210,10 +210,19 @@ int main(int argc, char *argv[]) {
   //       Only meaningful in standalone debug mode (no --project).
   //       When true, the debug fallback loads a 2D sprite scene
   //       (assets/testimage.png) instead of the default 3D OBJ.
+  //   --mcp [--mcp-port 9220]  Enable local MCP in the editor.
   std::string cliProjectPath;
   bool cliDebug2D = false;
   auto parseBoolFlag = [](const std::string &v) {
     return v == "true" || v == "1" || v == "yes" || v == "on";
+  };
+  int cliMcpPort = 0;
+  auto parseMcpPort = [](const std::string &value) -> int {
+    size_t used = 0;
+    const int port = std::stoi(value, &used);
+    if (used != value.size() || port < 1 || port > 65535)
+      throw std::invalid_argument("MCP port out of range");
+    return port;
   };
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -229,6 +238,17 @@ int main(int argc, char *argv[]) {
       Debug::g_DebugMode = true;
     } else if (a.rfind("--debug=", 0) == 0) {
       Debug::g_DebugMode = parseBoolFlag(a.substr(strlen("--debug=")));
+    } else if (a == "--mcp") {
+      if (cliMcpPort == 0) cliMcpPort = 9220;
+    } else if (a == "--mcp-port" && i + 1 < argc) {
+      try { cliMcpPort = parseMcpPort(argv[++i]); }
+      catch (...) { Log("Invalid --mcp-port", Debug::LogLevel::ERROR); return 1; }
+    } else if (a.rfind("--mcp-port=", 0) == 0) {
+      try { cliMcpPort = parseMcpPort(a.substr(strlen("--mcp-port="))); }
+      catch (...) { Log("Invalid --mcp-port", Debug::LogLevel::ERROR); return 1; }
+    } else if (a == "--mcp-port") {
+      Log("Missing --mcp-port value", Debug::LogLevel::ERROR);
+      return 1;
     }
   }
   if (Debug::g_DebugMode) {
@@ -255,6 +275,7 @@ int main(int argc, char *argv[]) {
       g_app->SetProjectPath(cliProjectPath);
     }
     g_app->SetDebug2D(cliDebug2D);
+    g_app->SetMcpPort(cliMcpPort);
 
     // Launch engine
     Log("Launching engine...");
@@ -267,6 +288,10 @@ int main(int argc, char *argv[]) {
     Log("Initializing application...");
     if (!g_app->Initialize()) {
       Log("Failed to initialize application", Debug::LogLevel::CRASH);
+      return 1;
+    }
+    if (!g_app->StartMcpServer()) {
+      Log("Failed to start MCP server", Debug::LogLevel::CRASH);
       return 1;
     }
 

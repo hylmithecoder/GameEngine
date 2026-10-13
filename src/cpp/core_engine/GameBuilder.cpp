@@ -1,4 +1,5 @@
 #include "../../../include/core_engine/GameBuilder.hpp"
+#include "../../../include/core_engine/NativeScripts.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/ModelDependencies.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
@@ -264,6 +265,11 @@ public:
         continue;
       }
       for (SceneEntity &e : scene.entities) {
+        for (const auto &script : e.scripts) {
+          if (o_.target == BuildTarget::Android)
+            throw std::runtime_error("Native project scripts currently require the Linux desktop runtime; Android cross-compilation is not configured.");
+          nativeSources_.insert(script.source);
+        }
         if (e.kind == PrimitiveKind::ExternalObj ||
             e.kind == PrimitiveKind::ExternalPmx)
           e.externalPath = Relocate(e.externalPath, true);
@@ -704,6 +710,23 @@ public:
     }
     Say("Writing scenes/ ...");
     CopyScenes();
+    if (!nativeSources_.empty()) {
+      auto options = DefaultScriptCompileOptions(root_);
+      options.cache = stage_ / ".native-script-build";
+      nlohmann::json modules = nlohmann::json::array();
+      fs::create_directories(gameDir_ / "lib");
+      for (const auto &source : nativeSources_) {
+        Say("Compiling native component " + source + " ...");
+        const auto compiled = CompileNativeScript(options, source);
+        if (!compiled.ok) throw std::runtime_error("Script compile failed: " + source + "\n" + compiled.diagnostics);
+        const fs::path relative = fs::path("lib") / ("ilmeee-script-" + compiled.className + "-" +
+                                    std::to_string(NewObjectId()) + ".so");
+        CopyFile(compiled.library, gameDir_ / relative);
+        modules.push_back({{"source", source}, {"className", compiled.className}, {"library", relative.generic_string()}});
+      }
+      std::ofstream(gameDir_ / "native-scripts.json") << modules.dump(2) << '\n';
+      fs::remove_all(stage_ / ".native-script-build");
+    }
     if (!o_.includeUnusedAssets)
       CountUnusedAssets();
 
@@ -793,6 +816,7 @@ private:
   const BuildLog &log_;
   GameBuildResult &r_;
   fs::path root_, assets_, stage_, out_;
+  std::set<std::string> nativeSources_;
   fs::path gameDir_; // where the game folder goes: stage_, or APK assets
   std::map<fs::path, fs::path> copiedDirs_;
   std::map<fs::path, fs::path> copiedFiles_;

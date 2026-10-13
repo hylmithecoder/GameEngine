@@ -128,6 +128,16 @@ void VulkanBase::Cleanup() {
 
     CleanupSwapChain();
 
+    for (VkSemaphore s : presentSemaphores)
+      vkDestroySemaphore(ctx.device, s, nullptr);
+    presentSemaphores.clear();
+
+    for (VkCommandBuffer &cb : frameCommandBuffers)
+      if (cb != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1, &cb);
+        cb = VK_NULL_HANDLE;
+      }
+
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       vkDestroySemaphore(ctx.device, renderFinishedSemaphores[i], nullptr);
       vkDestroySemaphore(ctx.device, imageAvailableSemaphores[i], nullptr);
@@ -510,6 +520,14 @@ void VulkanBase::DrawFrame() {
 
   vkWaitForFences(ctx.device, 1, &inFlightFences[currentFrame], VK_TRUE,
                   UINT64_MAX);
+  // This frame slot's previous command buffer is done now.
+  if (frameCommandBuffers.size() != (size_t)MAX_FRAMES_IN_FLIGHT)
+    frameCommandBuffers.assign(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
+  if (frameCommandBuffers[currentFrame] != VK_NULL_HANDLE) {
+    vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1,
+                         &frameCommandBuffers[currentFrame]);
+    frameCommandBuffers[currentFrame] = VK_NULL_HANDLE;
+  }
 
   uint32_t imageIndex;
   VkResult result = vkAcquireNextImageKHR(
@@ -528,6 +546,16 @@ void VulkanBase::DrawFrame() {
   // Catatan: kalau result == VK_SUBOPTIMAL_KHR, kita TETAP lanjut submit
   // & present supaya semaphore yang udah ke-signal nggak menggantung.
   // Recreate dilakukan setelah present.
+
+  // The other frame in flight may still be drawing into this image.
+  if (imagesInFlight.size() != swapChainImages.size())
+    imagesInFlight.assign(swapChainImages.size(), VK_NULL_HANDLE);
+  if (imagesInFlight[imageIndex] != VK_NULL_HANDLE &&
+      imagesInFlight[imageIndex] != inFlightFences[currentFrame])
+    vkWaitForFences(ctx.device, 1, &imagesInFlight[imageIndex], VK_TRUE,
+                    UINT64_MAX);
+  imagesInFlight[imageIndex] = inFlightFences[currentFrame];
+  EnsurePresentSemaphores();
 
   vkResetFences(ctx.device, 1, &inFlightFences[currentFrame]);
 
@@ -716,7 +744,7 @@ void VulkanBase::DrawFrame() {
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
 
-  VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+  VkSemaphore signalSemaphores[] = {presentSemaphores[imageIndex]};
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -750,11 +778,26 @@ void VulkanBase::DrawFrame() {
     throw std::runtime_error("failed to present swap chain image!");
   }
 
+  if (waitIdleEachFrame) {
+    vkQueueWaitIdle(ctx.graphicsQueue);
+    vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1, &commandBuffer);
+  } else {
+    frameCommandBuffers[currentFrame] = commandBuffer; // freed after its fence
+  }
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
 
-  // Cleanup temporary command buffer (in a real engine we would reuse it)
-  vkQueueWaitIdle(ctx.graphicsQueue);
-  vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1, &commandBuffer);
+void VulkanBase::EnsurePresentSemaphores() {
+  if (presentSemaphores.size() == swapChainImages.size())
+    return;
+  // Only after (re)creating the swapchain, when the device is idle.
+  for (VkSemaphore s : presentSemaphores)
+    vkDestroySemaphore(ctx.device, s, nullptr);
+  presentSemaphores.assign(swapChainImages.size(), VK_NULL_HANDLE);
+  VkSemaphoreCreateInfo si{};
+  si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  for (VkSemaphore &s : presentSemaphores)
+    vkCreateSemaphore(ctx.device, &si, nullptr, &s);
 }
 
 void VulkanBase::RecreateSwapChain() {
@@ -771,6 +814,7 @@ void VulkanBase::RecreateSwapChain() {
   windowHeight = h;
 
   vkDeviceWaitIdle(ctx.device);
+  imagesInFlight.clear(); // new images, nothing in flight
 
   CleanupSwapChain();
 

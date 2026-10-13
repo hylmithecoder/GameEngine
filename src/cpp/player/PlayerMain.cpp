@@ -20,6 +20,9 @@
 
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
+#ifndef __ANDROID__
+#include "../../../include/core_engine/NativeScriptScene.hpp"
+#endif
 #include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
@@ -28,6 +31,7 @@
 #include "../../../include/vulkan/VulkanBase.hpp"
 #include "../../../vendor/nlohmann/json.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -110,6 +114,10 @@ protected:
     renderer_->SetVulkanContext(ctx.device, ctx.physicalDevice,
                                 ctx.graphicsQueue, ctx.commandPool,
                                 ctx.descriptorPool);
+    // A game creates/destroys nothing mid-frame (video textures wait for the
+    // device themselves), so let CPU and GPU overlap.
+    waitIdleEachFrame = false;
+    renderer_->SetAsyncSubmit(true);
 
     fs::path scenePath = root_ / manifest_.startScene;
     ilmeee::IlmeeeScene scene;
@@ -123,6 +131,34 @@ protected:
     ilmeee::SceneLoadReport report =
         ilmeee::InstantiateScene(*renderer_, scene, root_);
     media_.SetProjectRoot(root_);
+#ifndef __ANDROID__
+    native_.log = [](const std::string &line) { SDL_Log("%s", line.c_str()); };
+    nativeContext_ = {renderer_.get(), &input_, native_.log};
+    try {
+      std::ifstream modulesFile(root_ / "native-scripts.json");
+      if (modulesFile) {
+        const auto modules = json::parse(modulesFile);
+        for (const auto &entry : modules) {
+          ilmeee::CompiledScript compiled;
+          compiled.ok = true;
+          compiled.source = entry.at("source").get<std::string>();
+          compiled.className = entry.at("className").get<std::string>();
+          compiled.library = root_ / entry.at("library").get<std::string>();
+          std::string error;
+          if (!native_.Load(compiled, error)) throw std::runtime_error(error);
+        }
+      }
+      for (const auto &mesh : renderer_->meshes3d)
+        for (const auto &binding : mesh.scripts)
+          if (binding.enabled && !native_.Ready(binding.source))
+            throw std::runtime_error("Native script module missing: " + binding.source + "; rebuild this game.");
+      native_.Start(ilmeee::ScriptSceneHost(nativeContext_), ilmeee::ScriptSceneOwners(*renderer_));
+    } catch (const std::exception &e) {
+      error_ = std::string("Script loading failed: ") + e.what();
+      ::Log(error_, Debug::LogLevel::ERROR);
+      return;
+    }
+#endif
     ::Log("Loaded " + std::to_string(report.loaded) + " object(s) from " +
               scenePath.string(),
           Debug::LogLevel::SUCCESS);
@@ -178,7 +214,42 @@ protected:
     }
   }
 
+  // Frame timing, logged every few seconds (logcat on Android): where a
+  // slow frame goes — game logic, the scene pass (CPU record + GPU, since it
+  // waits for the GPU) or everything else (UI, present, vsync).
+  struct FrameStats {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point windowStart = Clock::now();
+    int frames = 0;
+    double updateMs = 0.0, mediaMs = 0.0, sceneMs = 0.0, worstMs = 0.0;
+    Clock::time_point lastFrame = Clock::now();
+  } stats_;
+
+  void ReportFrameStats() {
+    using namespace std::chrono;
+    const auto now = FrameStats::Clock::now();
+    const double frameMs =
+        duration<double, std::milli>(now - stats_.lastFrame).count();
+    stats_.lastFrame = now;
+    stats_.worstMs = std::max(stats_.worstMs, frameMs);
+    ++stats_.frames;
+    const double windowS =
+        duration<double>(now - stats_.windowStart).count();
+    if (windowS < 5.0)
+      return;
+    char line[160];
+    std::snprintf(line, sizeof line,
+                  "[Perf] %.1f fps | per frame: update %.1f ms (media %.1f), "
+                  "scene %.1f ms, worst frame %.1f ms",
+                  stats_.frames / windowS, stats_.updateMs / stats_.frames,
+                  stats_.mediaMs / stats_.frames,
+                  stats_.sceneMs / stats_.frames, stats_.worstMs);
+    SDL_Log("%s", line); // straight to logcat / stderr, unbuffered
+    stats_ = FrameStats{};
+  }
+
   void OnUpdate(float deltaTime) override {
+    const auto updateStart = FrameStats::Clock::now();
     if (IsKeyPressed(ImGuiKey_F11, false)) {
       bool fs = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
       SDL_SetWindowFullscreen(window, !fs);
@@ -186,12 +257,22 @@ protected:
     // Input gathered while drawing the previous frame (keyboard + sticks).
     if (renderer_ && !paused_ && error_.empty())
       movement_.Update(*renderer_, input_, deltaTime);
+#ifndef __ANDROID__
+    if (!paused_ && error_.empty()) native_.Update(deltaTime);
+#endif
     // A game is always playing; sounds and videos start on the first frame.
+    const auto mediaStart = FrameStats::Clock::now();
     if (renderer_ && error_.empty())
       media_.Update(*renderer_,
                     paused_ ? ilmeee::MediaSystem::State::Paused
                             : ilmeee::MediaSystem::State::Playing,
                     deltaTime);
+    stats_.mediaMs += std::chrono::duration<double, std::milli>(
+                          FrameStats::Clock::now() - mediaStart)
+                          .count();
+    stats_.updateMs += std::chrono::duration<double, std::milli>(
+                           FrameStats::Clock::now() - updateStart)
+                           .count();
   }
 
   void OnRender(VkCommandBuffer) override {
@@ -213,7 +294,11 @@ protected:
         renderer_->SetViewportSize(w, h);
         if (!paused_ || !hasFrame_ || w != lastRenderWidth_ ||
             h != lastRenderHeight_) {
+          const auto sceneStart = FrameStats::Clock::now();
           hasFrame_ = renderer_->RenderGameView();
+          stats_.sceneMs += std::chrono::duration<double, std::milli>(
+                                FrameStats::Clock::now() - sceneStart)
+                                .count();
           lastRenderWidth_ = w;
           lastRenderHeight_ = h;
         }
@@ -256,6 +341,7 @@ protected:
     End();
     PopStyleVar(2);
 
+    ReportFrameStats();
     if (!screenshotPath_.empty() && ++frame_ >= screenshotFrames_) {
       exitCode_ = rendered && WriteScreenshot() ? 0 : 1;
       isRunning = false;
@@ -263,6 +349,9 @@ protected:
   }
 
   void OnCleanup() override {
+#ifndef __ANDROID__
+    native_.Stop();
+#endif
     if (renderer_)
       media_.Shutdown(*renderer_);
     renderer_.reset();
@@ -294,6 +383,10 @@ private:
   ilmeee::GameUI gameUi_;
   bool paused_ = false;
   ilmeee::MovementSystem movement_;
+#ifndef __ANDROID__
+  ilmeee::NativeScripts native_;
+  ilmeee::NativeScriptSceneContext nativeContext_;
+#endif
   ilmeee::MediaSystem media_;
   ilmeee::MovementInput input_;
   ilmeee::UiFingers fingers_;

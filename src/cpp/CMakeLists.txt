@@ -21,6 +21,7 @@ set(HANDLER_ENGINE
 set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/MainWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/McpTools.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/RocketInterfaces.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/SimpleRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ApplicationManager.cpp
@@ -28,6 +29,8 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/VideoPlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/assets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerProject.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/ScriptDialogs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/NativeScriptInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/GameBuildPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/ViewportGizmo.cpp
@@ -41,6 +44,9 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementScript.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementRuntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/UserMovementScripts.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/ScriptWorkspace.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NativeScripts.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NativeScriptScene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GameBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/ModelDependencies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/EditorSessionHistory.cpp

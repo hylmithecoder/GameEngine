@@ -1,0 +1,586 @@
+#include "../../../include/core_engine/NativeScripts.hpp"
+#include "../../../include/core_engine/ScriptWorkspace.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <json.hpp>
+#include <set>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#endif
+
+namespace ilmeee {
+namespace fs = std::filesystem;
+namespace {
+bool Inside(const fs::path &root, const fs::path &path) {
+  const auto relative = path.lexically_relative(root);
+  return !relative.empty() && !relative.is_absolute() &&
+         *relative.begin() != "..";
+}
+std::string ReadLog(const fs::path &file) {
+  std::ifstream input(file);
+  std::string result(128 * 1024, '\0');
+  input.read(result.data(), result.size());
+  result.resize(static_cast<size_t>(input.gcount()));
+  return result;
+}
+std::string ScriptRevision(const fs::path &project) {
+  std::string revision;
+  std::error_code ec;
+  const auto scripts = project / "assets/scripts";
+  if (!fs::is_directory(scripts, ec))
+    return revision;
+  fs::recursive_directory_iterator it(
+      scripts, fs::directory_options::skip_permission_denied, ec),
+      end;
+  for (; !ec && it != end; it.increment(ec)) {
+    const auto extension = it->path().extension();
+    if (!it->is_regular_file(ec) ||
+        (extension != ".cpp" && extension != ".hpp"))
+      continue;
+    const auto time = fs::last_write_time(it->path(), ec);
+    if (!ec)
+      revision +=
+          it->path().string() + std::to_string(time.time_since_epoch().count());
+  }
+  return revision;
+}
+ScriptValue ReadProperty(const ScriptProperty &field) {
+  ScriptValue value;
+  value.name = field.name;
+  value.type = field.type;
+  if (value.type == ScriptValueType::Float)
+    value.number = *static_cast<float *>(field.value);
+  if (value.type == ScriptValueType::Bool)
+    value.boolean = *static_cast<bool *>(field.value);
+  if (value.type == ScriptValueType::Object)
+    value.object = static_cast<GameObjectRef *>(field.value)->id;
+  return value;
+}
+void ApplyProperties(Component &component, const NativeScriptBinding &binding,
+                     const script::HostApi *host) {
+  ScriptProperties properties;
+  component.DescribeProperties(properties);
+  for (const auto &field : properties.fields) {
+    for (const auto &value : binding.values) {
+      if (value.name != field.name || value.type != field.type)
+        continue;
+      if (field.type == ScriptValueType::Float && std::isfinite(value.number))
+        *static_cast<float *>(field.value) = value.number;
+      if (field.type == ScriptValueType::Bool)
+        *static_cast<bool *>(field.value) = value.boolean;
+      if (field.type == ScriptValueType::Object)
+        static_cast<GameObjectRef *>(field.value)->id = value.object;
+    }
+    if (field.type == ScriptValueType::Object)
+      static_cast<GameObjectRef *>(field.value)->Bind(host);
+  }
+}
+} // namespace
+
+ScriptCompileOptions DefaultScriptCompileOptions(const fs::path &project) {
+  ScriptCompileOptions options;
+  options.project = project;
+  options.cache = project / ".ilmeee/native-scripts";
+#ifdef ILMEEE_SCRIPT_INCLUDE
+  if (fs::exists(fs::path(ILMEEE_SCRIPT_INCLUDE) /
+                 "core_engine/core/Component.hpp"))
+    options.sdkInclude = ILMEEE_SCRIPT_INCLUDE;
+#endif
+  if (options.sdkInclude.empty()) {
+    for (const auto &path : {ExecutableDir() / "../../include",
+                             ExecutableDir() / "../include/ilmeeeengine"})
+      if (fs::exists(path / "core_engine/core/Component.hpp")) {
+        options.sdkInclude = fs::weakly_canonical(path);
+        break;
+      }
+  }
+#ifdef ILMEEE_SCRIPT_COMPILER
+  if (fs::exists(ILMEEE_SCRIPT_COMPILER))
+    options.compiler = ILMEEE_SCRIPT_COMPILER;
+#endif
+  if (const char *compiler = std::getenv("ILMEEE_SCRIPT_CXX");
+      compiler && *compiler)
+    options.compiler = compiler;
+  return options;
+}
+
+std::vector<std::string> DiscoverNativeScripts(const fs::path &project) {
+  std::vector<std::string> sources;
+  std::error_code ec;
+  const auto root = fs::weakly_canonical(project, ec);
+  const auto scripts = root / "assets/scripts";
+  if (ec || !fs::is_directory(scripts, ec))
+    return sources;
+  fs::recursive_directory_iterator it(
+      scripts, fs::directory_options::skip_permission_denied, ec),
+      end;
+  for (; !ec && it != end; it.increment(ec)) {
+    std::error_code itemError;
+    if (!it->is_regular_file(itemError) || it->path().extension() != ".cpp")
+      continue;
+    const auto source = fs::weakly_canonical(it->path(), itemError);
+    auto header = source;
+    header.replace_extension(".hpp");
+    header = fs::weakly_canonical(header, itemError);
+    if (!itemError && Inside(root, source) && Inside(root, header) &&
+        fs::is_regular_file(header, itemError))
+      sources.push_back(source.lexically_relative(root).generic_string());
+  }
+  std::sort(sources.begin(), sources.end());
+  return sources;
+}
+
+bool WriteScriptCompilationDatabase(const ScriptCompileOptions &options,
+                                    std::string &error) {
+  try {
+    const auto file = options.project / "compile_commands.json";
+    nlohmann::json entries = nlohmann::json::array();
+    std::ifstream old(file);
+    if (old) {
+      entries = nlohmann::json::parse(old, nullptr, false);
+      if (!entries.is_array()) {
+        error = "Existing compile_commands.json is invalid; left unchanged.";
+        return false;
+      }
+    }
+    const auto sources = DiscoverNativeScripts(options.project);
+    std::set<std::string> current;
+    for (const auto &source : sources)
+      current.insert(fs::absolute(options.project / source).string());
+    nlohmann::json merged = nlohmann::json::array();
+    for (const auto &entry : entries)
+      if (entry.is_object() && !current.contains(entry.value("file", "")))
+        merged.push_back(entry);
+    for (const auto &source : sources) {
+      const auto path = fs::absolute(options.project / source).string();
+      merged.push_back({{"directory", fs::absolute(options.project).string()},
+                        {"file", path},
+                        {"arguments",
+                         {options.compiler, "-std=c++20", "-fPIC", "-I",
+                          options.sdkInclude.string(), "-c", path}}});
+    }
+    old.close();
+    std::ofstream output(file);
+    output << merged.dump(2) << '\n';
+    output.close();
+    if (!output) {
+      error = "Cannot write compile_commands.json";
+      return false;
+    }
+    return true;
+  } catch (const std::exception &e) {
+    error = e.what();
+    return false;
+  }
+}
+
+CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
+                                   const std::string &source) {
+  CompiledScript result;
+  result.source = source;
+  result.className = fs::path(source).stem().string();
+  try {
+    result.diagnostics = ValidateScriptName(result.className);
+    if (!result.diagnostics.empty())
+      return result;
+    const auto root = fs::canonical(options.project);
+    const auto path = fs::canonical(root / source);
+    auto header = path;
+    header.replace_extension(".hpp");
+    if (!Inside(root, path) || !Inside(root, fs::canonical(header))) {
+      result.diagnostics = "Script files must be inside the project.";
+      return result;
+    }
+    if (!fs::exists(options.sdkInclude / "core_engine/core/Component.hpp")) {
+      result.diagnostics =
+          "Engine script SDK not found. Install the public engine headers.";
+      return result;
+    }
+    const auto build = options.cache /
+                       (result.className + "-" + std::to_string(NewObjectId()));
+    fs::create_directories(build);
+    const auto wrapper = build / "factory.cpp";
+    std::ofstream output(wrapper);
+    output << "#include \"" << result.className
+           << ".hpp\"\n#include <type_traits>\n"
+           << "static_assert(std::is_base_of_v<Component, " << result.className
+           << ">, \"Script class must derive from Component\");\n"
+           << "static_assert(std::is_default_constructible_v<"
+           << result.className
+           << ">, \"Script class needs a public default constructor\");\n"
+           << "static_assert(!std::is_abstract_v<" << result.className
+           << ">, \"Script class cannot be abstract\");\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) unsigned "
+              "ilmeee_script_api() { return ilmeee::script::kApiVersion; }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) uint64_t "
+              "ilmeee_script_abi() { return ilmeee::script::kComponentAbi; }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) "
+              "Component* ilmeee_script_create() { return new "
+           << result.className << "(); }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) void "
+              "ilmeee_script_destroy(Component* value) { delete value; }\n";
+    output.close();
+    if (!output) {
+      result.diagnostics = "Cannot write the script build wrapper.";
+      return result;
+    }
+#if defined(_WIN32) || defined(__ANDROID__)
+    result.diagnostics = "Native project script compilation currently requires "
+                         "the Linux desktop toolchain.";
+    return result;
+#else
+    result.library = build / "component.so";
+    const auto log = build / "compiler.log";
+    std::vector<std::string> args = {options.compiler,
+                                     "-Wall",
+                                     "-Wextra",
+                                     "-Werror=overloaded-virtual",
+                                     "-std=c++20",
+                                     "-shared",
+                                     "-fPIC",
+                                     "-fvisibility=hidden",
+                                     "-g",
+                                     "-Wl,-z,defs",
+                                     "-Wl,-rpath,$ORIGIN",
+                                     "-I",
+                                     options.sdkInclude.string(),
+                                     "-I",
+                                     path.parent_path().string(),
+                                     path.string(),
+                                     wrapper.string(),
+                                     "-o",
+                                     result.library.string()};
+    std::vector<char *> argv;
+    for (auto &arg : args)
+      argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    const int descriptor =
+        open(log.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (descriptor < 0) {
+      result.diagnostics = std::strerror(errno);
+      return result;
+    }
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, descriptor, STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, descriptor, STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, descriptor);
+    pid_t pid;
+    const int status = posix_spawnp(&pid, options.compiler.c_str(), &actions,
+                                    nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(descriptor);
+    if (status) {
+      result.diagnostics =
+          "Cannot start C++ compiler: " + std::string(std::strerror(status));
+      return result;
+    }
+    int exitStatus = 0;
+    pid_t waited;
+    do {
+      waited = waitpid(pid, &exitStatus, 0);
+    } while (waited < 0 && errno == EINTR);
+    result.diagnostics = ReadLog(log);
+    result.ok =
+        waited == pid && WIFEXITED(exitStatus) && WEXITSTATUS(exitStatus) == 0;
+    if (!result.ok && result.diagnostics.empty())
+      result.diagnostics = "C++ compiler did not finish successfully.";
+#endif
+  } catch (const std::exception &e) {
+    result.diagnostics = e.what();
+  }
+  return result;
+}
+
+struct NativeScripts::Module {
+  void *library = nullptr;
+  Component *(*create)() = nullptr;
+  void (*destroy)(Component *) = nullptr;
+  Component *prototype = nullptr;
+  std::vector<ScriptValue> defaults;
+  ~Module() {
+    if (prototype && destroy)
+      destroy(prototype);
+#ifndef _WIN32
+    if (library)
+      dlclose(library);
+#endif
+  }
+};
+struct NativeScripts::Instance {
+  std::shared_ptr<Module> module;
+  Component *component = nullptr;
+  bool failed = false;
+  ~Instance() {
+    if (component)
+      module->destroy(component);
+  }
+};
+NativeScripts::NativeScripts() = default;
+NativeScripts::~NativeScripts() {
+  Stop();
+  if (job_.valid())
+    job_.wait();
+}
+bool NativeScripts::Configure(const ScriptCompileOptions &options) {
+  if (options.project == options_.project &&
+      options.sdkInclude == options_.sdkInclude)
+    return false;
+  Stop();
+  modules_.clear();
+  errors_.clear();
+  options_ = options;
+  sourceRevision_ = ScriptRevision(options.project);
+  if (!options.project.empty() &&
+      !DiscoverNativeScripts(options.project).empty())
+    CompileAll();
+  return true;
+}
+bool NativeScripts::IsCompiling() const { return job_.valid(); }
+void NativeScripts::CompileAll() {
+  if (options_.project.empty())
+    return;
+  if (active_) {
+    if (log)
+      log("[WARNING] [Scripts] Stop Play before compiling scripts.");
+    return;
+  }
+  if (job_.valid()) {
+    pending_ = true;
+    return;
+  }
+  const auto options = options_;
+  sourceRevision_ = ScriptRevision(options.project);
+  jobProject_ = options.project.string();
+  job_ = std::async(std::launch::async, [options] {
+    std::vector<CompiledScript> results;
+    std::string error;
+    WriteScriptCompilationDatabase(options, error);
+    for (const auto &source : DiscoverNativeScripts(options.project))
+      results.push_back(CompileNativeScript(options, source));
+    if (!error.empty())
+      results.push_back({"compile_commands.json", "", error, {}, false});
+    return results;
+  });
+  if (log)
+    log("[INFO] [Scripts] Compiling project scripts...");
+}
+void NativeScripts::Poll() {
+  if (active_)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (!options_.project.empty() && now - lastScan_ > std::chrono::seconds(1)) {
+    lastScan_ = now;
+    if (ScriptRevision(options_.project) != sourceRevision_)
+      CompileAll();
+  }
+  if (!job_.valid() ||
+      job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    return;
+  try {
+    const auto results = job_.get();
+    if (jobProject_ == options_.project.string()) {
+      std::set<std::string> found;
+      for (const auto &result : results) {
+        found.insert(result.source);
+        std::string error = result.diagnostics;
+        const bool ok = result.ok && Load(result, error);
+        errors_[result.source] = ok ? "" : error;
+        if (log)
+          log(std::string(ok ? "[INFO] [Scripts] " : "[ERROR] [Scripts] ") +
+              result.source +
+              (ok ? ": compiled and validated" : ": compile failed\n" + error));
+      }
+      std::erase_if(modules_, [&](const auto &entry) {
+        return !found.contains(entry.first);
+      });
+      std::erase_if(errors_, [&](const auto &entry) {
+        return !found.contains(entry.first);
+      });
+    }
+  } catch (const std::exception &e) {
+    if (log)
+      log(std::string("[ERROR] [Scripts] ") + e.what());
+  }
+  if (pending_) {
+    pending_ = false;
+    CompileAll();
+  }
+}
+bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
+  if (!result.ok) {
+    error = result.diagnostics;
+    return false;
+  }
+#ifdef _WIN32
+  error = "Native project script loading currently requires Linux.";
+  return false;
+#else
+  auto module = std::make_shared<Module>();
+  module->library = dlopen(result.library.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!module->library) {
+    error = dlerror();
+    return false;
+  }
+  auto api = reinterpret_cast<unsigned (*)()>(
+      dlsym(module->library, "ilmeee_script_api"));
+  auto abi = reinterpret_cast<uint64_t (*)()>(
+      dlsym(module->library, "ilmeee_script_abi"));
+  module->create = reinterpret_cast<Component *(*)()>(
+      dlsym(module->library, "ilmeee_script_create"));
+  module->destroy = reinterpret_cast<void (*)(Component *)>(
+      dlsym(module->library, "ilmeee_script_destroy"));
+  if (!api || api() != script::kApiVersion || !abi ||
+      abi() != script::kComponentAbi || !module->create || !module->destroy) {
+    error = "Script module has an incompatible engine API or compiler ABI. "
+            "Recompile using the engine toolchain.";
+    return false;
+  }
+  try {
+    module->prototype = module->create();
+    if (!module->prototype) {
+      error = "Script factory returned no component.";
+      return false;
+    }
+    ScriptProperties properties;
+    module->prototype->DescribeProperties(properties);
+    if (properties.fields.size() > 1024) {
+      error = "A component may expose at most 1024 fields.";
+      return false;
+    }
+    std::set<std::string> names;
+    for (const auto &field : properties.fields) {
+      if (!field.value || field.name.empty() || field.name.size() > 256 ||
+          !names.insert(field.name).second) {
+        error = "Exposed script fields must have unique non-empty names.";
+        return false;
+      }
+      const auto value = ReadProperty(field);
+      if (value.type == ScriptValueType::Float &&
+          !std::isfinite(value.number)) {
+        error = "Exposed float defaults must be finite.";
+        return false;
+      }
+      module->defaults.push_back(value);
+    }
+  } catch (const std::exception &e) {
+    error = e.what();
+    return false;
+  } catch (...) {
+    error =
+        "Unknown exception while constructing or inspecting the script class.";
+    return false;
+  }
+  modules_[result.source] = std::move(module);
+  errors_[result.source].clear();
+  return true;
+#endif
+}
+bool NativeScripts::Ready(const std::string &source) const {
+  return modules_.contains(source) && Diagnostics(source).empty();
+}
+std::vector<std::string> NativeScripts::Sources() const {
+  std::set<std::string> sources;
+  for (const auto &[source, module] : modules_)
+    sources.insert(source);
+  for (const auto &[source, error] : errors_)
+    if (fs::path(source).extension() == ".cpp")
+      sources.insert(source);
+  return {sources.begin(), sources.end()};
+}
+std::string NativeScripts::Diagnostics(const std::string &source) const {
+  const auto it = errors_.find(source);
+  return it == errors_.end() ? "" : it->second;
+}
+std::vector<ScriptValue>
+NativeScripts::Properties(const NativeScriptBinding &binding) const {
+  const auto it = modules_.find(binding.source);
+  if (it == modules_.end())
+    return binding.values;
+  auto values = it->second->defaults;
+  for (auto &value : values)
+    for (const auto &stored : binding.values)
+      if (value.name == stored.name && value.type == stored.type)
+        value = stored;
+  return values;
+}
+void NativeScripts::Start(script::HostApi host,
+                          const std::vector<ScriptOwner> &owners) {
+  Stop();
+  host_ = host;
+  active_ = true;
+  for (const auto &owner : owners)
+    for (const auto &binding : *owner.scripts) {
+      if (!binding.enabled)
+        continue;
+      const auto module = modules_.find(binding.source);
+      if (module == modules_.end() || !Ready(binding.source)) {
+        if (log)
+          log("[WARNING] [Scripts] " + binding.className +
+              ": not running; compile this script first.");
+        continue;
+      }
+      auto instance = std::make_unique<Instance>();
+      instance->module = module->second;
+      try {
+        instance->component = instance->module->create();
+        if (!instance->component)
+          throw std::runtime_error("Script factory returned no instance");
+        instance->component->Bind(&host_, owner.id);
+        ApplyProperties(*instance->component, binding, &host_);
+        instance->component->Awake();
+        instance->component->OnEnable();
+        instance->component->Start();
+        instances_.push_back(std::move(instance));
+      } catch (const std::exception &e) {
+        if (log)
+          log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
+      } catch (...) {
+        if (log)
+          log("[ERROR] [Scripts] " + binding.className +
+              ": unknown exception during initialization");
+      }
+    }
+}
+void NativeScripts::Update(float deltaTime) {
+  if (!std::isfinite(deltaTime) || deltaTime <= 0)
+    return;
+  for (auto &instance : instances_) {
+    if (instance->failed)
+      continue;
+    try {
+      instance->component->Update(std::min(deltaTime, 0.25f));
+    } catch (const std::exception &e) {
+      instance->failed = true;
+      if (log)
+        log(std::string("[ERROR] [Scripts] Update stopped: ") + e.what());
+    } catch (...) {
+      instance->failed = true;
+      if (log)
+        log("[ERROR] [Scripts] Update stopped: unknown exception");
+    }
+  }
+}
+void NativeScripts::Stop() {
+  active_ = false;
+  for (auto &instance : instances_) {
+    try {
+      instance->component->OnDisable();
+    } catch (...) {
+    }
+  }
+  instances_.clear();
+}
+} // namespace ilmeee

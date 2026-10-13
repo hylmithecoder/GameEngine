@@ -2,10 +2,12 @@
 #include "../core_engine/EditorSessionHistory.hpp"
 #include "../core_engine/GameBuilder.hpp"
 #include "../core_engine/net/MessageBus.hpp"
+#include "../core_engine/net/McpServer.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
 #include "../core_engine/MediaSystem.hpp"
 #include "../core_engine/MovementScript.hpp"
+#include "../core_engine/NativeScriptScene.hpp"
 #include "../core_engine/core_editor/panels/PanelManager.hpp"
 #include "../vulkan/vulkanhandler.hpp"
 #include "HandlerProject.hpp"
@@ -65,6 +67,11 @@ private:
   bool focusSceneTab = false;
   ilmeee::MovementInput gameMovementInput;
   ilmeee::MovementSystem movementSystem;
+  ilmeee::NativeScripts nativeScripts;
+  ilmeee::NativeScriptSceneContext nativeScriptContext;
+  std::string nativeScriptsProject;
+  void RenderNativeScriptInspector(size_t meshIndex);
+  void RenderNativeScriptAddMenu(size_t meshIndex);
   // Audio Source / Video Player playback (Play mode + editor posters).
   ilmeee::MediaSystem media;
   bool gameWasStopped = true;
@@ -154,6 +161,9 @@ public:
   // Owned by ApplicationManager; null until it is wired in, and again once
   // shutdown has torn the bus down. Polled once per frame in OnUpdate().
   ilmeee::net::MessageBus *ipcBus = nullptr;
+  ilmeee::net::McpServer *mcpServer = nullptr;
+  ilmeee::net::json HandleMcpTool(const std::string &name,
+                                  const ilmeee::net::json &arguments);
   // Ask the engine process to run its scene picker (File > Load Scene).
   void RequestEngineSceneLoad();
   // list<string> currentName = {"Shiroko", "Shun_Small"};
@@ -247,7 +257,7 @@ public:
   // Deleting this subtree would leave the scene without a player camera
   // (which the Hierarchy would immediately recreate).
   bool DeletingRemovesLastCamera(size_t index) const;
-  void Save3DScene();
+  bool Save3DScene();
   EditorSessionHistory::Snapshot CaptureEditorSnapshot() const;
   void StartEditorSession();
   void RecordEditorHistory();

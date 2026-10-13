@@ -1,6 +1,7 @@
 #pragma once
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
+#include "NativeScriptTypes.hpp"
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "TextureManager.hpp"
@@ -67,6 +68,14 @@ public:
   float GetZoom() const { return zoom; }
   float zoom = 1.0f;
 
+  // Async: scene passes are submitted with a fence and only waited for
+  // before the next pass (or a staging write), so the GPU renders while the
+  // CPU runs the rest of the frame. Off (editor default): every pass waits
+  // for the queue to go idle, as before.
+  void SetAsyncSubmit(bool on) { asyncSubmit = on; }
+  // Blocks until the last scene pass has finished on the GPU.
+  void WaitOffscreenWork();
+
   // Vulkan external initialization
   void SetVulkanContext(VkDevice device, VkPhysicalDevice physicalDevice,
                         VkQueue graphicsQueue, VkCommandPool commandPool,
@@ -91,6 +100,13 @@ private:
   VkQueue graphicsQueue = VK_NULL_HANDLE;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+
+  // Last offscreen pass still in flight (async mode).
+  bool asyncSubmit = false;
+  VkFence offscreenFence = VK_NULL_HANDLE;
+  VkCommandBuffer offscreenCmd = VK_NULL_HANDLE;
+  // Submits a recorded offscreen command buffer and takes ownership of it.
+  void SubmitOffscreenCommands(VkCommandBuffer cmd);
 
   // Offscreen resources
   struct Offscreen {
@@ -148,6 +164,25 @@ private:
   // to ImGui's texture layout so descriptors handed out by TextureManager
   // (which uses ImGui_ImplVulkan_AddTexture) bind to this pipeline directly.
   VkDescriptorSetLayout meshTextureSetLayout = VK_NULL_HANDLE;
+  struct MeshSceneUniforms { // matches `Scene` in scene_mesh.vert (std140)
+    glm::mat4 viewProj;
+    glm::vec4 lightPosOrDir;
+    glm::vec4 lightColorType;
+    glm::vec4 lightDir;
+    glm::vec4 lightParams;
+  };
+  struct MeshPushConstants { // matches `PC` in scene_mesh.vert
+    glm::mat4 model;
+    glm::vec4 material;
+  };
+  // set=1 binding=0: per-pass uniform buffer (viewProj + light), written at
+  // the start of DrawMeshes. One buffer is enough: every pass waits for the
+  // previous one before it is recorded (see WaitOffscreenWork).
+  VkDescriptorSetLayout meshSceneSetLayout = VK_NULL_HANDLE;
+  VkBuffer meshSceneUbo = VK_NULL_HANDLE;
+  VkDeviceMemory meshSceneUboMemory = VK_NULL_HANDLE;
+  void *meshSceneUboMapped = nullptr;
+  VkDescriptorSet meshSceneSet = VK_NULL_HANDLE;
   // 1x1 white fallback bound for submeshes with no texture (Vulkan requires
   // every declared sampler be bound even when the shader ignores it).
   VkImage whiteImage = VK_NULL_HANDLE;
@@ -184,6 +219,8 @@ public:
   };
 
   struct Mesh3D {
+    uint64_t objectId = ilmeee::NewObjectId();
+    std::vector<ilmeee::NativeScriptBinding> scripts;
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
     VkBuffer indexBuffer = VK_NULL_HANDLE;
@@ -322,8 +359,11 @@ private:
   };
   std::unordered_map<int, DynamicTexture> dynamicTextures;
   int nextDynamicTexture = 1;
-  // Own sampler: offscreen.sampler is recreated on every viewport resize.
+  // Lives as long as the renderer (offscreen.sampler is recreated on every
+  // viewport resize, which left descriptors built with it dangling). Used
+  // by the white fallback and the dynamic (video) textures.
   VkSampler dynamicSampler = VK_NULL_HANDLE;
+  VkSampler EnsureDynamicSampler();
   void FreeDynamicTexture(DynamicTexture &t);
   void RecordDynamicTextureUploads(VkCommandBuffer cmd);
 
@@ -619,6 +659,8 @@ public:
   // handles and decoded vertex data deliberately stay out of this snapshot;
   // RestoreEditorSnapshot recreates those resources from the asset paths.
   struct EditorEntitySnapshot {
+    uint64_t objectId = 0;
+    std::vector<ilmeee::NativeScriptBinding> scripts;
     std::string name;
     std::string path;
     int parent = -1; // index into EditorSnapshot::entities

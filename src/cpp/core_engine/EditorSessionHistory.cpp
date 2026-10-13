@@ -141,6 +141,19 @@ void AppendBool(std::ostringstream &out, bool value) {
 
 void AppendEntitySignature(std::ostringstream &out,
                            const SceneRenderer::EditorEntitySnapshot &entity) {
+  out << entity.objectId << ';' << entity.scripts.size() << ';';
+  for (const auto &script : entity.scripts) {
+    AppendString(out, script.source);
+    AppendString(out, script.className);
+    AppendBool(out, script.enabled);
+    out << script.values.size() << ';';
+    for (const auto &value : script.values) {
+      AppendString(out, value.name);
+      out << static_cast<uint32_t>(value.type) << ';' << value.object << ';';
+      AppendFloat(out, value.number);
+      AppendBool(out, value.boolean);
+    }
+  }
   AppendString(out, entity.name);
   AppendString(out, entity.path);
   AppendVec3(out, entity.position);
@@ -323,6 +336,21 @@ void WriteGameObject(std::ostream &out, const GameObject &object) {
 void WriteEntity(std::ostream &out,
                  const SceneRenderer::EditorEntitySnapshot &entity) {
   out << "        - name: " << YamlQuote(entity.name) << '\n';
+  out << "          object_id: " << entity.objectId << '\n';
+  out << "          scripts:" << (entity.scripts.empty() ? " []\n" : "\n");
+  for (const auto &script : entity.scripts) {
+    out << "            - source: " << YamlQuote(script.source) << '\n';
+    WriteString(out, 14, "class", script.className);
+    WriteBool(out, 14, "enabled", script.enabled);
+    out << "              fields:" << (script.values.empty() ? " []\n" : "\n");
+    for (const auto &value : script.values) {
+      out << "                - name: " << YamlQuote(value.name) << '\n';
+      WriteInt(out, 18, "type", static_cast<int>(value.type));
+      WriteFloat(out, 18, "number", value.number);
+      WriteBool(out, 18, "boolean", value.boolean);
+      out << "                  object_id: " << value.object << '\n';
+    }
+  }
   WriteString(out, 10, "path", entity.path);
   WriteVec3(out, 10, "position", entity.position);
   WriteVec3(out, 10, "rotation", entity.rotation);

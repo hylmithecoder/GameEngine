@@ -316,6 +316,32 @@ int main() {
     CHECK(in.entities[5].parent == 2);
   }
 
+  // Native bindings and target identities survive save/reload and ordering.
+  {
+    IlmeeeScene scene;
+    scene.entities = {Entity("Owner", -1), Entity("Target", -1)};
+    scene.entities[0].objectId = 42;
+    scene.entities[1].objectId = 84;
+    NativeScriptBinding binding{"assets/scripts/Probe.cpp", "Probe", false, {}};
+    binding.values = {{"Speed", ScriptValueType::Float, 7.5f, false, 0},
+                      {"Target", ScriptValueType::Object, 0, false, 84},
+                      {"Active", ScriptValueType::Bool, 0, true, 0}};
+    scene.entities[0].scripts.push_back(binding);
+    CHECK(SaveScene(file.string(), scene));
+    IlmeeeScene loaded;
+    CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities[0].objectId == 42 && loaded.entities[1].objectId == 84);
+    CHECK(loaded.entities[0].scripts.size() == 1);
+    const auto &script = loaded.entities[0].scripts[0];
+    CHECK(script.source == binding.source && script.className == "Probe" && !script.enabled);
+    CHECK(script.values[0].number == 7.5f);
+    CHECK(script.values[1].object == 84);
+    CHECK(script.values[2].boolean);
+    // Duplicate/legacy identities are repaired during load.
+    scene.entities[1].objectId = 42;
+    CHECK(SaveScene(file.string(), scene)); CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities[1].objectId != 42 && loaded.entities[1].objectId != 0);
+  }
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
   return g_failures == 0 ? 0 : 1;

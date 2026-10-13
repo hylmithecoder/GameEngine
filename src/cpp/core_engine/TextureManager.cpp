@@ -173,6 +173,23 @@ TextureManager::LoadTextureVulkan(const std::string &path) {
   vkUnmapMemory(device, stagingBufferMemory);
   stbi_image_free(pixels);
 
+  // Full mip chain, generated on the GPU by blitting each level from the one
+  // above (when the format supports linear blits). Without mips, distant
+  // surfaces sample full-size textures: shimmering and heavy on mobile GPUs.
+  uint32_t mipLevels = 1;
+  {
+    VkFormatProperties fp;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice,
+                                        VK_FORMAT_R8G8B8A8_UNORM, &fp);
+    const VkFormatFeatureFlags need =
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((fp.optimalTilingFeatures & need) == need)
+      mipLevels = (uint32_t)std::floor(
+                      std::log2((double)std::max(texWidth, texHeight))) +
+                  1;
+  }
+
   // 2. Create Image
   TextureResource res;
   VkImageCreateInfo imageInfo{};
@@ -181,13 +198,14 @@ TextureManager::LoadTextureVulkan(const std::string &path) {
   imageInfo.extent.width = static_cast<uint32_t>(texWidth);
   imageInfo.extent.height = static_cast<uint32_t>(texHeight);
   imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
+  imageInfo.mipLevels = mipLevels;
   imageInfo.arrayLayers = 1;
   imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
   imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
   imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  imageInfo.usage =
-      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                    VK_IMAGE_USAGE_SAMPLED_BIT;
   imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -228,7 +246,7 @@ TextureManager::LoadTextureVulkan(const std::string &path) {
     toDst.image = res.image;
     toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     toDst.subresourceRange.baseMipLevel = 0;
-    toDst.subresourceRange.levelCount = 1;
+    toDst.subresourceRange.levelCount = mipLevels;
     toDst.subresourceRange.baseArrayLayer = 0;
     toDst.subresourceRange.layerCount = 1;
     toDst.srcAccessMask = 0;
@@ -251,14 +269,48 @@ TextureManager::LoadTextureVulkan(const std::string &path) {
     vkCmdCopyBufferToImage(cmd, stagingBuffer, res.image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    VkImageMemoryBarrier toShader = toDst;
-    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    // Level i-1 (just written) → source; blit it half-size into level i;
+    // then level i-1 is final and goes to shader-read.
+    int32_t mw = texWidth, mh = texHeight;
+    VkImageMemoryBarrier level = toDst;
+    level.subresourceRange.levelCount = 1;
+    for (uint32_t i = 1; i < mipLevels; ++i) {
+      level.subresourceRange.baseMipLevel = i - 1;
+      level.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      level.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      level.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      level.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                           nullptr, 1, &level);
+      VkImageBlit blit{};
+      blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+      blit.srcOffsets[1] = {mw, mh, 1};
+      const int32_t nw = std::max(1, mw / 2), nh = std::max(1, mh / 2);
+      blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+      blit.dstOffsets[1] = {nw, nh, 1};
+      vkCmdBlitImage(cmd, res.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                     VK_FILTER_LINEAR);
+      level.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      level.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      level.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      level.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                           nullptr, 0, nullptr, 1, &level);
+      mw = nw;
+      mh = nh;
+    }
+    // Last level was only ever a blit destination.
+    level.subresourceRange.baseMipLevel = mipLevels - 1;
+    level.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    level.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    level.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    level.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &toShader);
+                         0, nullptr, 1, &level);
 
     vkEndCommandBuffer(cmd);
 
@@ -277,13 +329,16 @@ TextureManager::LoadTextureVulkan(const std::string &path) {
   viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
   viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
   viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.levelCount = mipLevels;
   viewInfo.subresourceRange.layerCount = 1;
 
   vkCreateImageView(device, &viewInfo, nullptr, &res.view);
 
+  // Our own trilinear sampler (also outlives viewport resizes, unlike the
+  // offscreen sampler handed in as defaultSampler).
+  EnsureMipSampler();
   res.descriptorSet = ImGui_ImplVulkan_AddTexture(
-      defaultSampler, res.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      mipSampler, res.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   // Cleanup staging buffer
   vkDestroyBuffer(device, stagingBuffer, nullptr);

@@ -144,6 +144,7 @@ void VideoDecoder::Run(bool loop) {
       out.pts = offset + raw;
       out.width = d.outW;
       out.height = d.outH;
+      out.rgba = AcquireBuffer();
       out.rgba.resize((size_t)d.outW * d.outH * 4);
       uint8_t *dst[4] = {out.rgba.data(), nullptr, nullptr, nullptr};
       int dstStride[4] = {d.outW * 4, 0, 0, 0};
@@ -152,8 +153,10 @@ void VideoDecoder::Run(bool loop) {
       std::lock_guard<std::mutex> lock(mutex_);
       frames_.push_back(std::move(out));
       // Only reached while the sound track is starving: drop the oldest.
-      while (frames_.size() > kMaxQueuedFrames * 2)
+      while (frames_.size() > kMaxQueuedFrames * 2) {
+        RecycleLocked(std::move(frames_.front().rgba));
         frames_.pop_front();
+      }
     }
   };
   auto emitAudio = [&]() {
@@ -398,6 +401,7 @@ void VideoDecoder::Run(bool loop) {
         int64_t ns = 0;
         AImage_getTimestamp(img, &ns);
         VideoFrame out;
+        out.rgba = AcquireBuffer();
         const bool ok = ImageToFrame(img, out);
         AImage_delete(img);
         if (!ok)
@@ -409,8 +413,10 @@ void VideoDecoder::Run(bool loop) {
         out.pts = offset + raw;
         std::lock_guard<std::mutex> lock(mutex_);
         frames_.push_back(std::move(out));
-        while (frames_.size() > kMaxQueuedFrames * 2)
+        while (frames_.size() > kMaxQueuedFrames * 2) {
+          RecycleLocked(std::move(frames_.front().rgba));
           frames_.pop_front();
+        }
       }
       if (got || stop_)
         return;
@@ -572,24 +578,45 @@ void VideoDecoder::Close() {
     thread_.join();
   std::lock_guard<std::mutex> lock(mutex_);
   frames_.clear();
+  pool_.clear();
   impl_.reset();
   audio_.reset();
+}
+
+std::vector<uint8_t> VideoDecoder::AcquireBuffer() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (pool_.empty())
+    return {};
+  std::vector<uint8_t> b = std::move(pool_.back());
+  pool_.pop_back();
+  return b; // keeps its size: resize() to the same frame size is free
+}
+
+void VideoDecoder::RecycleLocked(std::vector<uint8_t> &&buffer) {
+  if (buffer.capacity() > 0 && pool_.size() < kMaxQueuedFrames * 2 + 4)
+    pool_.push_back(std::move(buffer));
+}
+
+void VideoDecoder::Recycle(std::vector<uint8_t> &&buffer) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  RecycleLocked(std::move(buffer));
 }
 
 bool VideoDecoder::TakeFrame(double clock, VideoFrame &out, bool first) {
   bool got = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (first && !frames_.empty()) {
+    // Frames skipped over give their buffers back to the pool.
+    const auto take = [&] {
+      RecycleLocked(std::move(out.rgba));
       out = std::move(frames_.front());
       frames_.pop_front();
       got = true;
-    }
-    while (!frames_.empty() && frames_.front().pts <= clock + 0.005) {
-      out = std::move(frames_.front());
-      frames_.pop_front();
-      got = true;
-    }
+    };
+    if (first && !frames_.empty())
+      take();
+    while (!frames_.empty() && frames_.front().pts <= clock + 0.005)
+      take();
   }
   if (got)
     cv_.notify_all();

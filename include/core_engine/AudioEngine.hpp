@@ -49,6 +49,35 @@ private:
 
 using VoiceId = int;
 
+// Per-ear processing of a voice. Changes are ramped over the next chunk so a
+// moving source never clicks.
+struct VoiceSpatial {
+  float gainL = 1.0f, gainR = 1.0f;
+  // Interaural time difference: the far ear hears the sound this many
+  // samples later (fractional; up to kMaxEarDelay).
+  float delayL = 0.0f, delayR = 0.0f;
+  // One-pole low-pass coefficient per ear (1 = off): head shadow on the far
+  // ear, duller sound from behind.
+  float lowpassL = 1.0f, lowpassR = 1.0f;
+  bool mono = false; // downmix first: a 3D source is a point
+};
+constexpr int kMaxEarDelay = 48; // samples (1 ms at 48 kHz)
+
+// DSP state of one voice: ear delay lines (mono input) + low-pass filters.
+struct SpatialState {
+  VoiceSpatial current;
+  bool started = false; // first chunk takes the target without ramping
+  float history[64] = {};
+  unsigned writePos = 0; // wraps; only ever used masked
+  float lpL = 0.0f, lpR = 0.0f;
+};
+
+// Applies `target` to n interleaved stereo frames in place, ramping from the
+// state's current settings. Mono voices get delays + filters, stereo voices
+// only gains.
+void Spatialize(SpatialState &state, const VoiceSpatial &target,
+                float *frames, size_t n);
+
 class AudioEngine {
 public:
   AudioEngine() = default;
@@ -69,8 +98,9 @@ public:
   void StopVoice(VoiceId id);
   void StopAll();
   bool IsVoiceActive(VoiceId id) const;
-  // left/right gains applied to everything pushed from now on. `mono`
-  // downmixes the voice first (3D sources are panned as a point).
+  // Applied to everything pushed from now on (ramped in).
+  void SetVoiceSpatial(VoiceId id, const VoiceSpatial &spatial);
+  // Plain stereo volume (2D voices).
   void SetVoiceGains(VoiceId id, float left, float right, bool mono);
   // Seconds of this voice the device has actually played.
   double VoicePlayedSeconds(VoiceId id) const;
@@ -87,8 +117,8 @@ private:
     size_t cursor = 0;
     bool loop = false;
     bool done = false; // source exhausted; removed once drained
-    float gainL = 1.0f, gainR = 1.0f;
-    bool mono = false;
+    VoiceSpatial target;
+    SpatialState dsp;
     uint64_t framesPushed = 0;
   };
 

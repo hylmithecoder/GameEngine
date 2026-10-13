@@ -33,6 +33,9 @@ SceneRenderer::SceneRenderer(int width, int height)
 SceneRenderer::~SceneRenderer() {
   if (device != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(device);
+    WaitOffscreenWork();
+    if (offscreenFence != VK_NULL_HANDLE)
+      vkDestroyFence(device, offscreenFence, nullptr);
     for (auto &[id, t] : dynamicTextures)
       FreeDynamicTexture(t);
     dynamicTextures.clear();
@@ -65,6 +68,12 @@ SceneRenderer::~SceneRenderer() {
       vkDestroyPipelineLayout(device, meshPipelineLayout, nullptr);
     if (meshTextureSetLayout != VK_NULL_HANDLE)
       vkDestroyDescriptorSetLayout(device, meshTextureSetLayout, nullptr);
+    if (meshSceneSetLayout != VK_NULL_HANDLE)
+      vkDestroyDescriptorSetLayout(device, meshSceneSetLayout, nullptr);
+    if (meshSceneUbo != VK_NULL_HANDLE)
+      vkDestroyBuffer(device, meshSceneUbo, nullptr);
+    if (meshSceneUboMemory != VK_NULL_HANDLE)
+      vkFreeMemory(device, meshSceneUboMemory, nullptr);
     if (whiteView != VK_NULL_HANDLE)
       vkDestroyImageView(device, whiteView, nullptr);
     if (whiteImage != VK_NULL_HANDLE)
@@ -226,6 +235,7 @@ void SceneRenderer::SetViewportSize(int newWidth, int newHeight) {
 
   if (device != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(device);
+    WaitOffscreenWork();
     DestroyOffscreenResources();
     CreateOffscreenResources();
   }
@@ -380,12 +390,36 @@ void SceneRenderer::CreateOffscreenResources() {
   subpass.pColorAttachments = &colorAttachmentRef;
   subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
+  // Explicit dependencies: with async submits the previous frame may still
+  // be sampling this image (UI pass) or writing depth when the next scene
+  // pass starts, and the UI pass must see the finished colour.
+  const VkSubpassDependency deps[2] = {
+      {VK_SUBPASS_EXTERNAL, 0,
+       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+       0},
+      {0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, 0},
+  };
+
   VkRenderPassCreateInfo renderPassInfo{};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   renderPassInfo.attachmentCount = 2;
   renderPassInfo.pAttachments = attachments;
   renderPassInfo.subpassCount = 1;
   renderPassInfo.pSubpasses = &subpass;
+  renderPassInfo.dependencyCount = 2;
+  renderPassInfo.pDependencies = deps;
 
   if (vkCreateRenderPass(device, &renderPassInfo, nullptr,
                          &offscreen.renderPass) != VK_SUCCESS) {
@@ -464,6 +498,7 @@ uint32_t SceneRenderer::findMemoryType(uint32_t typeFilter,
 void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   if (device == VK_NULL_HANDLE || offscreen.framebuffer == VK_NULL_HANDLE)
     return;
+  WaitOffscreenWork();
 
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -558,15 +593,37 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   vkCmdEndRenderPass(cmd);
   vkEndCommandBuffer(cmd);
 
+  SubmitOffscreenCommands(cmd);
+}
+
+void SceneRenderer::SubmitOffscreenCommands(VkCommandBuffer cmd) {
   VkSubmitInfo submitInfo{};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &cmd;
+  if (!asyncSubmit) {
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+    return;
+  }
+  if (offscreenFence == VK_NULL_HANDLE) {
+    VkFenceCreateInfo fi{};
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(device, &fi, nullptr, &offscreenFence);
+  } else {
+    vkResetFences(device, 1, &offscreenFence);
+  }
+  vkQueueSubmit(graphicsQueue, 1, &submitInfo, offscreenFence);
+  offscreenCmd = cmd; // freed once the fence has signalled
+}
 
-  vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-  vkQueueWaitIdle(graphicsQueue);
-
-  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+void SceneRenderer::WaitOffscreenWork() {
+  if (offscreenCmd == VK_NULL_HANDLE)
+    return;
+  vkWaitForFences(device, 1, &offscreenFence, VK_TRUE, UINT64_MAX);
+  vkFreeCommandBuffers(device, commandPool, 1, &offscreenCmd);
+  offscreenCmd = VK_NULL_HANDLE;
 }
 
 VkDescriptorSet SceneRenderer::GetViewportDescriptorSet() const {
@@ -1138,18 +1195,74 @@ void SceneRenderer::InitMeshPipeline() {
     }
   }
 
+  // Descriptor set 1: the per-pass scene uniform buffer.
+  if (meshSceneSetLayout == VK_NULL_HANDLE) {
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding = 0;
+    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslInfo.bindingCount = 1;
+    dslInfo.pBindings = &uboBinding;
+    if (vkCreateDescriptorSetLayout(device, &dslInfo, nullptr,
+                                    &meshSceneSetLayout) != VK_SUCCESS)
+      throw std::runtime_error("failed to create mesh scene set layout");
+
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = sizeof(MeshSceneUniforms);
+    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &bi, nullptr, &meshSceneUbo) != VK_SUCCESS)
+      throw std::runtime_error("failed to create mesh scene uniform buffer");
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(device, meshSceneUbo, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex =
+        findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device, &ai, nullptr, &meshSceneUboMemory) !=
+        VK_SUCCESS)
+      throw std::runtime_error("failed to allocate mesh scene uniforms");
+    vkBindBufferMemory(device, meshSceneUbo, meshSceneUboMemory, 0);
+    vkMapMemory(device, meshSceneUboMemory, 0, sizeof(MeshSceneUniforms), 0,
+                &meshSceneUboMapped);
+
+    VkDescriptorSetAllocateInfo dsa{};
+    dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsa.descriptorPool = descriptorPool;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &meshSceneSetLayout;
+    if (vkAllocateDescriptorSets(device, &dsa, &meshSceneSet) != VK_SUCCESS)
+      throw std::runtime_error("failed to allocate mesh scene descriptor");
+    VkDescriptorBufferInfo dbi{meshSceneUbo, 0, sizeof(MeshSceneUniforms)};
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = meshSceneSet;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w.pBufferInfo = &dbi;
+    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+  }
+
+  // Per draw: model matrix + material = 80 bytes (limit is 128 on some
+  // GPUs, e.g. Adreno 5xx).
   VkPushConstantRange pc{};
   pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
   pc.offset = 0;
-  pc.size = sizeof(glm::mat4) * 2 +
-            sizeof(glm::vec4) * 5; // mvp + model + lightPosOrDir +
-                                   // lightColorType + lightDir + lightParams +
-                                   // material (rgb diffuse, w = hasTexture)
+  pc.size = sizeof(MeshPushConstants);
 
+  const VkDescriptorSetLayout setLayouts[2] = {meshTextureSetLayout,
+                                               meshSceneSetLayout};
   VkPipelineLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  layoutInfo.setLayoutCount = 1;
-  layoutInfo.pSetLayouts = &meshTextureSetLayout;
+  layoutInfo.setLayoutCount = 2;
+  layoutInfo.pSetLayouts = setLayouts;
   layoutInfo.pushConstantRangeCount = 1;
   layoutInfo.pPushConstantRanges = &pc;
   if (vkCreatePipelineLayout(device, &layoutInfo, nullptr,
@@ -1294,7 +1407,8 @@ void SceneRenderer::InitWhiteTexture() {
   vkCreateImageView(device, &vci, nullptr, &whiteView);
 
   whiteDescriptor = ImGui_ImplVulkan_AddTexture(
-      offscreen.sampler, whiteView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      EnsureDynamicSampler(), whiteView,
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   vkDestroyBuffer(device, staging, nullptr);
   vkFreeMemory(device, stagingMem, nullptr);
@@ -1367,6 +1481,17 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     lightColor = sunLight.color;
   }
 
+  // Per-pass uniforms (camera + light), bound once as set 1.
+  MeshSceneUniforms su;
+  su.viewProj = viewProj;
+  su.lightPosOrDir = glm::vec4(posOrDir, intensity);
+  su.lightColorType = glm::vec4(lightColor, (float)type);
+  su.lightDir = glm::vec4(lightDir, 0.0f);
+  su.lightParams = glm::vec4(range, spotAngleRad, gamma, spotCosOuter);
+  std::memcpy(meshSceneUboMapped, &su, sizeof(su));
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          meshPipelineLayout, 1, 1, &meshSceneSet, 0, nullptr);
+
   // 3. Render all meshes in the scene
   for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
     const Mesh3D &m = meshes3d[mi];
@@ -1374,39 +1499,13 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
       continue;
     if (!drawMarkers && (m.isLight || m.isCamera || m.isAudioEmitter))
       continue;
-    glm::mat4 model = GetMesh3DWorldModel(mi);
-    glm::mat4 mvp = viewProj * model;
-
-    struct PC {
-      glm::mat4 mvp;
-      glm::mat4 model;
-      glm::vec4 lightPosOrDir;  // xyz = pos/dir, w = intensity
-      glm::vec4 lightColorType; // xyz = color, w = type (special -1.0 =
-                                // emissive/unlit)
-      glm::vec4 lightDir;       // xyz = spotlight forward vector, w = unused
-      glm::vec4 lightParams;    // x = range, y = spotAngleRad, z = gamma, w =
-                                // spotCosOuter
-      glm::vec4 material;       // xyz = diffuse tint, w = hasTexture
-    } pc;
-
-    pc.mvp = mvp;
-    pc.model = model;
-
-    if (m.isLight || m.isAudioEmitter) {
-      // Draw the light source itself as an unlit solid sphere matching its
-      // light color (audio markers: a fixed cyan).
-      pc.lightPosOrDir = glm::vec4(0.0f);
-      pc.lightColorType =
-          glm::vec4(m.isLight ? m.lightColor : glm::vec3(0.35f, 0.80f, 1.0f),
-                    -1.0f); // -1.0 signals unlit emissive shading
-      pc.lightDir = glm::vec4(0.0f);
-      pc.lightParams = glm::vec4(0.0f);
-    } else {
-      pc.lightPosOrDir = glm::vec4(posOrDir, intensity);
-      pc.lightColorType = glm::vec4(lightColor, (float)type);
-      pc.lightDir = glm::vec4(lightDir, 0.0f);
-      pc.lightParams = glm::vec4(range, spotAngleRad, gamma, spotCosOuter);
-    }
+    MeshPushConstants pc;
+    pc.model = GetMesh3DWorldModel(mi);
+    // Light sources draw as a solid sphere in their light colour, audio
+    // markers in a fixed cyan (material mode 3 = solid unlit).
+    const bool solid = m.isLight || m.isAudioEmitter;
+    const glm::vec3 solidColor =
+        m.isLight ? m.lightColor : glm::vec3(0.35f, 0.80f, 1.0f);
 
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cmd, 0, 1, &m.vertexBuffer, offsets);
@@ -1416,14 +1515,15 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
     auto drawRange = [&](uint32_t indexOffset, uint32_t indexCount,
                          const glm::vec3 &diffuse, float texMode,
                          VkDescriptorSet tex) {
-      pc.material = glm::vec4(diffuse, texMode);
+      pc.material = solid ? glm::vec4(solidColor, 3.0f)
+                          : glm::vec4(diffuse, texMode);
       VkDescriptorSet ds = (tex != VK_NULL_HANDLE) ? tex : whiteDescriptor;
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               meshPipelineLayout, 0, 1, &ds, 0, nullptr);
       vkCmdPushConstants(cmd, meshPipelineLayout,
                          VK_SHADER_STAGE_VERTEX_BIT |
                              VK_SHADER_STAGE_FRAGMENT_BIT,
-                         0, sizeof(PC), &pc);
+                         0, sizeof(MeshPushConstants), &pc);
       vkCmdDrawIndexed(cmd, indexCount, 1, indexOffset, 0, 0);
     };
 
@@ -3183,6 +3283,8 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
 
   for (const Mesh3D &mesh : meshes3d) {
     EditorEntitySnapshot entity;
+    entity.objectId = mesh.objectId;
+    entity.scripts = mesh.scripts;
     entity.name = mesh.displayName;
     entity.path = mesh.path;
     entity.parent = mesh.parent;
@@ -3323,6 +3425,8 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.audio = entity.audio;
     mesh.video = entity.video;
     mesh.movable = entity.movable;
+    mesh.objectId = entity.objectId ? entity.objectId : ilmeee::NewObjectId();
+    mesh.scripts = entity.scripts;
     mesh.movementScript = entity.movementScript;
     mesh.movementSpeed = entity.movementSpeed;
     mesh.movementRig = entity.movementRig;
@@ -3942,6 +4046,7 @@ void SceneRenderer::RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
 void SceneRenderer::SubmitOffscreenPass(
     const Offscreen &target, int w, int h,
     const std::function<void(VkCommandBuffer)> &record) {
+  WaitOffscreenWork();
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocInfo.commandPool = commandPool;
@@ -3983,14 +4088,7 @@ void SceneRenderer::SubmitOffscreenPass(
 
   vkCmdEndRenderPass(cmd);
   vkEndCommandBuffer(cmd);
-
-  VkSubmitInfo submit{};
-  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &cmd;
-  vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-  vkQueueWaitIdle(graphicsQueue);
-  vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+  SubmitOffscreenCommands(cmd);
 }
 
 bool SceneRenderer::RenderGameView() {
@@ -4011,6 +4109,7 @@ bool SceneRenderer::ReadbackViewport(std::vector<uint8_t> &rgba,
   if (device == VK_NULL_HANDLE || offscreen.image == VK_NULL_HANDLE ||
       width <= 0 || height <= 0)
     return false;
+  WaitOffscreenWork();
   const VkDeviceSize size = (VkDeviceSize)width * (VkDeviceSize)height * 4;
 
   VkBuffer buffer = VK_NULL_HANDLE;
@@ -4226,12 +4325,33 @@ void SceneRenderer::CreatePreviewResources() {
   subpass.colorAttachmentCount = 1;
   subpass.pColorAttachments = &colorRef;
   subpass.pDepthStencilAttachment = &depthRef;
+  // Same dependencies as the main offscreen pass (see there).
+  const VkSubpassDependency deps[2] = {
+      {VK_SUBPASS_EXTERNAL, 0,
+       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+       0},
+      {0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, 0},
+  };
   VkRenderPassCreateInfo rpInfo{};
   rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   rpInfo.attachmentCount = 2;
   rpInfo.pAttachments = attachments;
   rpInfo.subpassCount = 1;
   rpInfo.pSubpasses = &subpass;
+  rpInfo.dependencyCount = 2;
+  rpInfo.pDependencies = deps;
   if (vkCreateRenderPass(device, &rpInfo, nullptr, &preview.renderPass) !=
       VK_SUCCESS)
     throw std::runtime_error("Failed to create preview render pass!");
@@ -4385,22 +4505,28 @@ bool SceneRenderer::GetPlayerCameraPose(glm::vec3 &position, glm::vec3 &right,
 // Dynamic (streaming) textures
 // ---------------------------------------------------------------------------
 
+VkSampler SceneRenderer::EnsureDynamicSampler() {
+  if (dynamicSampler != VK_NULL_HANDLE || device == VK_NULL_HANDLE)
+    return dynamicSampler;
+  VkSamplerCreateInfo si{};
+  si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  si.magFilter = VK_FILTER_LINEAR;
+  si.minFilter = VK_FILTER_LINEAR;
+  si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  si.maxLod = 0.0f;
+  if (vkCreateSampler(device, &si, nullptr, &dynamicSampler) != VK_SUCCESS)
+    dynamicSampler = VK_NULL_HANDLE;
+  return dynamicSampler;
+}
+
 int SceneRenderer::CreateDynamicTexture(int w, int h) {
   if (device == VK_NULL_HANDLE || w <= 0 || h <= 0)
     return 0;
-  if (dynamicSampler == VK_NULL_HANDLE) {
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = VK_FILTER_LINEAR;
-    si.minFilter = VK_FILTER_LINEAR;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.maxLod = 0.0f;
-    if (vkCreateSampler(device, &si, nullptr, &dynamicSampler) != VK_SUCCESS)
-      return 0;
-  }
+  if (EnsureDynamicSampler() == VK_NULL_HANDLE)
+    return 0;
 
   DynamicTexture t;
   t.width = w;
@@ -4480,8 +4606,9 @@ void SceneRenderer::UpdateDynamicTexture(int id, const uint8_t *rgba) {
   auto it = dynamicTextures.find(id);
   if (it == dynamicTextures.end() || !rgba)
     return;
-  // Safe without a fence: every render submits and waits for the queue
-  // before returning, so the GPU is never reading this staging buffer here.
+  // The in-flight scene pass may still be copying out of this staging
+  // buffer (async mode); every other pass has finished already.
+  WaitOffscreenWork();
   std::memcpy(it->second.mapped, rgba,
               (size_t)it->second.width * it->second.height * 4);
   it->second.pending = true;

@@ -1,4 +1,5 @@
 #include "../../../include/core_engine/Debugger.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/ui/SvgIconManager.hpp"
 using namespace Debug;
@@ -334,6 +335,8 @@ void HandlerProject::OpenProject(const char *folderPath) {
   }
 
   // Store the project path
+  const bool resumeWatcher = fileWatcherRunning.load();
+  if (resumeWatcher) StopFileWatcher();
   projectPath = folderPath;
 
   // Create project structure if it doesn't exist
@@ -377,6 +380,7 @@ void HandlerProject::OpenProject(const char *folderPath) {
   currentDirectory = projectPath + "/assets";
   ::Log("Project loaded successfully: " + projectPath,
         Debug::LogLevel::SUCCESS);
+  if (resumeWatcher) StartFileWatcher();
   // MainWindow mainwindow(folderPath, 1280, 720);
 }
 
@@ -545,14 +549,8 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
       if (ImGui::Selectable(label.c_str(), false,
                             ImGuiSelectableFlags_AllowDoubleClick)) {
         if (ImGui::IsMouseDoubleClicked(0)) {
-          if (isCpp) {
-#ifdef _WIN32
-            std::string cmd = "antigravity \"" + projectPath + "\"";
-            system(cmd.c_str());
-#else
-            std::string cmd = "antigravity \"assets\"";
-            system(cmd.c_str());
-#endif
+          if (isCpp || isHpp || isShader) {
+            OpenFile(node.fullPath);
           } else if (isVideo) {
 #ifdef _WIN32
             ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL,
@@ -597,14 +595,7 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
         }
 
         if (ImGui::MenuItem(" Edit")) {
-          // Open in appropriate editor based on file type
-          std::string cmd;
-#ifdef _WIN32
-          cmd = "antigravity \"" + node.fullPath + "\"";
-#else
-          cmd = "antigravity \"" + node.fullPath + "\"";
-#endif
-          system(cmd.c_str());
+          OpenFile(node.fullPath);
         }
 
         if (ImGui::MenuItem(" Rename")) {
@@ -957,91 +948,14 @@ void HandlerProject::DrawFolderGridView() {
   // ImGui::PopStyleColor();
 }
 
-void HandlerProject::NewScripts(const std::string &scriptName) {
-  string scriptPath = projectPath + "/assets/scripts/";
-  string headerPath = projectPath + "/assets/scripts/header/";
-  string fullPath = scriptPath + scriptName + ".cpp";
-
-  // Create scripts directory if it doesn't exist
-  try {
-    std::filesystem::create_directories(scriptPath);
-    std::filesystem::create_directories(headerPath);
-  } catch (const std::filesystem::filesystem_error &e) {
-    cerr << "Error creating directories: " << e.what() << endl;
-    return;
-  }
-
-  // Check if file already exists
-  ifstream checkFile(fullPath.c_str());
-  if (checkFile.good()) {
-    cerr << "Script file already exists: " << fullPath << endl;
-    checkFile.close();
-    return;
-  }
-
-  // Create and write the new script file
-  ofstream scriptFile(fullPath);
-  if (scriptFile.is_open()) {
-    // Write template code
-    scriptFile << "#include \"" << scriptName << ".hpp\"\n\n";
-    scriptFile << "class " << scriptName << " {\n";
-    scriptFile << "private:\n";
-    scriptFile << "    // Add private members here\n\n";
-    scriptFile << "public:\n";
-    scriptFile << "    " << scriptName << "() {\n";
-    scriptFile << "        // Constructor\n";
-    scriptFile << "    }\n\n";
-    scriptFile << "    void Start() {\n";
-    scriptFile << "        // Called when script instance is being loaded\n";
-    scriptFile << "    }\n\n";
-    scriptFile << "    void Update() {\n";
-    scriptFile << "        // Called every frame\n";
-    scriptFile << "    }\n\n";
-    scriptFile << "    ~" << scriptName << "() {\n";
-    scriptFile << "        // Destructor\n";
-    scriptFile << "    }\n";
-    scriptFile << "};\n";
-
-    scriptFile.close();
-
-    // Create corresponding header file
-    string headerFullPath = headerPath + scriptName + ".hpp";
-    ofstream headerFile(headerFullPath);
-    if (headerFile.is_open()) {
-      headerFile << "#pragma once\n";
-      headerFile << "#include <GameEngine.h>\n\n";
-      headerFile << "class " << scriptName << " {\n";
-      headerFile << "public:\n";
-      headerFile << "    " << scriptName << "();\n";
-      headerFile << "    void Start();\n";
-      headerFile << "    void Update();\n";
-      headerFile << "    ~" << scriptName << "();\n";
-      headerFile << "};\n";
-      headerFile.close();
-    }
-
-    cout << "Created script: " << fullPath << endl;
-    cout << "Created Header: " << headerFullPath << endl;
-    // if (MessageBoxA(NULL,
-    //     ("New script created successfully. Do you want to open the file?"),
-    //     "GameEngine SDL",
-    //     MB_YESNO | MB_ICONINFORMATION) == IDYES)
-    // {
-    OpenFile(projectPath);
-    // }
-  } else {
-    cerr << "Error creating script file: " << fullPath << endl;
-  }
-}
-
 void HandlerProject::OpenFile(const std::string &fileName) {
-#ifdef _WIN32
-  std::string cmd = "antigravity \"" + fileName + "\"";
-  system(cmd.c_str());
-#else
-  std::string cmd = "antigravity \"assets\"";
-  system(cmd.c_str());
-#endif
+  const auto settings = ilmeee::LoadCodeEditorSettings(
+      ilmeee::UserDataRoot() / "editor-preferences.json");
+  std::string error;
+  if (!ilmeee::OpenInCodeEditor(settings, fileName, error, projectPath)) {
+    ShowNotification("Code Editor", error, redColor);
+    ::Log(error, Debug::LogLevel::ERROR);
+  }
 }
 
 void HandlerProject::DeleteFileOrFolder(const std::string &filePath) {
@@ -1058,8 +972,9 @@ void HandlerProject::ShowNotification(const std::string &title,
                                       const std::string &message,
                                       ImVec4 color) {
 
-  notifications.push_back(Notification{
-      title, message, color, static_cast<float>(ImGui::GetTime()),
+  std::lock_guard<std::mutex> lock(notificationMutex);
+  pendingNotifications.push_back(Notification{
+      title, message, color, 0.0f,
       3.0f // Duration in seconds
   });
 }
@@ -1069,6 +984,16 @@ void HandlerProject::RenderNotifications() {
   float notificationWidth = 300.0f;
   float startY = padding;
   float currentTime = ImGui::GetTime();
+  // File watching and script builds can notify from worker threads. Only
+  // this UI thread touches ImGui time and the visible notification list.
+  {
+    std::lock_guard<std::mutex> lock(notificationMutex);
+    for (auto &notification : pendingNotifications) {
+      notification.startTime = currentTime;
+      notifications.push_back(std::move(notification));
+    }
+    pendingNotifications.clear();
+  }
 
   // Process notifications from oldest to newest
   for (int i = 0; i < notifications.size(); i++) {
@@ -1276,6 +1201,7 @@ void HandlerProject::FileWatcherLoop() {
 }
 
 void HandlerProject::SnapshotProjectFiles() {
+  std::lock_guard<std::mutex> lock(fileWatcherMutex);
   try {
     // Clear existing timestamps
     fileTimestamps.clear();
@@ -1298,6 +1224,7 @@ void HandlerProject::SnapshotProjectFiles() {
 }
 
 bool HandlerProject::CheckForFileChanges() {
+  std::lock_guard<std::mutex> lock(fileWatcherMutex);
   bool changesDetected = false;
 
   try {
@@ -1464,10 +1391,7 @@ void HandlerProject::NewScene(const std::string &name) {
 
 void HandlerProject::HandleCreateNewFile(const std::string &targetFolder) {
   static bool isCreating = false;
-  static bool isScriptFile = false;
   static std::string createdFilePath;
-  static std::string createdCPPPath;
-  static std::string createdHPPPath;
   static char renameBuffer[256] = "";
 
   if (ImGui::BeginMenu(" Create New File")) {
@@ -1478,57 +1402,11 @@ void HandlerProject::HandleCreateNewFile(const std::string &targetFolder) {
       ofs.close();
       strncpy(renameBuffer, "NewFile", sizeof(renameBuffer));
       isCreating = true;
-      isScriptFile = false;
     }
 
     if (ImGui::BeginMenu("Scripts")) {
       if (ImGui::MenuItem("C++ Script")) {
-        std::string baseName = "NewScript";
-        createdCPPPath = targetFolder + "/" + baseName + ".cpp";
-        createdHPPPath = targetFolder + "/" + baseName + ".hpp";
-
-        // .cpp template
-        std::ofstream cpp(createdCPPPath);
-        if (cpp.is_open()) {
-          // Write template code
-          cpp << "#include \"" << baseName << ".hpp\"\n\n";
-          cpp << "class " << baseName << " {\n";
-          cpp << "private:\n";
-          cpp << "    // Add private members here\n\n";
-          cpp << "public:\n";
-          cpp << "    " << baseName << "() {\n";
-          cpp << "        // Constructor\n";
-          cpp << "    }\n\n";
-          cpp << "    void Start() {\n";
-          cpp << "        // Called when script instance is being loaded\n";
-          cpp << "    }\n\n";
-          cpp << "    void Update() {\n";
-          cpp << "        // Called every frame\n";
-          cpp << "    }\n\n";
-          cpp << "    ~" << baseName << "() {\n";
-          cpp << "        // Destructor\n";
-          cpp << "    }\n";
-          cpp << "};\n";
-          cpp.close();
-        }
-
-        // .hpp template
-        std::ofstream hpp(createdHPPPath);
-        if (hpp.is_open()) {
-          hpp << "#pragma once\n\n";
-          hpp << "class " << baseName << " {\n";
-          hpp << "public:\n";
-          hpp << "    " << baseName << "();\n";
-          hpp << "    void Start();\n";
-          hpp << "    void Update();\n";
-          hpp << "    ~" << baseName << "();\n";
-          hpp << "};\n";
-          hpp.close();
-        }
-
-        strncpy(renameBuffer, "NewScript", sizeof(renameBuffer));
-        isCreating = true;
-        isScriptFile = true;
+        RequestCreateScript(targetFolder);
       }
       ImGui::EndMenu();
     }
@@ -1545,24 +1423,8 @@ void HandlerProject::HandleCreateNewFile(const std::string &targetFolder) {
                          ImGuiInputTextFlags_EnterReturnsTrue |
                              ImGuiInputTextFlags_AutoSelectAll)) {
 
-      std::string newBaseName = renameBuffer[0]
-                                    ? renameBuffer
-                                    : (isScriptFile ? "NewScript" : "NewFile");
-
-      if (isScriptFile) {
-        std::string newCPPPath = targetFolder + "/" + newBaseName + ".cpp";
-        std::string newHPPPath = targetFolder + "/" + newBaseName + ".hpp";
-        if (!std::filesystem::exists(newCPPPath) &&
-            !std::filesystem::exists(newHPPPath)) {
-          std::filesystem::rename(createdCPPPath, newCPPPath);
-          std::filesystem::rename(createdHPPPath, newHPPPath);
-          ShowNotification("Created", "Script created: " + newBaseName,
-                           ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-        } else {
-          ShowNotification("Rename Failed", "File already exists.",
-                           ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        }
-      } else {
+      std::string newBaseName = renameBuffer[0] ? renameBuffer : "NewFile";
+      {
         std::string newPath = targetFolder + "/" + newBaseName + ".txt";
         if (!std::filesystem::exists(newPath)) {
           std::filesystem::rename(createdFilePath, newPath);
@@ -1874,13 +1736,10 @@ void HandlerProject::HandlerOpenFileWithExtensionName(AssetFile &node) {
   bool isShader =
       (ext == ".glsl" || ext == ".shader" || ext == ".frag" || ext == ".vert");
 
-  if (isCpp || isHpp) {
-#ifdef _WIN32
-    std::string cmd = "antigravity \"" + projectPath + "\"";
-#else
-    std::string cmd = "antigravity \"" + node.fullPath + "\"";
-#endif
-    system(cmd.c_str());
+  if (isCpp || isHpp || isShader || ext == ".h" || ext == ".c" ||
+      ext == ".cc" || ext == ".cxx" || ext == ".txt" || ext == ".json" ||
+      ext == ".yaml" || ext == ".yml" || ext == ".md") {
+    OpenFile(node.fullPath);
   } else if (isVideo) {
 #ifdef _WIN32
     ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL, SW_SHOW);

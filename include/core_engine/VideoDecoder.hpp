@@ -50,9 +50,15 @@ public:
   bool TakeFrame(double clock, VideoFrame &out, bool first = false);
   // End of a non-looping file reached and every frame handed out.
   bool Finished() const;
+  // Hand a frame's pixel buffer back once it has been uploaded. Buffers are
+  // reused instead of freed: on Android, freeing a multi-MB block allocated
+  // on another thread cost ~140 ms per frame (6 fps on a Galaxy A12).
+  void Recycle(std::vector<uint8_t> &&buffer);
 
 private:
   void Run(bool loop);
+  std::vector<uint8_t> AcquireBuffer(); // pooled, any size; locks mutex_
+  void RecycleLocked(std::vector<uint8_t> &&buffer);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -61,6 +67,7 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::deque<VideoFrame> frames_;
+  std::vector<std::vector<uint8_t>> pool_; // spare pixel buffers
   std::atomic<bool> stop_{false};
   std::atomic<bool> eof_{false};
 };

@@ -104,6 +104,7 @@ struct ProjectEntry {
   std::string engineVersion; // "0.1" if unknown
   std::string lastOpened;    // ISO date, e.g. "2026-05-17"
   std::string lastScene;     // optional, last opened scene filename
+  bool mcpEnabled = false;   // Hub launch preference, stored in hub.json
 };
 
 // ---------------------------------------------------------------------------
@@ -188,6 +189,9 @@ struct ChildProc {
   pid_t pid = -1;
   std::string label;       // "Editor:<pid>"
   std::string projectPath; // for display
+  bool mcpEnabled = false;
+  std::mutex tokenMutex;
+  std::string mcpToken;
   int readFd = -1;
   std::thread reader;
   std::atomic<bool> alive{false};
@@ -275,6 +279,8 @@ std::vector<ProjectEntry> LoadRecentProjects() {
         e.engineVersion = item.value("engineVersion", "0.1");
         e.lastOpened = item.value("lastOpened", "");
         e.lastScene = item.value("lastScene", "");
+        if (item.contains("mcpEnabled") && item["mcpEnabled"].is_boolean())
+          e.mcpEnabled = item["mcpEnabled"].get<bool>();
         if (e.path.empty())
           continue;
         // Hub config is the index; project.json is the source of truth
@@ -302,7 +308,8 @@ void SaveRecentProjects(const std::vector<ProjectEntry> &projects) {
                              {"path", e.path},
                              {"engineVersion", e.engineVersion},
                              {"lastOpened", e.lastOpened},
-                             {"lastScene", e.lastScene}});
+                             {"lastScene", e.lastScene},
+                             {"mcpEnabled", e.mcpEnabled}});
   }
   std::ofstream f(p);
   if (f.is_open())
@@ -347,10 +354,19 @@ public:
   // stdout+stderr into a pipe whose reader thread feeds logStore. The
   // process is intentionally kept in the same process group so the
   // user can quit everything by closing Hub.
-  bool LaunchEditor(const std::string &projectPath) {
+  bool LaunchEditor(const std::string &projectPath, bool mcpEnabled) {
     if (projectPath.empty()) {
       logStore.Push("Hub", "LaunchEditor: empty project path.");
       return false;
+    }
+    if (mcpEnabled) {
+      for (const auto &child : children) {
+        if (child->alive && child->mcpEnabled) {
+          logStore.Push("Hub", "MCP port 9220 is already used by an open editor. "
+                                "Close it or turn off Use MCP for this project.");
+          return false;
+        }
+      }
     }
 
     int fds[2];
@@ -385,9 +401,15 @@ public:
       setvbuf(stdout, nullptr, _IOLBF, 0);
       setvbuf(stderr, nullptr, _IOLBF, 0);
       const std::string editorBin = ResolveEditorBinary();
-      if (g_DebugMode) {
+      if (g_DebugMode && mcpEnabled) {
+        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
+               projectPath.c_str(), "--debug", "--mcp", (char *)nullptr);
+      } else if (g_DebugMode) {
         execlp(editorBin.c_str(), "GameEngineSDL", "--project",
                projectPath.c_str(), "--debug", (char *)nullptr);
+      } else if (mcpEnabled) {
+        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
+               projectPath.c_str(), "--mcp", (char *)nullptr);
       } else {
         execlp(editorBin.c_str(), "GameEngineSDL", "--project",
                projectPath.c_str(), (char *)nullptr);
@@ -405,6 +427,7 @@ public:
     child->pid = pid;
     child->label = "Editor:" + std::to_string(pid);
     child->projectPath = projectPath;
+    child->mcpEnabled = mcpEnabled;
     child->readFd = fds[0];
     child->alive.store(true);
 
@@ -424,7 +447,14 @@ public:
           while ((pos = buf.find('\n')) != std::string::npos) {
             std::string line = buf.substr(0, pos);
             buf.erase(0, pos + 1);
-            store->Push(label, StripAnsi(line));
+            std::string clean = StripAnsi(line);
+            const std::string marker = "[MCP] Session token: ";
+            const size_t tokenPos = clean.find(marker);
+            if (tokenPos != std::string::npos) {
+              std::lock_guard<std::mutex> lock(child->tokenMutex);
+              child->mcpToken = clean.substr(tokenPos + marker.size());
+            }
+            store->Push(label, std::move(clean));
           }
         } else if (n == 0) {
           break; // EOF — child closed its stdout/stderr
@@ -453,37 +483,39 @@ public:
 
     children.push_back(child);
     logStore.Push("Hub", "Launched editor pid=" + std::to_string(pid) +
-                             " project=" + projectPath);
+                             " project=" + projectPath +
+                             (mcpEnabled ? " MCP=on" : " MCP=off"));
     return true;
   }
 
   void SetupTheme() {
     ImGuiStyle &s = ImGui::GetStyle();
     ImVec4 *c = s.Colors;
-    c[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.08f, 1.00f);
-    c[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.11f, 1.00f);
-    c[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.13f, 0.15f, 0.98f);
-    c[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
-    c[ImGuiCol_FrameBgHovered] = ImVec4(0.22f, 0.22f, 0.25f, 1.00f);
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.34f, 0.50f, 1.00f);
-    c[ImGuiCol_Button] = ImVec4(0.20f, 0.28f, 0.45f, 1.00f);
-    c[ImGuiCol_ButtonHovered] = ImVec4(0.27f, 0.38f, 0.60f, 1.00f);
-    c[ImGuiCol_ButtonActive] = ImVec4(0.32f, 0.46f, 0.72f, 1.00f);
-    c[ImGuiCol_Header] = ImVec4(0.18f, 0.22f, 0.30f, 1.00f);
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.30f, 0.40f, 1.00f);
-    c[ImGuiCol_HeaderActive] = ImVec4(0.30f, 0.40f, 0.55f, 1.00f);
-    c[ImGuiCol_Text] = ImVec4(0.90f, 0.90f, 0.92f, 1.00f);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.55f, 0.58f, 1.00f);
-    c[ImGuiCol_Border] = ImVec4(0.25f, 0.25f, 0.30f, 0.50f);
-    c[ImGuiCol_Separator] = ImVec4(0.30f, 0.30f, 0.35f, 0.5f);
-    s.WindowRounding = 6.0f;
-    s.ChildRounding = 6.0f;
-    s.FrameRounding = 4.0f;
+    c[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.080f, 0.088f, 1.0f);
+    c[ImGuiCol_ChildBg] = ImVec4(0.085f, 0.090f, 0.100f, 1.0f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.14f, 0.16f, 0.99f);
+    c[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.16f, 0.18f, 1.0f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.19f, 0.21f, 0.24f, 1.0f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.28f, 0.36f, 1.0f);
+    c[ImGuiCol_Button] = ImVec4(0.22f, 0.30f, 0.43f, 1.0f);
+    c[ImGuiCol_ButtonHovered] = ImVec4(0.28f, 0.38f, 0.52f, 1.0f);
+    c[ImGuiCol_ButtonActive] = ImVec4(0.32f, 0.43f, 0.58f, 1.0f);
+    c[ImGuiCol_Header] = ImVec4(0.19f, 0.25f, 0.34f, 1.0f);
+    c[ImGuiCol_HeaderHovered] = ImVec4(0.23f, 0.30f, 0.39f, 1.0f);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.27f, 0.36f, 0.48f, 1.0f);
+    c[ImGuiCol_CheckMark] = ImVec4(0.70f, 0.82f, 0.98f, 1.0f);
+    c[ImGuiCol_Text] = ImVec4(0.91f, 0.93f, 0.95f, 1.0f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.56f, 0.60f, 0.65f, 1.0f);
+    c[ImGuiCol_Border] = ImVec4(0.28f, 0.31f, 0.35f, 0.55f);
+    c[ImGuiCol_Separator] = ImVec4(0.25f, 0.28f, 0.32f, 0.65f);
+    s.WindowRounding = 7.0f;
+    s.ChildRounding = 8.0f;
+    s.FrameRounding = 5.0f;
     s.PopupRounding = 6.0f;
     s.GrabRounding = 4.0f;
-    s.WindowPadding = ImVec2(12, 12);
-    s.FramePadding = ImVec2(10, 6);
-    s.ItemSpacing = ImVec2(8, 8);
+    s.WindowPadding = ImVec2(14, 14);
+    s.FramePadding = ImVec2(11, 7);
+    s.ItemSpacing = ImVec2(9, 9);
   }
 
   // Top-level render — single full-window root, two-pane top + console
@@ -620,17 +652,22 @@ private:
     ImGui::BeginChild("##Sidebar", ImVec2(220, 0), false);
 
     // Logo header
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.05f, 0.05f, 0.07f, 1.0f));
-    ImGui::BeginChild("##Logo", ImVec2(0, 90), true);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
-    ImGui::SetCursorPos(ImVec2(16, 22));
-    ImGui::Text("ILMEEE");
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.065f, 0.070f, 0.079f, 1.0f));
+    ImGui::BeginChild("##Logo", ImVec2(0, 96), false);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.82f, 0.98f, 1.0f));
+    ImGui::SetCursorPos(ImVec2(22, 24));
+    ImGui::SetWindowFontScale(1.16f);
+    ImGui::TextUnformatted("ILMEEE");
+    ImGui::SetWindowFontScale(1.0f);
     ImGui::PopStyleColor();
-    ImGui::SetCursorPos(ImVec2(16, 44));
-    ImGui::TextDisabled("Hub  ·  v0.1");
+    ImGui::SetCursorPos(ImVec2(22, 51));
+    ImGui::TextDisabled("PROJECT HUB  /  0.1");
     ImGui::EndChild();
     ImGui::PopStyleColor();
 
+    ImGui::Spacing();
+    ImGui::SetCursorPos(ImVec2(20, ImGui::GetCursorPosY() + 8));
+    ImGui::TextDisabled("WORKSPACE");
     ImGui::Spacing();
     SidebarButton("Projects", Section::Projects);
     SidebarButton("Templates", Section::Templates);
@@ -648,13 +685,16 @@ private:
 
   void SidebarButton(const char *label, Section sec) {
     bool active = (currentSection == sec);
-    if (active)
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.35f, 0.55f, 1.0f));
-    else
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    if (ImGui::Button(label, ImVec2(-1, 0)))
+    ImGui::SetCursorPosX(12);
+    const float width = ImGui::GetContentRegionAvail().x - 12.0f;
+    if (ImGui::Selectable(label, active, 0, ImVec2(width, 36)))
       currentSection = sec;
-    ImGui::PopStyleColor();
+    if (active) {
+      const ImVec2 min = ImGui::GetItemRectMin();
+      ImGui::GetWindowDrawList()->AddRectFilled(
+          min, ImVec2(min.x + 3.0f, min.y + 36.0f),
+          ImGui::GetColorU32(ImVec4(0.62f, 0.77f, 0.96f, 1.0f)));
+    }
   }
 
   // ---------------- Main pane ----------------
@@ -684,19 +724,27 @@ private:
   }
 
   void DrawTopBar() {
-    ImGui::BeginChild("##Topbar", ImVec2(0, 56), false);
-    ImGui::Spacing();
-    ImGui::SameLine(0, 8);
-    ImGui::PushItemWidth(320);
-    ImGui::InputTextWithHint("##Search", "Search projects...", searchBuffer,
-                             IM_ARRAYSIZE(searchBuffer));
-    ImGui::PopItemWidth();
+    const float available = ImGui::GetContentRegionAvail().x;
+    const bool compact = available < 820.0f;
+    ImGui::BeginChild("##Topbar", ImVec2(0, compact ? 116.0f : 76.0f), false);
+    const char *title = currentSection == Section::Projects ? "Projects" :
+                        currentSection == Section::Templates ? "Templates" :
+                        currentSection == Section::Learn ? "Learn" : "Settings";
+    ImGui::SetCursorPos(ImVec2(20, 13));
+    ImGui::SetWindowFontScale(1.16f);
+    ImGui::TextUnformatted(title);
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::SetCursorPos(ImVec2(20, 39));
+    ImGui::TextDisabled("Ilmeee Engine workspace");
 
-    ImGui::SameLine();
+    if (compact)
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 244.0f, 20));
+    else
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 264.0f, 21));
     if (ImGui::Button("Open Folder")) {
       OpenExistingProject();
     }
-    ImGui::SameLine();
+    ImGui::SameLine(0, 8);
     if (ImGui::Button("+ New Project")) {
       showNewProjectDialog = true;
       newProjName[0] = '\0';
@@ -711,6 +759,14 @@ private:
       }
       newProjError.clear();
     }
+    if (compact)
+      ImGui::SetCursorPos(ImVec2(20, 76));
+    else
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 544.0f, 21));
+    ImGui::PushItemWidth(compact ? ImGui::GetWindowWidth() - 40.0f : 270.0f);
+    ImGui::InputTextWithHint("##Search", "Search projects...", searchBuffer,
+                             IM_ARRAYSIZE(searchBuffer));
+    ImGui::PopItemWidth();
     ImGui::EndChild();
   }
 
@@ -725,9 +781,14 @@ private:
     std::transform(filter.begin(), filter.end(), filter.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
 
-    ImGui::BeginChild("##ProjectScroll", ImVec2(0, 0), false);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16);
+    ImGui::TextDisabled("RECENT PROJECTS  /  %zu", projects.size());
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16);
+    ImGui::BeginChild("##ProjectScroll",
+                      ImVec2(ImGui::GetContentRegionAvail().x - 16, 0), false);
     for (size_t i = 0; i < projects.size(); ++i) {
-      const auto &p = projects[i];
+      auto &p = projects[i];
       if (!filter.empty()) {
         std::string lname = p.name, lpath = p.path;
         std::transform(lname.begin(), lname.end(), lname.begin(),
@@ -743,43 +804,81 @@ private:
     ImGui::EndChild();
   }
 
-  void DrawProjectCard(const ProjectEntry &p, size_t index) {
+  void DrawProjectCard(ProjectEntry &p, size_t index) {
     ImGui::PushID((int)index);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.14f, 0.16f, 1.0f));
-    ImGui::BeginChild("##Card", ImVec2(0, 82), true);
+    const bool compact = ImGui::GetContentRegionAvail().x < 590.0f;
+    const float cardHeight = compact ? 152.0f : 116.0f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.135f, 0.151f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.27f, 0.30f, 0.35f, 0.75f));
+    ImGui::BeginChild("##Card", ImVec2(0, cardHeight), true,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    const float cardWidth = ImGui::GetWindowWidth();
+    const ImVec2 cardMin = ImGui::GetWindowPos();
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImVec2(cardMin.x + 1, cardMin.y + 12),
+        ImVec2(cardMin.x + 4, cardMin.y + cardHeight - 12),
+        ImGui::GetColorU32(p.mcpEnabled ? ImVec4(0.58f, 0.75f, 0.95f, 1.0f)
+                                        : ImVec4(0.34f, 0.39f, 0.45f, 1.0f)));
 
-    // Project name (big)
-    ImGui::Text("%s", p.name.empty() ? "(unnamed)" : p.name.c_str());
-    ImGui::SameLine();
-    ImGui::TextDisabled(
-        "  v%s", p.engineVersion.empty() ? "0.1" : p.engineVersion.c_str());
-    if (!p.lastOpened.empty()) {
-      ImGui::SameLine();
-      ImGui::TextDisabled("  ·  last opened %s", p.lastOpened.c_str());
+    ImGui::SetCursorPos(ImVec2(18, 13));
+    ImGui::TextUnformatted(p.name.empty() ? "(unnamed)" : p.name.c_str());
+    ImGui::SameLine(0, 12);
+    ImGui::TextDisabled("v%s", p.engineVersion.empty() ? "0.1" : p.engineVersion.c_str());
+    if (!p.lastOpened.empty() && cardWidth > 670.0f && p.name.size() < 32) {
+      const std::string opened = "Opened " + p.lastOpened;
+      ImGui::SetCursorPos(ImVec2(cardWidth - ImGui::CalcTextSize(opened.c_str()).x - 18, 15));
+      ImGui::TextDisabled("%s", opened.c_str());
     }
 
+    ImGui::SetCursorPos(ImVec2(18, 40));
     ImGui::TextDisabled("%s", p.path.c_str());
 
-    // Action row aligned to right
-    float btnW = 90.0f;
-    ImGui::SameLine(ImGui::GetWindowWidth() - btnW * 2 - 24);
-    if (ImGui::Button("Open", ImVec2(btnW, 0))) {
-      LaunchAndTouch(index);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Remove", ImVec2(btnW, 0))) {
-      projects.erase(projects.begin() + index);
+    ImGui::SetCursorPos(ImVec2(18, 76));
+    if (ImGui::Checkbox("Use MCP", &p.mcpEnabled))
       SaveRecentProjects(projects);
-      ImGui::EndChild();
-      ImGui::PopStyleColor();
-      ImGui::PopID();
-      return;
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Applies the next time this project is opened");
+    bool mcpRunning = false;
+    std::string token;
+    for (const auto &child : children) {
+      if (!child->alive || !child->mcpEnabled || child->projectPath != p.path)
+        continue;
+      mcpRunning = true;
+      std::lock_guard<std::mutex> lock(child->tokenMutex);
+      token = child->mcpToken;
+      break;
+    }
+    ImGui::SameLine(0, 12);
+    ImGui::TextDisabled(mcpRunning ? "Active: 127.0.0.1:9220"
+                                    : p.mcpEnabled ? "On launch: 127.0.0.1:9220"
+                                                   : "Off on next launch");
+    if (!token.empty() && (compact ? cardWidth >= 335.0f : cardWidth > 760.0f)) {
+      if (compact)
+        ImGui::SetCursorPos(ImVec2(240, 111));
+      else
+        ImGui::SameLine(0, 12);
+      if (ImGui::SmallButton("Copy token"))
+        ImGui::SetClipboardText(token.c_str());
     }
 
+    ImGui::SetCursorPos(compact ? ImVec2(18, 111)
+                                : ImVec2(cardWidth - 220, 73));
+    if (ImGui::Button("Open project", ImVec2(116, 30))) {
+      LaunchAndTouch(index);
+    }
+    ImGui::SameLine(0, 8);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.19f, 0.21f, 0.24f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.27f, 0.23f, 0.25f, 1.0f));
+    const bool remove = ImGui::Button("Remove", ImVec2(78, 30));
+    ImGui::PopStyleColor(2);
     ImGui::EndChild();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
     ImGui::PopID();
-    ImGui::Spacing();
+    if (remove) {
+      projects.erase(projects.begin() + index);
+      SaveRecentProjects(projects);
+    }
+    ImGui::Dummy(ImVec2(0, 8));
   }
 
   void DrawTemplatesPlaceholder() {
@@ -866,10 +965,11 @@ private:
   void LaunchAndTouch(size_t index) {
     if (index >= projects.size())
       return;
+    if (!LaunchEditor(projects[index].path, projects[index].mcpEnabled))
+      return;
     projects[index].lastOpened = TodayIsoDate();
     WriteProjectMetadata(projects[index]);
     SaveRecentProjects(projects);
-    LaunchEditor(projects[index].path);
   }
 
   // ---------------- New-project dialog ----------------

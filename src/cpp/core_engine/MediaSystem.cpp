@@ -126,15 +126,38 @@ void MediaSystem::UpdateAudioGains(SceneRenderer &renderer) {
         dist <= minD ? 1.0f
                      : std::clamp(1.0f - (dist - minD) / (maxD - minD), 0.0f,
                                   1.0f);
-    // Constant-power pan, kept off the hard edges (0.8) so a source beside
-    // the listener is still faintly heard in the far ear.
-    const float pan =
-        dist > 1e-4f ? std::clamp(glm::dot(to / dist, lright), -1.0f, 1.0f)
-                     : 0.0f;
-    const float theta = (pan * 0.8f + 1.0f) * 0.25f * 3.14159265f;
-    const float g = vol * att * 1.41421356f;
-    audio_.SetVoiceGains(sources_[i], g * std::cos(theta), g * std::sin(theta),
-                         true);
+    // Direction in the listener's frame: side = -1 left .. +1 right,
+    // front = +1 ahead .. -1 behind.
+    const glm::vec3 dir = dist > 1e-4f ? to / dist : lfwd;
+    const float side = std::clamp(glm::dot(dir, lright), -1.0f, 1.0f);
+    const float behind = std::clamp(-glm::dot(dir, lfwd), 0.0f, 1.0f);
+    // Constant-power pan over the full range: a source right beside the
+    // listener is heard in that ear only (both at 1.0 straight ahead).
+    const float theta = (side + 1.0f) * 0.25f * 3.14159265f;
+    const float g = vol * att * (1.0f - 0.25f * behind) * 1.41421356f;
+    // Interaural time difference (~0.66 ms max) on the far ear, and head
+    // shadow: the far ear loses highs (20 kHz → ~3 kHz cutoff at 90°).
+    // Sounds from behind are a little duller in both ears.
+    const float far = std::fabs(side);
+    const float itd = far * 0.00066f * kAudioRate;
+    const auto onePole = [](float cutoffHz) {
+      return cutoffHz >= 18000.0f
+                 ? 1.0f
+                 : 1.0f - std::exp(-2.0f * 3.14159265f * cutoffHz /
+                                   (float)kAudioRate);
+    };
+    const float rear = 1.0f - 0.55f * behind;
+    const float nearCut = 20000.0f * rear;
+    const float farCut = 20000.0f * std::pow(0.15f, far) * rear;
+    VoiceSpatial s;
+    s.mono = true;
+    s.gainL = g * std::cos(theta);
+    s.gainR = g * std::sin(theta);
+    s.delayL = side > 0.0f ? itd : 0.0f;
+    s.delayR = side < 0.0f ? itd : 0.0f;
+    s.lowpassL = onePole(side > 0.0f ? farCut : nearCut);
+    s.lowpassR = onePole(side < 0.0f ? farCut : nearCut);
+    audio_.SetVoiceSpatial(sources_[i], s);
   }
 }
 
@@ -218,6 +241,7 @@ void MediaSystem::UpdateVideos(SceneRenderer &renderer, bool advance,
         renderer.UpdateDynamicTexture(slot.texture, frame.rgba.data());
       slot.shown = true;
       slot.lastFramePts = frame.pts;
+      slot.decoder->Recycle(std::move(frame.rgba));
     }
     // The picture falling well behind the sound means this device cannot
     // decode the file in real time (e.g. 4K AV1 on a phone): say so once.

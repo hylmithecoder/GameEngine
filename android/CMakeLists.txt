@@ -80,3 +80,8 @@ set_source_files_properties(
 target_compile_definitions(main PRIVATE ILMEEE_NO_KTX)
 target_link_libraries(main PRIVATE SDL3::SDL3-shared vulkan android log m
     mediandk)
+# Android 15+ devices may use 16 KB memory pages: every LOAD segment must be
+# 16 KB aligned or the app warns / fails to load. (build-player.sh also sets
+# ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES, which covers SDL3; this keeps libmain
+# right even when configured by hand.)
+target_link_options(main PRIVATE "-Wl,-z,max-page-size=16384")

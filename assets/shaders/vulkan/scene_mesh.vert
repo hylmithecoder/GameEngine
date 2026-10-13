@@ -4,14 +4,22 @@ layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 
-layout(push_constant) uniform PC {
-    mat4 mvp;
-    mat4 model;
+// Per pass (same for every mesh): camera + the scene light. Kept out of the
+// push constants, which Vulkan only guarantees up to 128 bytes (Adreno 5xx
+// has exactly that; going past it scrambled every vertex).
+layout(set = 1, binding = 0) uniform Scene {
+    mat4 viewProj;
     vec4 lightPosOrDir;  // xyz = position (or direction for dir-lights), w = intensity
-    vec4 lightColorType; // xyz = color, w = type (special -1.0 = emissive/unlit)
+    vec4 lightColorType; // xyz = color, w = type
     vec4 lightDir;       // xyz = spotlight forward vector, w = unused
     vec4 lightParams;    // x = range, y = spotAngleRad, z = gamma, w = spotCosOuter
-    vec4 material;       // xyz = diffuse tint, w = hasTexture (1.0 = sample albedoTex)
+} scene;
+
+// Per draw: 80 bytes.
+layout(push_constant) uniform PC {
+    mat4 model;
+    vec4 material; // xyz = diffuse tint / colour; w = 0 untextured,
+                   // 1 textured, 2 textured unlit, 3 solid unlit (markers)
 } pc;
 
 layout(location = 0) out vec3 vNormalWorld;
@@ -27,11 +35,16 @@ void main() {
     vec4 world = pc.model * vec4(inPos, 1.0);
     vPosWorld = world.xyz;
     vNormalWorld = mat3(pc.model) * inNormal;
-    vLightPosOrDir = pc.lightPosOrDir;
-    vLightColorType = pc.lightColorType;
-    vLightDir = pc.lightDir;
-    vLightParams = pc.lightParams;
+    vLightPosOrDir = scene.lightPosOrDir;
+    vLightColorType = scene.lightColorType;
+    vLightDir = scene.lightDir;
+    vLightParams = scene.lightParams;
     vUV = inUV;
     vMaterial = pc.material;
-    gl_Position = pc.mvp * vec4(inPos, 1.0);
+    if (pc.material.w > 2.5) {
+        // Solid unlit colour: the fragment shader's emissive path.
+        vLightColorType = vec4(pc.material.rgb, -1.0);
+        vMaterial.w = 0.0;
+    }
+    gl_Position = scene.viewProj * world;
 }

@@ -1,0 +1,66 @@
+#pragma once
+#include "NativeScriptTypes.hpp"
+#include "core/Component.hpp"
+#include <filesystem>
+#include <functional>
+#include <future>
+#include <memory>
+#include <unordered_map>
+
+namespace ilmeee {
+struct ScriptCompileOptions {
+  std::filesystem::path project, sdkInclude, cache;
+  std::string compiler = "c++";
+};
+struct CompiledScript {
+  std::string source, className, diagnostics;
+  std::filesystem::path library;
+  bool ok = false;
+};
+ScriptCompileOptions
+DefaultScriptCompileOptions(const std::filesystem::path &project);
+std::vector<std::string>
+DiscoverNativeScripts(const std::filesystem::path &project);
+CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
+                                   const std::string &source);
+bool WriteScriptCompilationDatabase(const ScriptCompileOptions &options,
+                                    std::string &error);
+struct ScriptOwner {
+  uint64_t id;
+  std::vector<NativeScriptBinding> *scripts;
+};
+
+class NativeScripts {
+public:
+  NativeScripts();
+  ~NativeScripts();
+  bool Configure(const ScriptCompileOptions &options);
+  void CompileAll();
+  void Poll();
+  bool IsCompiling() const;
+  bool Ready(const std::string &source) const;
+  std::vector<std::string> Sources() const;
+  std::string Diagnostics(const std::string &source) const;
+  std::vector<ScriptValue> Properties(const NativeScriptBinding &binding) const;
+  bool Load(const CompiledScript &script, std::string &error);
+  void Start(script::HostApi host, const std::vector<ScriptOwner> &owners);
+  void Update(float deltaTime);
+  void Stop();
+  std::function<void(const std::string &)> log;
+
+private:
+  struct Module;
+  struct Instance;
+  ScriptCompileOptions options_;
+  std::future<std::vector<CompiledScript>> job_;
+  std::string jobProject_;
+  bool pending_ = false;
+  bool active_ = false;
+  std::string sourceRevision_;
+  std::chrono::steady_clock::time_point lastScan_{};
+  std::unordered_map<std::string, std::shared_ptr<Module>> modules_;
+  std::unordered_map<std::string, std::string> errors_;
+  std::vector<std::unique_ptr<Instance>> instances_;
+  script::HostApi host_;
+};
+} // namespace ilmeee

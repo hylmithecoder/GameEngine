@@ -94,7 +94,7 @@ namespace ix
     }
 
     std::tuple<bool, std::string, HttpRequestPtr> Http::parseRequest(
-        std::unique_ptr<Socket>& socket, int timeoutSecs)
+        std::unique_ptr<Socket>& socket, int timeoutSecs, int maxBodyBytes)
     {
         HttpRequestPtr httpRequest;
 
@@ -161,6 +161,11 @@ namespace ix
             {
                 return std::make_tuple(
                     false, "Error: 'Content-Length' should be a positive integer", httpRequest);
+            }
+            if (contentLength > maxBodyBytes)
+            {
+                return std::make_tuple(
+                    false, "Error: HTTP request body exceeds configured limit", httpRequest);
             }
 
             auto res = socket->readBytes(contentLength, nullptr, nullptr, isCancellationRequested);

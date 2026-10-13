@@ -3,6 +3,7 @@
 #include "../../include/core_engine/net/Protocol.hpp"
 #include <SDL3/SDL.h>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -70,6 +71,31 @@ bool ApplicationManager::Initialize() {
           Debug::LogLevel::CRASH);
     return false;
   }
+}
+
+bool ApplicationManager::StartMcpServer() {
+  if (mcpPort == 0) return true;
+  if (!window) return false;
+  mcpServer = std::make_unique<ilmeee::net::McpServer>(
+      [this](const std::string &name, const ilmeee::net::json &arguments) {
+        return window->HandleMcpTool(name, arguments);
+      });
+  const char *configured = std::getenv("ILMEEE_MCP_TOKEN");
+  const std::string token = configured && *configured
+      ? configured : ilmeee::net::proto::GenerateToken();
+  std::string error;
+  if (!mcpServer->Start(mcpPort, token, error)) {
+    ::Log("[MCP] Failed to listen on 127.0.0.1:" + std::to_string(mcpPort) +
+              ": " + error, Debug::LogLevel::ERROR);
+    mcpServer.reset();
+    return false;
+  }
+  window->mcpServer = mcpServer.get();
+  ::Log("[MCP] Listening on http://127.0.0.1:" +
+            std::to_string(mcpPort) + "/mcp", Debug::LogLevel::SUCCESS);
+  if (!configured || !*configured)
+    ::Log("[MCP] Session token: " + token, Debug::LogLevel::INFO);
+  return true;
 }
 
 bool ApplicationManager::StartIpcServer() {
@@ -254,8 +280,14 @@ void ApplicationManager::Shutdown() {
 }
 
 void ApplicationManager::CleanupNetwork() {
-  if (window)
+  if (window) {
     window->ipcBus = nullptr;
+    window->mcpServer = nullptr;
+  }
+  if (mcpServer) {
+    mcpServer->Stop();
+    mcpServer.reset();
+  }
   if (ipcBus) {
     // Joins the transport's IO threads; nothing may Poll() after this.
     ipcBus->Stop();

@@ -8,7 +8,8 @@
 #   ANDROID_HOME     SDK folder              (default ~/Android/Sdk)
 #   ANDROID_NDK      NDK folder              (default: newest in $ANDROID_HOME/ndk)
 #   ILMEEE_ABI       arm64-v8a | x86_64 ...  (default arm64-v8a)
-#   BUILD_TYPE       Debug | Release         (default Debug)
+#   BUILD_TYPE       Release | Debug         (default Release; Debug ~-O0
+#                    is several times slower on phones)
 #   SDL3_VERSION     must match the desktop SDL3 (default: pkg-config sdl3)
 #   GLM_INCLUDE_DIR / STB_INCLUDE_DIR        (default: pkg-config glm / stb)
 #
@@ -22,7 +23,7 @@ if [[ -z "${ANDROID_NDK:-}" ]]; then
   ANDROID_NDK="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
 fi
 ABI="${ILMEEE_ABI:-arm64-v8a}"
-BUILD_TYPE="${BUILD_TYPE:-Debug}"
+BUILD_TYPE="${BUILD_TYPE:-Release}"
 CACHE="$HOME/.ilmeeeengine/android"
 OUT="$ENGINE/build-android"
 
@@ -72,6 +73,7 @@ echo "Configuring ($ABI, $BUILD_TYPE, NDK $(basename "$ANDROID_NDK"), SDL3 $SDL3
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
   -DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-26 \
   -DANDROID_STL=c++_shared \
+  -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
   -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
   -DSDL3_SOURCE_DIR="$SDL3_DIR" \
   -DGLM_INCLUDE_DIR="$GLM_INCLUDE_DIR" \

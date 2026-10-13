@@ -44,8 +44,10 @@
 #include <fstream>
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
+#include "NativeScriptTypes.hpp"
 #include <glm/glm.hpp>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace ilmeee {
@@ -53,7 +55,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 8;
+constexpr uint16_t kSceneFormatMinor = 9;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -86,6 +88,8 @@ struct SurfaceTexture {
 };
 
 struct SceneEntity {
+  uint64_t objectId = 0;
+  std::vector<NativeScriptBinding> scripts;
   std::string name;
   PrimitiveKind kind = PrimitiveKind::Cube;
   std::string externalPath; // relative to project root, for ExternalObj
@@ -285,6 +289,22 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
                             (e.video.unlit ? 4u : 0u));
     detail::WriteF32(f, e.video.volume);
     detail::WriteU32(f, (uint32_t)e.video.surface);
+    // Version 1.9: stable object identities and bound native scripts.
+    detail::WriteBytes(f, &e.objectId, sizeof(e.objectId));
+    detail::WriteU32(f, static_cast<uint32_t>(e.scripts.size()));
+    for (const auto &script : e.scripts) {
+      detail::WriteString(f, script.source);
+      detail::WriteString(f, script.className);
+      detail::WriteU32(f, script.enabled ? 1 : 0);
+      detail::WriteU32(f, static_cast<uint32_t>(script.values.size()));
+      for (const auto &value : script.values) {
+        detail::WriteString(f, value.name);
+        detail::WriteU32(f, static_cast<uint32_t>(value.type));
+        detail::WriteF32(f, value.number);
+        detail::WriteU32(f, value.boolean ? 1 : 0);
+        detail::WriteBytes(f, &value.object, sizeof(value.object));
+      }
+    }
   }
 
   // Version 1.4: environment
@@ -434,6 +454,30 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       e.video.unlit = (vFlags & 4u) != 0;
       e.video.surface = (int32_t)surface;
     }
+    if (minor >= 9) {
+      uint32_t count = 0;
+      if (!detail::ReadBytes(f, &e.objectId, sizeof(e.objectId)) ||
+          !detail::ReadU32(f, count) || count > 256) return false;
+      for (uint32_t s = 0; s < count; ++s) {
+        NativeScriptBinding script;
+        uint32_t enabled = 0, values = 0;
+        if (!detail::ReadString(f, script.source) || !detail::ReadString(f, script.className) ||
+            !detail::ReadU32(f, enabled) || !detail::ReadU32(f, values) || values > 1024) return false;
+        script.enabled = enabled != 0;
+        for (uint32_t v = 0; v < values; ++v) {
+          ScriptValue value;
+          uint32_t type = 0, boolean = 0;
+          if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
+              type > static_cast<uint32_t>(ScriptValueType::Object) ||
+              !detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
+              !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
+          value.type = static_cast<ScriptValueType>(type);
+          value.boolean = boolean != 0;
+          script.values.push_back(value);
+        }
+        e.scripts.push_back(std::move(script));
+      }
+    }
     out.entities.push_back(std::move(e));
   }
 
@@ -447,6 +491,12 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
   // A link that points outside the file, at itself, or into a loop would
   // hang or confuse the hierarchy; demote such entities to roots.
   const int32_t n = (int32_t)out.entities.size();
+  std::unordered_set<uint64_t> identities;
+  for (auto &e : out.entities) {
+    if (!e.objectId || !identities.insert(e.objectId).second) {
+      do { e.objectId = NewObjectId(); } while (!identities.insert(e.objectId).second);
+    }
+  }
   for (auto &e : out.entities)
     if (e.movementRig.camera < -1 || e.movementRig.camera >= n)
       e.movementRig.camera = -1;

@@ -103,6 +103,15 @@ void MainWindow::RedoEditor() {
 void MainWindow::OnInit() {
   ::Log("MainWindow::OnInit - Initializing Project Specific Resources");
   ilmeee::RegisterUserMovementScripts();
+  nativeScripts.log = [this](const std::string &message) {
+    PushMessage(message);
+    if (message.find("[ERROR]") != std::string::npos) {
+      showConsole = true;
+      focusOutputTab = true;
+    }
+  };
+  nativeScriptContext.log = nativeScripts.log;
+  projectHandler.onScriptCreated = [this] { nativeScripts.CompileAll(); };
 
   set_window_icon();
 
@@ -163,16 +172,35 @@ void MainWindow::OnUpdate(float deltaTime) {
   // scene and UI state.
   if (ipcBus)
     ipcBus->Poll();
+  if (nativeScriptsProject != projectHandler.projectPath && !builder.IsStopped()) {
+    nativeScripts.Stop();
+    builder.Stop();
+    gameWasStopped = true;
+  }
   EnsureSceneLoaded();
+  if (nativeScriptsProject != projectHandler.projectPath) {
+    nativeScriptsProject = projectHandler.projectPath;
+    nativeScripts.Configure(ilmeee::DefaultScriptCompileOptions(nativeScriptsProject));
+  }
+  if (builder.IsStopped()) nativeScripts.Poll();
+  if (mcpServer)
+    mcpServer->Poll();
   PollGameBuild();
   // Each play session starts with fresh rig angles and jump state; Builder
   // restores the transforms (camera included) on Stop.
-  if (gameWasStopped && !builder.IsStopped())
+  if (gameWasStopped && !builder.IsStopped()) {
     movementSystem.Reset();
+    nativeScriptContext.renderer = sceneRenderer;
+    nativeScriptContext.input = &gameMovementInput;
+    if (sceneRenderer) nativeScripts.Start(ilmeee::ScriptSceneHost(nativeScriptContext),
+                                          ilmeee::ScriptSceneOwners(*sceneRenderer));
+  }
+  if (!gameWasStopped && builder.IsStopped()) nativeScripts.Stop();
   gameWasStopped = builder.IsStopped();
   if (builder.IsPlaying() && sceneRenderer)
     movementSystem.Update(*sceneRenderer, gameMovementInput,
                           std::max(0.0f, deltaTime));
+  if (builder.IsPlaying()) nativeScripts.Update(deltaTime);
   if (sceneRenderer) {
     media.SetProjectRoot(projectHandler.projectPath);
     const auto state = builder.IsStopped()  ? ilmeee::MediaSystem::State::Stopped
@@ -254,6 +282,8 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 
   Ilmeee::EditorDockSpace::End();
 
+  projectHandler.RenderScriptDialogs();
+
   // Top-most overlay: outline + tooltip for whatever the user is hovering.
   // Must come after all panels so the trace registry is fully populated.
   Debug::Inspect::RenderHoverOverlay();
@@ -262,6 +292,7 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 void MainWindow::OnCleanup() {
   ::Log("MainWindow::OnCleanup");
   projectHandler.StopFileWatcher();
+  nativeScripts.Stop();
 
   // A build still copying files finishes first: it holds `this`. A running
   // game is left alone — it is a separate program.

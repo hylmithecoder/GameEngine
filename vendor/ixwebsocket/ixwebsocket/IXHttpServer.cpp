@@ -77,9 +77,13 @@ namespace ix
                            size_t maxConnections,
                            int addressFamily,
                            int timeoutSecs,
-                           int handshakeTimeoutSecs)
+                           int handshakeTimeoutSecs,
+                           int maxBodyBytes,
+                           bool allowWebSocketUpgrade)
         : WebSocketServer(port, host, backlog, maxConnections, handshakeTimeoutSecs, addressFamily)
         , _timeoutSecs(timeoutSecs)
+        , _maxBodyBytes(maxBodyBytes)
+        , _allowWebSocketUpgrade(allowWebSocketUpgrade)
     {
         setDefaultConnectionCallback();
     }
@@ -92,7 +96,7 @@ namespace ix
     void HttpServer::handleConnection(std::unique_ptr<Socket> socket,
                                       std::shared_ptr<ConnectionState> connectionState)
     {
-        auto ret = Http::parseRequest(socket, _timeoutSecs);
+        auto ret = Http::parseRequest(socket, _timeoutSecs, _maxBodyBytes);
         // FIXME: handle errors in parseRequest
 
         if (std::get<0>(ret))
@@ -102,7 +106,8 @@ namespace ix
             // The Upgrade header value is case-insensitive (RFC 6455 4.2.1);
             // e.g. Chrome's remote-debugging proxy sends "Upgrade: WebSocket".
             const std::string& upgradeHeader = request->headers["Upgrade"];
-            if (!CaseInsensitiveLess::cmp(upgradeHeader, "websocket") &&
+            if (_allowWebSocketUpgrade &&
+                !CaseInsensitiveLess::cmp(upgradeHeader, "websocket") &&
                 !CaseInsensitiveLess::cmp("websocket", upgradeHeader))
             {
                 WebSocketServer::handleUpgrade(std::move(socket), connectionState, request);

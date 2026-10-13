@@ -103,8 +103,22 @@ protected:
   std::vector<VkSemaphore> imageAvailableSemaphores;
   std::vector<VkSemaphore> renderFinishedSemaphores;
   std::vector<VkFence> inFlightFences;
+  // Command buffer recorded for each frame in flight; freed when that
+  // frame's fence is next waited on.
+  std::vector<VkCommandBuffer> frameCommandBuffers;
+  // Fence of the frame last rendering into each swapchain image.
+  std::vector<VkFence> imagesInFlight;
+  // "Rendering done, present now" semaphore per swapchain image: one per
+  // frame in flight could be re-signalled while the presentation engine
+  // still holds it.
+  std::vector<VkSemaphore> presentSemaphores;
+  void EnsurePresentSemaphores();
   uint32_t currentFrame = 0;
   const int MAX_FRAMES_IN_FLIGHT = 2;
+  // true: wait for the GPU at the end of every frame (simple and safe when
+  // resources are created/destroyed mid-frame — the editor). false: up to
+  // MAX_FRAMES_IN_FLIGHT frames overlap CPU and GPU work (the game player).
+  bool waitIdleEachFrame = true;
 
   bool isRunning = false;
   bool framebufferResized = false;

@@ -68,3 +68,5 @@ references/
 # build / distribution artifacts
 build-verify/
 build*/dist/
+
+docs/*

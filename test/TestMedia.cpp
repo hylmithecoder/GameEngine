@@ -9,6 +9,7 @@
 #include "../include/core_engine/MediaComponents.hpp"
 #include "../include/core_engine/VideoDecoder.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -75,6 +76,48 @@ int main(int argc, char **argv) {
     CHECK(ring.Frames() == 1);
     CHECK(ring.Pull(out, 3) == 1 && out[0] == 7);
     CHECK(!ring.Finished());
+  }
+
+  // 2b. 3D processing: a source right beside the listener is heard in the
+  // right ear only; ITD delays the far ear; ramps start from the target.
+  {
+    auto run = [](const VoiceSpatial &sp, int frames, float &maxL,
+                  float &maxR, int &firstR) {
+      SpatialState st;
+      std::vector<float> buf((size_t)frames * 2);
+      for (int f = 0; f < frames; ++f) // 440 Hz tone, same in both channels
+        buf[f * 2] = buf[f * 2 + 1] =
+            0.5f * (float)std::sin(6.2831853 * 440.0 * f / kAudioRate);
+      Spatialize(st, sp, buf.data(), (size_t)frames);
+      maxL = maxR = 0.0f;
+      firstR = -1;
+      for (int f = 0; f < frames; ++f) {
+        maxL = std::max(maxL, std::fabs(buf[f * 2]));
+        maxR = std::max(maxR, std::fabs(buf[f * 2 + 1]));
+        if (firstR < 0 && std::fabs(buf[f * 2 + 1]) > 1e-4f)
+          firstR = f;
+      }
+    };
+    float mL, mR;
+    int firstR;
+    VoiceSpatial right;
+    right.mono = true;
+    right.gainL = 0.0f;
+    right.gainR = 1.41421356f;
+    run(right, 2048, mL, mR, firstR);
+    CHECK(mL == 0.0f);             // nothing in the left ear
+    CHECK(mR > 0.6f && mR < 0.75f); // 0.5 * sqrt(2)
+    VoiceSpatial delayedR = right;
+    delayedR.gainL = 1.0f;
+    delayedR.gainR = 1.0f;
+    delayedR.delayR = 30.0f;
+    run(delayedR, 512, mL, mR, firstR);
+    CHECK(firstR >= 29 && firstR <= 31); // right ear starts ~30 samples late
+    VoiceSpatial dull = delayedR;
+    dull.delayR = 0.0f;
+    dull.lowpassR = 0.05f; // heavy low-pass: 440 Hz clearly attenuated
+    run(dull, 4096, mL, mR, firstR);
+    CHECK(mR < mL * 0.8f);
   }
 
   AudioEngine engine;

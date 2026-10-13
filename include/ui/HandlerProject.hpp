@@ -7,6 +7,7 @@
 // #include <direct.h>
 #include "../audio/FFmpegWrapper.hpp"
 #include "../core_engine/SceneSerializer.hpp"
+#include "../core_engine/ScriptWorkspace.hpp"
 #include "assets.hpp"
 #include "core_engine/Debugger.hpp"
 #include <algorithm>
@@ -38,6 +39,16 @@ class VulkanHandler;
 
 class HandlerProject {
 private:
+  bool requestCreateScript = false;
+  bool requestCodeEditorSettings = false;
+  bool openScriptAfterCreation = true;
+  string scriptDestination;
+  char scriptNameInput[65] = {};
+  string scriptCreationError;
+  ilmeee::CodeEditorSettings codeEditorDraft;
+  char codeEditorExecutableInput[1024] = {};
+  string codeEditorSettingsError;
+
   string getCurrentDateTime() {
     time_t now = time(0);
     struct tm tstruct;
@@ -60,6 +71,7 @@ private:
 
 public:
   HandlerProject() {}
+  std::function<void()> onScriptCreated;
   // Class
   Scene currentScene;
   SceneSerializer serializer;
@@ -253,18 +265,20 @@ public:
   }
 
   vector<Notification> notifications;
+  mutex notificationMutex; // Worker notifications are drained by the UI thread.
+  vector<Notification> pendingNotifications;
   Assets assets;
   TextureData icon_texture_data;
   unordered_map<string, ImTextureID> iconCache;
   ImTextureID GetCachedIcon(const string &path);
   // File monitoring system
   thread fileWatcherThread;
-  atomic<bool> fileWatcherRunning;
+  atomic<bool> fileWatcherRunning{false};
   chrono::milliseconds fileWatcherInterval;
   mutex fileWatcherMutex;
   condition_variable fileWatcherCV;
   unordered_map<string, time_t> fileTimestamps;
-  bool fileChangesDetected;
+  atomic<bool> fileChangesDetected{false};
   string renamingPath = "";
   char renameBuffer[256] = {};
   string fileExplorerRenameTarget = ""; // Path folder yang sedang direname
@@ -283,7 +297,9 @@ public:
   void OpenProject(const char *folderPath);
   void DrawAssetTree(const AssetFile &node);
   void ScanAssetsFolder(const string &rootFolder);
-  void NewScripts(const string &name);
+  void RequestCreateScript(const string &folder = "");
+  void RequestCodeEditorSettings();
+  void RenderScriptDialogs();
   void DeleteFileOrFolder(const string &filePathOrFolderPath);
   void OpenFile(const string &fileName);
   void ShowNotification(const string &title, const string &message,

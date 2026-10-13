@@ -32,11 +32,52 @@ Two normal entry points:
 
 ```bash
 # Through the Hub (recommended — wires up the project handshake):
-./build/IlmeeeHub
+./build/bin/IlmeeeHub
 
 # Standalone with an explicit project:
-./build/GameEngineSDL --project /path/to/MyProject
+./build/bin/GameEngineSDL --project /path/to/MyProject
 ```
+
+### Native MCP endpoint
+
+Start the desktop editor with its local MCP server enabled:
+
+```bash
+ILMEEE_MCP_TOKEN='choose-a-long-random-secret' \
+  ./build/bin/GameEngineSDL --project /path/to/MyProject --mcp
+```
+
+The Streamable HTTP endpoint is `http://127.0.0.1:9220/mcp`. Use
+`--mcp-port <port>` to change the port. If `ILMEEE_MCP_TOKEN` is unset, the
+editor generates a token and prints it once in its startup log. Configure your
+MCP client to send `Authorization: Bearer <token>` on every request. The endpoint
+is available only while the editor is running; a port collision stops startup
+with an error. It binds to loopback and checks the HTTP Host and Origin.
+
+Available tools are `get_project_info`, `list_scene_objects`, `get_object`,
+`create_object`, `set_transform`, and `save_scene`. Object indices are relative
+to the current scene and may change after structural edits. Edits are blocked
+during Play mode and are included in editor Undo/Redo history. The endpoint
+supports MCP protocol revisions `2026-07-28` and `2025-11-25`.
+
+In `IlmeeeHub`, enable **Use MCP** on a project's card before choosing
+**Open project**. Hub remembers the choice for each project. When the editor
+generates a session token, the card offers **Copy token** while that editor is
+running. Only one MCP-enabled editor can use port 9220 at a time; Hub reports
+a conflict in its Console.
+
+For a quick local check, use `scripts/mcp-test.sh`. It prompts for the token
+without echoing it if `MCP_TOKEN` is unset:
+
+```bash
+scripts/mcp-test.sh info
+scripts/mcp-test.sh tools
+scripts/mcp-test.sh watch  # refresh scene objects every second; Ctrl+C stops
+scripts/mcp-test.sh call get_object '{"index":0}'
+```
+
+Set `MCP_PORT` if the editor uses a different port. The `call` command can also
+invoke editing tools, so inspect their arguments before using it.
 
 ### Standalone debug fallback
 
@@ -77,8 +118,9 @@ Run** (or Ctrl+Shift+B); the running player's stdout/stderr is streamed into
 
 ## Movement scripts
 
-Select a mesh game object in Hierarchy, enable **Movement Script → Movable**
-in Inspector, choose `WASD XZ`, set its speed, and save with **Ctrl+S**. Play
+Select a mesh game object in Hierarchy, choose **Add Component → Movement
+Script** in Inspector, set its speed, and save with **Ctrl+S**. The component
+can be disabled with **Movable** or removed with its header's close button. Play
 opens Game; click inside it and use WASD. Movement uses fixed 60 Hz steps and
 Stop restores editor transforms. The same component runs in a built game.
 
@@ -88,7 +130,63 @@ To add a native movement function, edit
 inside `RegisterUserMovementScripts()`. The context exposes parent-local
 position, rotation, scale, speed, delta seconds and input. Rebuild both
 `GameEngineSDL` and `IlmeeePlayer`, then pick the registered name in Inspector.
-This is a compiled C++ API; project `.cpp` assets are not hot-loaded yet.
+This registration API is compiled into the engine. Project component scripts
+use the separate compile-and-bind workflow below.
+
+**Script files and code editor.** Choose **Add Component → Create C++ Script...**
+or **Explorer → Create New File → Scripts → C++ Script** to open the script
+dialog. It creates matching `.cpp`/`.hpp` files with a `Component` template,
+validates the class name, and leaves existing files untouched. Inspector uses
+`assets/scripts`; Explorer uses the selected folder (put components under
+`assets/scripts` so the project compiler discovers them). Each class must match
+its file stem, derive from `Component`, and have a public default constructor.
+
+The Linux editor compiles new and saved scripts in the background against the
+installed engine SDK. **Tools → Compile Project Scripts** also runs it manually;
+errors appear in **Console → Output**. Once validated, the class is listed in
+**Add Component**. Select it to bind it to the selected object. Script components
+support Enabled, removal, Undo/Redo, and scene save/reload (`.ilmeeescene` v1.9).
+Play invokes Awake/OnEnable/Start and Update; Pause freezes updates and Stop
+invokes OnDisable, destroys instances, and restores editor transforms.
+
+The template exposes `Speed` and a `GameObjectRef target`. Assign Target from
+the Inspector picker or drag an object from Hierarchy onto it. References use
+stable object IDs; a deleted target becomes invalid. `target.Get()` returns a
+script GameObject, while `gameObject` is the component's owner. The initial API
+provides Name, IsValid, Find, GetTransform/SetTransform, GetPosition/SetPosition,
+Translate, `IsKeyDown("W"/"A"/"S"/"D"/"Space")`, and Log. Transform positions
+are local to an object's parent, like the editor's Transform Inspector. For example:
+
+```cpp
+void PlayerController::Update(float deltaTime) {
+    if (IsKeyDown("W"))
+        gameObject.Translate({0, 0, -speed * deltaTime});
+    if (target.IsValid()) {
+        const auto targetPosition = target.Get().GetPosition();
+        // Use targetPosition to implement your behavior.
+    }
+}
+```
+
+`DescribeProperties` registers float, bool, and GameObjectRef fields via
+`properties.Field("Label", field)`. Existing templates without exposed fields
+still compile and can be attached. The compiler writes `compile_commands.json`
+for code-editor completion and include validation. Native desktop game builds
+compile attached scripts and ship their modules; the player needs no compiler.
+Android cross-compilation of project scripts is not configured yet, so an
+Android export with native bindings reports an error. Rebuild players after
+updating the engine's scene format. Override the desktop compiler executable
+with `ILMEEE_SCRIPT_CXX` if needed.
+
+Use **Edit → Code Editor...** to select the system default, VS Code, VSCodium,
+Cursor, Antigravity, or a custom executable. This user preference is saved in
+`~/.ilmeeeengine/editor-preferences.json` and used for new scripts, Explorer,
+and search results. Configured code editors receive the project folder followed
+by the selected file, so a project opened for the first time has its full
+workspace available. The folder is sent on later launches too, including after
+closing and reopening the code editor. Custom executables should accept these
+two arguments; **System default** uses the OS association for the file only.
+Launches do not block the editor UI.
 
 **Camera & UI input.** Each movable object can reference a camera and pick a
 **POV Style** — Third Person, First Person, Side Scroller (with the

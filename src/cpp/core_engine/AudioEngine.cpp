@@ -2,6 +2,7 @@
 #include "../../../include/core_engine/MediaComponents.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -333,18 +334,70 @@ void AudioEngine::StopAll() {
   voices_.clear();
 }
 
+// Gains, ear delays and filters ramp linearly from the current settings to
+// `target` across the chunk.
+void Spatialize(SpatialState &st, const VoiceSpatial &target, float *frames,
+                size_t n) {
+  if (!st.started) {
+    st.current = target;
+    st.started = true;
+  }
+  const VoiceSpatial a = st.current, b = target;
+  constexpr unsigned kMask = 63; // history 64 > kMaxEarDelay + 1
+  // Sample `d` (fractional) frames before the newest one.
+  const auto delayed = [&](float d) {
+    const unsigned di = (unsigned)d;
+    const float frac = d - (float)di;
+    const float s0 = st.history[(st.writePos - di) & kMask];
+    const float s1 = st.history[(st.writePos - di - 1) & kMask];
+    return s0 + (s1 - s0) * frac;
+  };
+  for (size_t f = 0; f < n; ++f) {
+    const float t = (float)(f + 1) / (float)n;
+    const float gL = a.gainL + (b.gainL - a.gainL) * t;
+    const float gR = a.gainR + (b.gainR - a.gainR) * t;
+    float &l = frames[f * 2], &r = frames[f * 2 + 1];
+    if (!b.mono) {
+      l *= gL;
+      r *= gR;
+      continue;
+    }
+    st.history[++st.writePos & kMask] = 0.5f * (l + r);
+    const float dL = a.delayL + (b.delayL - a.delayL) * t;
+    const float dR = a.delayR + (b.delayR - a.delayR) * t;
+    const float cL = a.lowpassL + (b.lowpassL - a.lowpassL) * t;
+    const float cR = a.lowpassR + (b.lowpassR - a.lowpassR) * t;
+    st.lpL += cL * (delayed(dL) - st.lpL);
+    st.lpR += cR * (delayed(dR) - st.lpR);
+    l = st.lpL * gL;
+    r = st.lpR * gR;
+  }
+  st.current = b;
+}
+
 bool AudioEngine::IsVoiceActive(VoiceId id) const {
   return voices_.count(id) != 0;
 }
 
-void AudioEngine::SetVoiceGains(VoiceId id, float left, float right,
-                                bool mono) {
+void AudioEngine::SetVoiceSpatial(VoiceId id, const VoiceSpatial &spatial) {
   auto it = voices_.find(id);
   if (it == voices_.end())
     return;
-  it->second.gainL = left;
-  it->second.gainR = right;
-  it->second.mono = mono;
+  VoiceSpatial s = spatial;
+  s.delayL = std::clamp(s.delayL, 0.0f, (float)kMaxEarDelay);
+  s.delayR = std::clamp(s.delayR, 0.0f, (float)kMaxEarDelay);
+  s.lowpassL = std::clamp(s.lowpassL, 0.01f, 1.0f);
+  s.lowpassR = std::clamp(s.lowpassR, 0.01f, 1.0f);
+  it->second.target = s;
+}
+
+void AudioEngine::SetVoiceGains(VoiceId id, float left, float right,
+                                bool mono) {
+  VoiceSpatial s;
+  s.gainL = left;
+  s.gainR = right;
+  s.mono = mono;
+  SetVoiceSpatial(id, s);
 }
 
 size_t AudioEngine::QueuedFrames(const Voice &v) const {
@@ -373,8 +426,10 @@ void AudioEngine::SetPaused(bool paused) {
 }
 
 void AudioEngine::Update() {
-  constexpr size_t kLeadFrames = kAudioRate / 10; // keep ~100 ms queued
-  constexpr size_t kChunk = 1024;
+  // ~67 ms queued: direction/volume changes are heard that much later, and a
+  // frame may take up to that long before the device runs dry.
+  constexpr size_t kLeadFrames = kAudioRate / 15;
+  constexpr size_t kChunk = 512;
   for (auto it = voices_.begin(); it != voices_.end();) {
     Voice &v = it->second;
     while (!v.done && QueuedFrames(v) < kLeadFrames) {
@@ -407,13 +462,7 @@ void AudioEngine::Update() {
       }
       if (n == 0)
         break;
-      for (size_t f = 0; f < n; ++f) {
-        float &l = scratch_[f * 2], &r = scratch_[f * 2 + 1];
-        if (v.mono)
-          l = r = 0.5f * (l + r);
-        l *= v.gainL;
-        r *= v.gainR;
-      }
+      Spatialize(v.dsp, v.target, scratch_.data(), n);
       SDL_PutAudioStreamData(v.stream, scratch_.data(),
                              (int)(n * kAudioChannels * sizeof(float)));
       v.framesPushed += n;

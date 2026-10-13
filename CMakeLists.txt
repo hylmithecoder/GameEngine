@@ -195,6 +195,7 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/MessageBus.cpp
     src/cpp/core_engine/net/LoopbackTransport.cpp
     src/cpp/core_engine/net/WsTransport.cpp
+    src/cpp/core_engine/net/McpServer.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
@@ -204,6 +205,9 @@ target_link_libraries(TestNetProtocol PRIVATE ilmeee_net)
 
 add_executable(TestWsTransport test/net/TestWsTransport.cpp)
 target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
+
+add_executable(TestMcpServer test/net/TestMcpServer.cpp)
+target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
 
 add_executable(TestTransformMath test/TestTransformMath.cpp)
 target_link_libraries(TestTransformMath PRIVATE glm::glm)
@@ -224,20 +228,38 @@ add_executable(TestMovementScripts test/TestMovementScripts.cpp
     src/cpp/core_engine/MovementScript.cpp)
 target_link_libraries(TestMovementScripts PRIVATE glm::glm)
 
+add_executable(TestScriptWorkspace test/TestScriptWorkspace.cpp
+    src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(TestScriptWorkspace PRIVATE ${JSON_DIR})
+target_link_libraries(TestScriptWorkspace PRIVATE pthread)
+
+add_executable(TestNativeScripts test/TestNativeScripts.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(TestNativeScripts PRIVATE ${JSON_DIR})
+target_link_libraries(TestNativeScripts PRIVATE pthread ${CMAKE_DL_LIBS} glm::glm)
+target_compile_definitions(TestNativeScripts PRIVATE
+    ILMEEE_SCRIPT_INCLUDE="${CMAKE_SOURCE_DIR}/include"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+
 add_executable(TestGameBuild test/TestGameBuild.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/core_engine/GameBuilder.cpp
     src/cpp/core_engine/ModelDependencies.cpp
     src/cpp/core_engine/PMXLoader.cpp)
 target_include_directories(TestGameBuild PRIVATE ${CMAKE_SOURCE_DIR}/include
     ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
 target_link_libraries(TestGameBuild PRIVATE glm::glm ufbx ${GTK3_LIBRARIES}
-    ${LIBNOTIFY_LIBRARIES})
+    ${LIBNOTIFY_LIBRARIES} pthread ${CMAKE_DL_LIBS})
+target_include_directories(TestGameBuild PRIVATE ${JSON_DIR})
+target_compile_definitions(TestGameBuild PRIVATE ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
 
 # IlmeeePlayer — the runtime a built game ships with. Only the engine pieces
 # that load, draw and play a scene: no editor UI, no IPC. FFmpeg is linked
 # for Video Player components and non-wav/ogg audio (the Android build of
 # the same sources goes without).
 add_executable(IlmeeePlayer
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
+    src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/player/PlayerMain.cpp
     src/cpp/core_engine/AudioEngine.cpp
     src/cpp/core_engine/VideoDecoder.cpp
@@ -255,6 +277,7 @@ add_executable(IlmeeePlayer
     ${IMGUI_SOURCES}
 )
 target_include_directories(IlmeeePlayer PRIVATE
+    ${JSON_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/include
@@ -264,6 +287,7 @@ target_include_directories(IlmeeePlayer PRIVATE
     ${FFMPEG_INCLUDE_DIRS}
 )
 target_compile_definitions(IlmeeePlayer PRIVATE ILMEEE_HAS_FFMPEG)
+target_link_libraries(IlmeeePlayer PRIVATE pthread ${CMAKE_DL_LIBS})
 target_link_libraries(IlmeeePlayer PRIVATE
     PkgConfig::SDL3
     Vulkan::Vulkan
@@ -283,6 +307,10 @@ add_dependencies(TestEngineIpc HandlerIlmeeeEngine IlmeeeEditor IlmeeeEngine)
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
 add_executable(${PROJECT_NAME} ${HEADERS_MAIN_PROJECT} ${SOURCES} ${GLAD_4} ${IMGUI_SOURCES} ${NFD_LIB})
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    ILMEEE_SCRIPT_INCLUDE="${CMAKE_SOURCE_DIR}/include"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
 # target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
 add_executable(TestBackground ${SOURCE_TEST} ${GLAD_4} ${IMGUI_SOURCES})
 if(WIN32)

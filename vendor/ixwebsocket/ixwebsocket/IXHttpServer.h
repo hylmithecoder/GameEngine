@@ -31,7 +31,9 @@ namespace ix
                    size_t maxConnections = SocketServer::kDefaultMaxConnections,
                    int addressFamily = SocketServer::kDefaultAddressFamily,
                    int timeoutSecs = HttpServer::kDefaultTimeoutSecs,
-                   int handshakeTimeoutSecs = WebSocketServer::kDefaultHandShakeTimeoutSecs);
+                   int handshakeTimeoutSecs = WebSocketServer::kDefaultHandShakeTimeoutSecs,
+                   int maxBodyBytes = 2147483647,
+                   bool allowWebSocketUpgrade = true);
 
         void setOnConnectionCallback(const OnConnectionCallback& callback);
 
@@ -47,6 +49,8 @@ namespace ix
 
         const static int kDefaultTimeoutSecs;
         int _timeoutSecs;
+        int _maxBodyBytes;
+        bool _allowWebSocketUpgrade;
 
         // Methods
         virtual void handleConnection(std::unique_ptr<Socket>,

@@ -85,6 +85,8 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
       renderer.meshes3d[idx].displayName = e.name;
     renderer.SetMesh3DTransform(idx, e.position, e.rotationEuler, e.scale);
     renderer.meshes3d[idx].movable = e.movable;
+    renderer.meshes3d[idx].objectId = e.objectId ? e.objectId : NewObjectId();
+    renderer.meshes3d[idx].scripts = e.scripts;
     renderer.meshes3d[idx].movementScript = e.movementScript;
     renderer.meshes3d[idx].movementSpeed = e.movementSpeed;
     renderer.meshes3d[idx].movementRig = e.movementRig;

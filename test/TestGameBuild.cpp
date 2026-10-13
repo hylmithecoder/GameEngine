@@ -5,6 +5,8 @@
 
 #include "../include/core_engine/GameBuilder.hpp"
 #include "../include/core_engine/IlmeeeScene.hpp"
+#include "../include/core_engine/NativeScripts.hpp"
+#include "../include/core_engine/ScriptWorkspace.hpp"
 #include "../vendor/nlohmann/json.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -368,6 +370,41 @@ int main() {
   CHECK(SafeGameName("Ilmeee: VN #1!") == "Ilmeee_VN_1");
   CHECK(SafeGameName("ミク") == "Game");
 
+  // Native bindings ship as modules; the player needs no project compiler.
+  {
+    const auto scripted = tmp / "Script Project";
+    fs::create_directories(scripted / "scenes");
+    std::string error;
+    CHECK(CreateScriptFiles(scripted / "assets/scripts", "ShipComponent", error));
+    IlmeeeScene scene;
+    scene.entities.push_back(SceneEntity{});
+    scene.entities[0].objectId = 42;
+    scene.entities[0].scripts.push_back({"assets/scripts/ShipComponent.cpp", "ShipComponent", true, {}});
+    CHECK(SaveScene((scripted / "scenes/main.ilmeeescene").string(), scene));
+    auto scriptOptions = o;
+    scriptOptions.projectRoot = scripted;
+    scriptOptions.outputDir = tmp / "script-game";
+    scriptOptions.includeUnusedAssets = false;
+    const auto built = BuildGame(scriptOptions, logger);
+    if (!built.ok) std::fprintf(stderr, "%s\n", built.error.c_str());
+    CHECK(built.ok);
+    CHECK(fs::exists(scriptOptions.outputDir / "native-scripts.json"));
+    std::ifstream manifestFile(scriptOptions.outputDir / "native-scripts.json");
+    const auto modules = nlohmann::json::parse(manifestFile);
+    CHECK(modules.size() == 1);
+    const auto library = scriptOptions.outputDir / modules[0]["library"].get<std::string>();
+    CHECK(fs::exists(library));
+    NativeScripts runtime;
+    CHECK(runtime.Load({"assets/scripts/ShipComponent.cpp", "ShipComponent", "", library, true}, error));
+    CHECK(runtime.Ready("assets/scripts/ShipComponent.cpp"));
+    IlmeeeScene reloaded;
+    CHECK(LoadScene((scriptOptions.outputDir / "scenes/main.ilmeeescene").string(), reloaded));
+    CHECK(reloaded.entities[0].objectId == 42 && reloaded.entities[0].scripts.size() == 1);
+    // Failed recompiles preserve the previous runnable output.
+    Write(scripted / "assets/scripts/ShipComponent.cpp", "this is invalid C++");
+    CHECK(!BuildGame(scriptOptions, logger).ok);
+    CHECK(fs::exists(library));
+  }
   fs::remove_all(tmp);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
   return g_failures == 0 ? 0 : 1;

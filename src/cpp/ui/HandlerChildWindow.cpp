@@ -682,10 +682,6 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
 }
 
 void MainWindow::RenderInspectorWindow() {
-  static char currentScriptName[256] = "";
-  strncpy(currentScriptName, currentScriptName, sizeof(currentScriptName) - 1);
-  currentScriptName[sizeof(currentScriptName) - 1] =
-      '\0'; // Ensure null-termination
   Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
   DEBUG_TRACE_PANEL("Inspector panel");
   ImVec2 pos = GetWindowPos();
@@ -893,107 +889,130 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
-  if (meshSelected && !isLight && !isCamera &&
-      CollapsingHeader("Movement Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+  const bool hasMovementScript =
+      meshSelected && !isLight && !isCamera &&
+      (sceneRenderer->meshes3d[(size_t)meshIdx].movable ||
+       !sceneRenderer->meshes3d[(size_t)meshIdx].movementScript.empty());
+  if (hasMovementScript) {
     auto &mesh = sceneRenderer->meshes3d[(size_t)meshIdx];
-    if (SceneStructureLocked()) BeginDisabled();
-    if (Checkbox("Movable", &mesh.movable)) {
-      if (mesh.movable && mesh.movementScript.empty())
-        mesh.movementScript = "WASD XZ";
+    bool keep = true;
+    const bool open = CollapsingHeader("Movement Script", &keep,
+                                       ImGuiTreeNodeFlags_DefaultOpen);
+    if (SceneStructureLocked())
+      BeginDisabled();
+    if (open && keep) {
+      if (Checkbox("Movable", &mesh.movable)) {
+        if (mesh.movable && mesh.movementScript.empty())
+          mesh.movementScript = "WASD XZ";
+        RecordEditorHistory();
+      }
+      if (mesh.movable) {
+        const auto names = ilmeee::MovementScriptNames();
+        const char *selected =
+            mesh.movementScript.empty() ? "None" : mesh.movementScript.c_str();
+        if (BeginCombo("Script", selected)) {
+          for (const auto &name : names) {
+            if (Selectable(name.c_str(), mesh.movementScript == name)) {
+              mesh.movementScript = name;
+              RecordEditorHistory();
+            }
+          }
+          EndCombo();
+        }
+        DragFloat("Speed", &mesh.movementSpeed, 0.1f, 0.0f, 100.0f,
+                  "%.2f units/s");
+        if (IsItemDeactivatedAfterEdit())
+          RecordEditorHistory();
+
+        SeparatorText("Camera");
+        auto &rig = mesh.movementRig;
+        const auto cameraLabel = [&](int index) -> std::string {
+          if (index < 0)
+            return "Game View Camera";
+          return sceneRenderer->GetMesh3DName((size_t)index);
+        };
+        if (BeginCombo("Camera", cameraLabel(rig.camera).c_str())) {
+          if (Selectable("Game View Camera", rig.camera < 0)) {
+            rig.camera = -1;
+            RecordEditorHistory();
+          }
+          for (size_t c = 0; c < sceneRenderer->GetMesh3DCount(); ++c) {
+            if (!sceneRenderer->IsMesh3DCamera(c))
+              continue;
+            PushID((int)c);
+            if (Selectable(cameraLabel((int)c).c_str(), rig.camera == (int)c)) {
+              rig.camera = (int)c;
+              RecordEditorHistory();
+            }
+            PopID();
+          }
+          EndCombo();
+        }
+        int style = static_cast<int>(rig.style);
+        if (Combo("POV Style", &style, ilmeee::kCameraStyleNames)) {
+          rig.style = static_cast<ilmeee::CameraStyle>(style);
+          // Pair the style with the script that moves the way it looks.
+          if (rig.style == ilmeee::CameraStyle::SideScroller)
+            mesh.movementScript = "Platformer";
+          else if (rig.style != ilmeee::CameraStyle::None &&
+                   mesh.movementScript == "WASD XZ")
+            mesh.movementScript = "Camera Relative";
+          RecordEditorHistory();
+        }
+        if (rig.style != ilmeee::CameraStyle::None) {
+          if (rig.style != ilmeee::CameraStyle::FirstPerson) {
+            DragFloat("Distance", &rig.distance, 0.05f, 0.0f, 100.0f, "%.2f");
+            if (IsItemDeactivatedAfterEdit())
+              RecordEditorHistory();
+          }
+          DragFloat(rig.style == ilmeee::CameraStyle::FirstPerson ? "Eye Height"
+                                                                  : "Height",
+                    &rig.height, 0.05f, -10.0f, 50.0f, "%.2f");
+          if (IsItemDeactivatedAfterEdit())
+            RecordEditorHistory();
+        }
+
+        SeparatorText("UI Input");
+        const auto joystickCombo = [&](const char *label, std::string &id) {
+          if (!BeginCombo(label, id.empty() ? "None" : id.c_str()))
+            return;
+          if (Selectable("None", id.empty())) {
+            id.clear();
+            RecordEditorHistory();
+          }
+          for (const auto &element : gameUi.elements) {
+            if (element.kind != ilmeee::UiKind::Joystick)
+              continue;
+            if (Selectable(element.id.c_str(), id == element.id)) {
+              id = element.id;
+              RecordEditorHistory();
+            }
+          }
+          EndCombo();
+        };
+        LoadGameUiForProject();
+        joystickCombo("Move Joystick", rig.moveJoystick);
+        joystickCombo("Look Joystick", rig.lookJoystick);
+        if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
+                         [](const ilmeee::UiElement &e) {
+                           return e.kind == ilmeee::UiKind::Joystick;
+                         }))
+          TextDisabled("Add one: Canvas > Create Child > Joystick");
+
+        TextDisabled("Game tab: WASD move, Space jump,");
+        TextDisabled("right-drag / arrow keys look");
+        TextDisabled("Custom C++ functions: UserMovementScripts.cpp");
+      }
+    }
+    if (!keep && !SceneStructureLocked()) {
+      mesh.movable = false;
+      mesh.movementScript.clear();
+      mesh.movementSpeed = 3.0f;
+      mesh.movementRig = {};
       RecordEditorHistory();
     }
-    if (mesh.movable) {
-      const auto names = ilmeee::MovementScriptNames();
-      const char *selected = mesh.movementScript.empty() ? "None" :
-                             mesh.movementScript.c_str();
-      if (BeginCombo("Script", selected)) {
-        for (const auto &name : names) {
-          if (Selectable(name.c_str(), mesh.movementScript == name)) {
-            mesh.movementScript = name;
-            RecordEditorHistory();
-          }
-        }
-        EndCombo();
-      }
-      DragFloat("Speed", &mesh.movementSpeed, 0.1f, 0.0f, 100.0f,
-                "%.2f units/s");
-      if (IsItemDeactivatedAfterEdit())
-        RecordEditorHistory();
-
-      SeparatorText("Camera");
-      auto &rig = mesh.movementRig;
-      const auto cameraLabel = [&](int index) -> std::string {
-        if (index < 0) return "Game View Camera";
-        return sceneRenderer->GetMesh3DName((size_t)index);
-      };
-      if (BeginCombo("Camera", cameraLabel(rig.camera).c_str())) {
-        if (Selectable("Game View Camera", rig.camera < 0)) {
-          rig.camera = -1;
-          RecordEditorHistory();
-        }
-        for (size_t c = 0; c < sceneRenderer->GetMesh3DCount(); ++c) {
-          if (!sceneRenderer->IsMesh3DCamera(c)) continue;
-          PushID((int)c);
-          if (Selectable(cameraLabel((int)c).c_str(), rig.camera == (int)c)) {
-            rig.camera = (int)c;
-            RecordEditorHistory();
-          }
-          PopID();
-        }
-        EndCombo();
-      }
-      int style = static_cast<int>(rig.style);
-      if (Combo("POV Style", &style, ilmeee::kCameraStyleNames)) {
-        rig.style = static_cast<ilmeee::CameraStyle>(style);
-        // Pair the style with the script that moves the way it looks.
-        if (rig.style == ilmeee::CameraStyle::SideScroller)
-          mesh.movementScript = "Platformer";
-        else if (rig.style != ilmeee::CameraStyle::None &&
-                 mesh.movementScript == "WASD XZ")
-          mesh.movementScript = "Camera Relative";
-        RecordEditorHistory();
-      }
-      if (rig.style != ilmeee::CameraStyle::None) {
-        if (rig.style != ilmeee::CameraStyle::FirstPerson) {
-          DragFloat("Distance", &rig.distance, 0.05f, 0.0f, 100.0f, "%.2f");
-          if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
-        }
-        DragFloat(rig.style == ilmeee::CameraStyle::FirstPerson ? "Eye Height"
-                                                                : "Height",
-                  &rig.height, 0.05f, -10.0f, 50.0f, "%.2f");
-        if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
-      }
-
-      SeparatorText("UI Input");
-      const auto joystickCombo = [&](const char *label, std::string &id) {
-        if (!BeginCombo(label, id.empty() ? "None" : id.c_str())) return;
-        if (Selectable("None", id.empty())) {
-          id.clear();
-          RecordEditorHistory();
-        }
-        for (const auto &element : gameUi.elements) {
-          if (element.kind != ilmeee::UiKind::Joystick) continue;
-          if (Selectable(element.id.c_str(), id == element.id)) {
-            id = element.id;
-            RecordEditorHistory();
-          }
-        }
-        EndCombo();
-      };
-      LoadGameUiForProject();
-      joystickCombo("Move Joystick", rig.moveJoystick);
-      joystickCombo("Look Joystick", rig.lookJoystick);
-      if (std::none_of(gameUi.elements.begin(), gameUi.elements.end(),
-                       [](const ilmeee::UiElement &e) {
-                         return e.kind == ilmeee::UiKind::Joystick;
-                       }))
-        TextDisabled("Add one: Canvas > Create Child > Joystick");
-
-      TextDisabled("Game tab: WASD move, Space jump,");
-      TextDisabled("right-drag / arrow keys look");
-      TextDisabled("Custom C++ functions: UserMovementScripts.cpp");
-    }
-    if (SceneStructureLocked()) EndDisabled();
+    if (SceneStructureLocked())
+      EndDisabled();
   }
 
   // Light Source section: only shown if selected object is a light
@@ -1272,6 +1291,8 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
+  if (meshSelected) RenderNativeScriptInspector(static_cast<size_t>(meshIdx));
+
   if (Button("Add Component", ImVec2(-1, 0))) {
     OpenPopup("AddComponentPopup");
   }
@@ -1279,6 +1300,14 @@ void MainWindow::RenderInspectorWindow() {
 
   if (BeginPopup("AddComponentPopup")) {
     Text("Components");
+    BeginDisabled(!meshSelected || isLight || isCamera || hasMovementScript);
+    if (Selectable("Movement Script")) {
+      auto &mesh = sceneRenderer->meshes3d[(size_t)meshIdx];
+      mesh.movable = true;
+      mesh.movementScript = "WASD XZ";
+      RecordEditorHistory();
+    }
+    EndDisabled();
     if (Selectable("Physics Body")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].hasPhysics = true;
@@ -1312,57 +1341,13 @@ void MainWindow::RenderInspectorWindow() {
       }
     }
 
-    // Script creation section
-    static bool showScriptInput = false;
-    if (Selectable("Script")) {
-      showScriptInput = true;
-    }
-
-    // Show script input UI when Script is selected
-    if (showScriptInput) {
-      Separator();
-      Text("Create New Script");
-
-      // Script input field with better styling
-      PushItemWidth(-1); // Make input field fill available width
-      bool entered = InputText("##ScriptName", currentScriptName,
-                               IM_ARRAYSIZE(currentScriptName),
-                               ImGuiInputTextFlags_EnterReturnsTrue);
-
-      // Show placeholder if empty
-      if (strlen(currentScriptName) == 0) {
-        SameLine();
-        SetCursorPosX(GetItemRectMin().x + 5);
-        TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Enter script name...");
-      }
-
-      // Create and Cancel buttons
-      if (Button("Create", ImVec2(120, 0)) || entered) {
-        if (strlen(currentScriptName) > 0) {
-          cout << "Create" << endl;
-          projectHandler.NewScripts(currentScriptName);
-          projectHandler.ShowNotification("Script Created",
-                                          "Script created successfully",
-                                          projectHandler.blueColor);
-          // Reload file
-          projectHandler.isOpenedProject = true;
-          showScriptInput = false;
-          memset(currentScriptName, 0,
-                 sizeof(currentScriptName)); // Clear input
-          CloseCurrentPopup();
-        }
-      }
-      SameLine();
-      if (Button("Cancel", ImVec2(120, 0))) {
-        showScriptInput = false;
-        projectHandler.ShowNotification("Script Creation Cancelled",
-                                        "Script creation cancelled",
-                                        projectHandler.redColor);
-        memset(currentScriptName, 0, sizeof(currentScriptName)); // Clear input
-      }
-
-      PopItemWidth();
-    }
+    Separator();
+    if (meshSelected) RenderNativeScriptAddMenu(static_cast<size_t>(meshIdx));
+    if (Selectable(nativeScripts.IsCompiling() ? "Compiling Scripts..." : "Compile Project Scripts", false,
+                   nativeScripts.IsCompiling() ? ImGuiSelectableFlags_Disabled : ImGuiSelectableFlags_None))
+      nativeScripts.CompileAll();
+    if (Selectable("Create C++ Script..."))
+      projectHandler.RequestCreateScript();
 
     EndPopup();
     // }
@@ -2680,6 +2665,9 @@ void MainWindow::RenderMenuBar() {
       }
       if (MenuItem("Paste", "Ctrl+V")) {
       }
+      Separator();
+      if (MenuItem("Code Editor..."))
+        projectHandler.RequestCodeEditorSettings();
       EndMenu();
     }
 
@@ -2697,6 +2685,10 @@ void MainWindow::RenderMenuBar() {
 
     RenderBuildMenu();
     if (BeginMenu("Tools")) {
+      if (MenuItem("Compile Project Scripts", nullptr, false,
+                   !SceneStructureLocked() && !nativeScripts.IsCompiling()))
+        nativeScripts.CompileAll();
+      Separator();
       if (MenuItem("Secondary Window", nullptr, &showSecondary)) {
       }
       EndMenu();
@@ -2878,12 +2870,9 @@ void MainWindow::HandleSearch() {
           if (pos != string::npos)
             extension = result.name.substr(pos);
 
-          // Jika file ber-ekstensi '.cpp', buka dengan VS Code.
-          if (extension == ".cpp") {
-            // Gunakan perintah sistem; pastikan "code" sudah ada di PATH.
-            string command = "code \"" + result.fullPath + "\"";
-            system(command.c_str());
-          }
+          if (extension == ".cpp" || extension == ".hpp" || extension == ".h" ||
+              extension == ".c" || extension == ".cc" || extension == ".cxx")
+            projectHandler.OpenFile(result.fullPath);
         }
       }
       if (IsItemHovered()) {
@@ -2936,6 +2925,7 @@ void MainWindow::RenderPlayMenu() {
     ImVec4 playTint = isPlaying ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
                                 : ImVec4(0.7f, 0.9f, 0.7f, 1.0f);
 
+    BeginDisabled(builder.IsStopped() && nativeScripts.IsCompiling());
     if (svgIcons.DrawIconButton("##Play", "assets/icons/svg/play.svg", iconSize,
                                 playBg, playTint)) {
       if (builder.IsStopped()) {
@@ -2950,8 +2940,9 @@ void MainWindow::RenderPlayMenu() {
         PushMessage("[INFO] Game resumed");
       }
     }
+    EndDisabled();
     if (IsItemHovered())
-      SetTooltip("Play (Ctrl+P)");
+      SetTooltip(nativeScripts.IsCompiling() ? "Waiting for script compilation" : "Play (Ctrl+P)");
 
     // Pause button
     SameLine(0, spacing);
@@ -2980,6 +2971,7 @@ void MainWindow::RenderPlayMenu() {
     if (svgIcons.DrawIconButton("##Stop", "assets/icons/svg/stop.svg", iconSize,
                                 stopBg, stopTint)) {
       if (!builder.IsStopped()) PushMessage("[INFO] Game stopped");
+      nativeScripts.Stop();
       builder.Stop();
       focusSceneTab = true;
     }
@@ -2989,7 +2981,7 @@ void MainWindow::RenderPlayMenu() {
     // Keyboard shortcuts
     if (GetIO().KeyCtrl && !GetIO().KeyShift &&
         IsKeyPressed(ImGuiKey_P, false)) {
-      if (builder.IsStopped()) {
+      if (builder.IsStopped() && !nativeScripts.IsCompiling()) {
         builder.Play();
         focusGameTab = true;
         showConsole = true;
@@ -3010,6 +3002,7 @@ void MainWindow::RenderPlayMenu() {
     }
     if (GetIO().KeyCtrl && IsKeyPressed(ImGuiKey_Q, false) &&
         !builder.IsStopped()) {
+      nativeScripts.Stop();
       builder.Stop();
       focusSceneTab = true;
       PushMessage("[INFO] Game stopped");
@@ -3060,12 +3053,12 @@ void MainWindow::ClearMessages() {
   messages.clear();
 }
 
-void MainWindow::Save3DScene() {
+bool MainWindow::Save3DScene() {
   if (!sceneRenderer)
-    return;
+    return false;
   if (SceneStructureLocked()) {
     PushMessage("[WARNING] Stop the game before saving the scene");
-    return;
+    return false;
   }
   LoadGameUiForProject();
   const std::string activeProject = projectHandler.projectPath;
@@ -3075,7 +3068,7 @@ void MainWindow::Save3DScene() {
     projectHandler.ShowNotification("Save Warning",
                                     "No active project is opened",
                                     ImVec4(1.0f, 0.6f, 0.0f, 1.0f));
-    return;
+    return false;
   }
   namespace fs = std::filesystem;
   fs::path scenesDir = fs::path(activeProject) / "scenes";
@@ -3093,6 +3086,8 @@ void MainWindow::Save3DScene() {
     e.rotationEuler = sceneRenderer->GetMesh3DRotation(i);
     e.scale = sceneRenderer->GetMesh3DScale(i);
     const auto &mesh = sceneRenderer->meshes3d[i];
+    e.objectId = mesh.objectId;
+    e.scripts = mesh.scripts;
     e.movable = mesh.movable;
     e.movementScript = mesh.movementScript;
     e.movementSpeed = mesh.movementSpeed;
@@ -3173,10 +3168,12 @@ void MainWindow::Save3DScene() {
     projectHandler.ShowNotification("Scene Saved",
                                     "Successfully saved main.ilmeeescene",
                                     ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+    return true;
   } else {
     ::Log("Failed to save 3D scene to " + mainScene.string(),
           Debug::LogLevel::ERROR);
     projectHandler.ShowNotification("Save Error", "Failed to save scene",
                                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    return false;
   }
 }
