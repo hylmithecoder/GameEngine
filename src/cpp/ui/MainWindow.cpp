@@ -192,6 +192,7 @@ void MainWindow::OnUpdate(float deltaTime) {
     movementSystem.Reset();
     nativeScriptContext.renderer = sceneRenderer;
     nativeScriptContext.input = &gameMovementInput;
+    nativeScriptContext.media = &media;
     if (sceneRenderer) nativeScripts.Start(ilmeee::ScriptSceneHost(nativeScriptContext),
                                           ilmeee::ScriptSceneOwners(*sceneRenderer));
   }
@@ -275,6 +276,8 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
     RenderInspectorWindow();
   if (showConsole)
     RenderConsoleWindow();
+  if (showDeviceMonitor)
+    RenderDeviceMonitorWindow();
 
   // Modular panels (e.g. VideoPlayerPanel). Each panel renders into
   // its own ImGui window via PanelManager — dockable like the rest.

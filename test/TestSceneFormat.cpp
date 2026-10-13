@@ -325,7 +325,8 @@ int main() {
     NativeScriptBinding binding{"assets/scripts/Probe.cpp", "Probe", false, {}};
     binding.values = {{"Speed", ScriptValueType::Float, 7.5f, false, 0},
                       {"Target", ScriptValueType::Object, 0, false, 84},
-                      {"Active", ScriptValueType::Bool, 0, true, 0}};
+                      {"Active", ScriptValueType::Bool, 0, true, 0},
+                      {"Offset", ScriptValueType::Vec3, 0, false, 0, {1, -2, 3}}};
     scene.entities[0].scripts.push_back(binding);
     CHECK(SaveScene(file.string(), scene));
     IlmeeeScene loaded;
@@ -337,6 +338,9 @@ int main() {
     CHECK(script.values[0].number == 7.5f);
     CHECK(script.values[1].object == 84);
     CHECK(script.values[2].boolean);
+    CHECK(script.values[3].type == ScriptValueType::Vec3 &&
+          script.values[3].vec3[0] == 1 && script.values[3].vec3[1] == -2 &&
+          script.values[3].vec3[2] == 3);
     // Duplicate/legacy identities are repaired during load.
     scene.entities[1].objectId = 42;
     CHECK(SaveScene(file.string(), scene)); CHECK(LoadScene(file.string(), loaded));

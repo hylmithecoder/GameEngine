@@ -20,9 +20,7 @@
 
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
-#ifndef __ANDROID__
 #include "../../../include/core_engine/NativeScriptScene.hpp"
-#endif
 #include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
@@ -42,6 +40,10 @@
 #if defined(__ANDROID__)
 #include "AndroidAssets.hpp"
 #include <SDL3/SDL_main.h> // turns main() into SDL_main for SDLActivity
+#include <sys/system_properties.h>
+#endif
+#if defined(__linux__)
+#include <unistd.h>
 #endif
 
 using namespace ImGui;
@@ -53,6 +55,34 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace {
+
+// Live stats for the editor's Device Monitor, on only when the editor runs
+// the game: it sets ILMEEE_STATS=1 (desktop) or the debug.ilmeee.stats
+// property over adb (Android).
+bool LiveStatsRequested() {
+#if defined(__ANDROID__)
+  char value[PROP_VALUE_MAX] = {};
+  return __system_property_get("debug.ilmeee.stats", value) > 0 &&
+         value[0] == '1';
+#else
+  const char *value = std::getenv("ILMEEE_STATS");
+  return value && value[0] == '1';
+#endif
+}
+
+// Resident memory of this process in MiB, -1 when unknown.
+double ResidentMiB() {
+#if defined(__linux__)
+  long pages = 0, resident = 0;
+  if (FILE *f = std::fopen("/proc/self/statm", "r")) {
+    const int read = std::fscanf(f, "%ld %ld", &pages, &resident);
+    std::fclose(f);
+    if (read == 2)
+      return resident * (double)sysconf(_SC_PAGESIZE) / (1024.0 * 1024.0);
+  }
+#endif
+  return -1.0;
+}
 
 struct GameManifest {
   std::string name = "Ilmeee Game";
@@ -118,6 +148,9 @@ protected:
     // device themselves), so let CPU and GPU overlap.
     waitIdleEachFrame = false;
     renderer_->SetAsyncSubmit(true);
+    liveStats_ = LiveStatsRequested();
+    if (liveStats_)
+      ReportDeviceInfo();
 
     fs::path scenePath = root_ / manifest_.startScene;
     ilmeee::IlmeeeScene scene;
@@ -131,9 +164,8 @@ protected:
     ilmeee::SceneLoadReport report =
         ilmeee::InstantiateScene(*renderer_, scene, root_);
     media_.SetProjectRoot(root_);
-#ifndef __ANDROID__
     native_.log = [](const std::string &line) { SDL_Log("%s", line.c_str()); };
-    nativeContext_ = {renderer_.get(), &input_, native_.log};
+    nativeContext_ = {renderer_.get(), &input_, &media_, native_.log};
     try {
       std::ifstream modulesFile(root_ / "native-scripts.json");
       if (modulesFile) {
@@ -143,7 +175,18 @@ protected:
           compiled.ok = true;
           compiled.source = entry.at("source").get<std::string>();
           compiled.className = entry.at("className").get<std::string>();
-          compiled.library = root_ / entry.at("library").get<std::string>();
+          const auto library = entry.at("library").get<std::string>();
+#ifdef __ANDROID__
+          if (!entry.value("androidNativeLibrary", false) ||
+              fs::path(library).filename().string() != library ||
+              !library.starts_with("libilmeee_script_") ||
+              !library.ends_with(".so"))
+            throw std::runtime_error("Invalid Android script module; rebuild this game for Android.");
+          // dlopen resolves the packaged library in libmain's Android namespace.
+          compiled.library = library;
+#else
+          compiled.library = root_ / library;
+#endif
           std::string error;
           if (!native_.Load(compiled, error)) throw std::runtime_error(error);
         }
@@ -158,7 +201,6 @@ protected:
       ::Log(error_, Debug::LogLevel::ERROR);
       return;
     }
-#endif
     ::Log("Loaded " + std::to_string(report.loaded) + " object(s) from " +
               scenePath.string(),
           Debug::LogLevel::SUCCESS);
@@ -223,7 +265,61 @@ protected:
     int frames = 0;
     double updateMs = 0.0, mediaMs = 0.0, sceneMs = 0.0, worstMs = 0.0;
     Clock::time_point lastFrame = Clock::now();
-  } stats_;
+  } stats_, live_;
+  bool liveStats_ = false;
+  bool liveWarm_ = false; // first window measured scene loading, not play
+
+  void AddTiming(double FrameStats::*field, FrameStats::Clock::time_point start) {
+    const double ms = std::chrono::duration<double, std::milli>(
+                          FrameStats::Clock::now() - start)
+                          .count();
+    stats_.*field += ms;
+    live_.*field += ms;
+  }
+
+  // Twice a second, one machine-readable line the editor parses (and keeps
+  // out of its Console): ILMEEE_STATS {json}.
+  void ReportLiveStats(double frameMs, FrameStats::Clock::time_point now) {
+    live_.worstMs = std::max(live_.worstMs, frameMs);
+    ++live_.frames;
+    const double windowS =
+        std::chrono::duration<double>(now - live_.windowStart).count();
+    if (windowS < 0.5)
+      return;
+    if (!liveWarm_) {
+      liveWarm_ = true;
+      live_ = FrameStats{};
+      return;
+    }
+    const double n = live_.frames;
+    char line[320];
+    std::snprintf(line, sizeof line,
+                  "ILMEEE_STATS {\"fps\":%.2f,\"frameMs\":%.2f,"
+                  "\"worstMs\":%.2f,\"updateMs\":%.2f,\"mediaMs\":%.2f,"
+                  "\"sceneMs\":%.2f,\"rssMiB\":%.1f,\"width\":%u,"
+                  "\"height\":%u,\"objects\":%zu,\"paused\":%s}",
+                  n / windowS, windowS * 1000.0 / n, live_.worstMs,
+                  live_.updateMs / n, live_.mediaMs / n, live_.sceneMs / n,
+                  ResidentMiB(), swapChainExtent.width, swapChainExtent.height,
+                  renderer_ ? renderer_->GetMesh3DCount() : size_t{0},
+                  paused_ ? "true" : "false");
+    SDL_Log("%s", line);
+    live_ = FrameStats{};
+  }
+
+  void ReportDeviceInfo() {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(ctx.physicalDevice, &props);
+    json info = {{"gpu", props.deviceName},
+                 {"vulkan", std::to_string(VK_API_VERSION_MAJOR(props.apiVersion)) +
+                                "." +
+                                std::to_string(VK_API_VERSION_MINOR(props.apiVersion)) +
+                                "." +
+                                std::to_string(VK_API_VERSION_PATCH(props.apiVersion))},
+                 {"driver", props.driverVersion},
+                 {"game", manifest_.name}};
+    SDL_Log("ILMEEE_GAME_INFO %s", info.dump().c_str());
+  }
 
   void ReportFrameStats() {
     using namespace std::chrono;
@@ -231,6 +327,8 @@ protected:
     const double frameMs =
         duration<double, std::milli>(now - stats_.lastFrame).count();
     stats_.lastFrame = now;
+    if (liveStats_)
+      ReportLiveStats(frameMs, now);
     stats_.worstMs = std::max(stats_.worstMs, frameMs);
     ++stats_.frames;
     const double windowS =
@@ -257,9 +355,7 @@ protected:
     // Input gathered while drawing the previous frame (keyboard + sticks).
     if (renderer_ && !paused_ && error_.empty())
       movement_.Update(*renderer_, input_, deltaTime);
-#ifndef __ANDROID__
     if (!paused_ && error_.empty()) native_.Update(deltaTime);
-#endif
     // A game is always playing; sounds and videos start on the first frame.
     const auto mediaStart = FrameStats::Clock::now();
     if (renderer_ && error_.empty())
@@ -267,12 +363,8 @@ protected:
                     paused_ ? ilmeee::MediaSystem::State::Paused
                             : ilmeee::MediaSystem::State::Playing,
                     deltaTime);
-    stats_.mediaMs += std::chrono::duration<double, std::milli>(
-                          FrameStats::Clock::now() - mediaStart)
-                          .count();
-    stats_.updateMs += std::chrono::duration<double, std::milli>(
-                           FrameStats::Clock::now() - updateStart)
-                           .count();
+    AddTiming(&FrameStats::mediaMs, mediaStart);
+    AddTiming(&FrameStats::updateMs, updateStart);
   }
 
   void OnRender(VkCommandBuffer) override {
@@ -296,9 +388,7 @@ protected:
             h != lastRenderHeight_) {
           const auto sceneStart = FrameStats::Clock::now();
           hasFrame_ = renderer_->RenderGameView();
-          stats_.sceneMs += std::chrono::duration<double, std::milli>(
-                                FrameStats::Clock::now() - sceneStart)
-                                .count();
+          AddTiming(&FrameStats::sceneMs, sceneStart);
           lastRenderWidth_ = w;
           lastRenderHeight_ = h;
         }
@@ -349,9 +439,7 @@ protected:
   }
 
   void OnCleanup() override {
-#ifndef __ANDROID__
     native_.Stop();
-#endif
     if (renderer_)
       media_.Shutdown(*renderer_);
     renderer_.reset();
@@ -383,10 +471,8 @@ private:
   ilmeee::GameUI gameUi_;
   bool paused_ = false;
   ilmeee::MovementSystem movement_;
-#ifndef __ANDROID__
   ilmeee::NativeScripts native_;
   ilmeee::NativeScriptSceneContext nativeContext_;
-#endif
   ilmeee::MediaSystem media_;
   ilmeee::MovementInput input_;
   ilmeee::UiFingers fingers_;

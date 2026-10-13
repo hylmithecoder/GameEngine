@@ -62,22 +62,68 @@ fs::path DefaultLauncher(const std::string &project,
          (target == ilmeee::BuildTarget::Android ? safe + ".apk" : safe);
 }
 
-// Installs the APK on the connected device, starts it and keeps printing the
-// game's logcat (its stdout/stderr) until the device goes away.
+// Installs the APK on the connected device, starts it with live stats on
+// (debug.ilmeee.stats) and prints every log line of the game's process,
+// device info and battery/thermal state (ILMEEE_* lines, read by
+// DeviceMonitor) until the game exits; then any crash report.
 const char *kAndroidRunScript = R"sh(
 apk="$1"; app="$2"; activity="$3"
 ADB=adb
 command -v adb >/dev/null 2>&1 || ADB="${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb"
+# Several phones attached: adb needs a serial (ANDROID_SERIAL wins).
+if [ -z "$ANDROID_SERIAL" ]; then
+  serials="$("$ADB" devices | awk 'NR > 1 && $2 == "device" {print $1}')"
+  if [ "$(printf '%s\n' "$serials" | grep -c .)" -gt 1 ]; then
+    export ANDROID_SERIAL="$(printf '%s\n' "$serials" | head -n 1)"
+    echo "Several devices attached; using $ANDROID_SERIAL (set ANDROID_SERIAL to choose)."
+  fi
+fi
 if [ "$("$ADB" get-state 2>/dev/null)" != "device" ]; then
   echo "No Android device found. Connect a phone with USB debugging enabled (check: adb devices)."
   exit 1
 fi
-echo "Installing $(basename "$apk") on $("$ADB" shell getprop ro.product.model | tr -d '
-') ..."
+prop() { "$ADB" shell getprop "$1" | tr -d '\r"\\'; }
+soc="$(prop ro.soc.model)"; [ -n "$soc" ] || soc="$(prop ro.board.platform)"
+echo "ILMEEE_DEVICE_INFO {\"manufacturer\":\"$(prop ro.product.manufacturer)\",\"model\":\"$(prop ro.product.model)\",\"android\":\"$(prop ro.build.version.release)\",\"sdk\":\"$(prop ro.build.version.sdk)\",\"soc\":\"$soc\",\"abi\":\"$(prop ro.product.cpu.abi)\",\"screen\":\"$("$ADB" shell wm size | tr -d '\r' | sed -n 's/.*: //p' | tail -n 1)\"}"
+echo "Installing $(basename "$apk") on $(prop ro.product.model) ..."
 "$ADB" install -r "$apk" || exit 1
 "$ADB" logcat -c
+"$ADB" shell setprop debug.ilmeee.stats 1
+"$ADB" shell am force-stop "$app"
 "$ADB" shell am start -n "$app/$activity" || exit 1
-exec "$ADB" logcat -v brief -s Ilmeee:V SDL:V SDL/APP:V AndroidRuntime:E DEBUG:E
+pid=""
+for _ in $(seq 50); do
+  pid="$("$ADB" shell pidof "$app" | tr -d '\r')"
+  [ -n "$pid" ] && break
+  sleep 0.1
+done
+if [ -z "$pid" ]; then
+  echo "Could not find the game process; showing its tagged log only."
+  exec "$ADB" logcat -v brief -s Ilmeee:V SDL:V SDL/APP:V AndroidRuntime:E DEBUG:E
+fi
+echo "Game process $pid: streaming its whole log (Info and above)."
+"$ADB" logcat -v brief --pid="$pid" '*:I' Ilmeee:V SDL:V SDL/APP:V &
+logcat=$!
+trap 'kill $logcat 2>/dev/null' EXIT
+trap 'exit 0' TERM INT
+# Gone only after a few misses in a row: right after the fork pidof can
+# briefly miss the process while it gets its name.
+misses=0
+while [ $misses -lt 3 ]; do
+  case " $("$ADB" shell pidof "$app" 2>/dev/null | tr -d '\r') " in
+    *" $pid "*) misses=0 ;;
+    *) misses=$((misses + 1)); sleep 1; continue ;;
+  esac
+  "$ADB" shell 'dumpsys battery; dumpsys thermalservice 2>/dev/null | grep -m1 "Thermal Status"' | tr -d '\r' | awk -F': ' 'BEGIN {thermal=-1}
+    /^  level:/ {level=$2} /^  temperature:/ {temp=$2} /^  AC powered:/ {ac=$2}
+    /^  USB powered:/ {usb=$2} /Thermal Status/ {thermal=$2}
+    END { printf "ILMEEE_BATTERY {\"level\":%d,\"tempC\":%.1f,\"charging\":%s,\"thermal\":%d}\n",
+          level, temp / 10, (ac == "true" || usb == "true") ? "true" : "false", thermal }'
+  sleep 2
+done
+kill $logcat 2>/dev/null
+echo "Game process $pid ended."
+"$ADB" logcat -d -v brief -s AndroidRuntime:E DEBUG:E libc:F
 )sh";
 
 bool Spawn(const std::string &program, const std::vector<std::string> &args,
@@ -122,6 +168,21 @@ void MainWindow::PushBuildLog(const std::string &line) {
     gameBuildScrollToEnd = true;
   }
   ::Log("[Build] " + line);
+}
+
+void MainWindow::HandleGameOutput(const std::string &line) {
+  if (deviceMonitor.Feed(line, GetTime()))
+    return;
+  PushBuildLog("[GAME] " + line);
+  // logcat -v brief: "E/Tag ( pid): message".
+  const char *level = "[INFO]";
+  if (line.size() > 2 && line[1] == '/') {
+    if (line[0] == 'E' || line[0] == 'F')
+      level = "[ERROR]";
+    else if (line[0] == 'W')
+      level = "[WARNING]";
+  }
+  PushMessage(std::string(level) + " [GAME] " + line);
 }
 
 void MainWindow::StartGameBuild(bool runWhenDone) {
@@ -225,6 +286,10 @@ void MainWindow::LaunchBuiltGame() {
     return;
   }
   const bool android = lastGameTarget == ilmeee::BuildTarget::Android;
+  deviceMonitor.Reset(android ? "Android" : "Linux");
+  showDeviceMonitor = true;
+  // Desktop games inherit it; on the phone the run script sets a property.
+  setenv("ILMEEE_STATS", "1", 1);
   const bool started =
       android ? Spawn("bash",
                       {"-c", kAndroidRunScript, "ilmeee-android-run",
@@ -281,8 +346,7 @@ void MainWindow::PollGameBuild() {
         while ((newline = gameOutputPending.find('\n')) != std::string::npos) {
           std::string line = gameOutputPending.substr(0, newline);
           if (!line.empty() && line.back() == '\r') line.pop_back();
-          PushBuildLog("[GAME] " + line);
-          PushMessage("[INFO] [GAME] " + line);
+          HandleGameOutput(line);
           gameOutputPending.erase(0, newline + 1);
         }
         if (gameOutputPending.size() > 16384) {
@@ -291,8 +355,7 @@ void MainWindow::PollGameBuild() {
         }
       } else if (n == 0) {
         if (!gameOutputPending.empty()) {
-          PushBuildLog("[GAME] " + gameOutputPending);
-          PushMessage("[INFO] [GAME] " + gameOutputPending);
+          HandleGameOutput(gameOutputPending);
           gameOutputPending.clear();
         }
         close(gameOutputFd);
@@ -319,6 +382,7 @@ void MainWindow::PollGameBuild() {
         PushBuildLog("Game was killed by signal " +
                      std::to_string(WTERMSIG(status)));
       gameProcess = -1;
+      deviceMonitor.SetEnded();
     }
   }
 }
@@ -462,4 +526,149 @@ void MainWindow::RenderBuildTab() {
     }
   }
   EndChild();
+}
+
+void MainWindow::RenderDeviceMonitorWindow() {
+  if (!Begin("Device Monitor", &showDeviceMonitor)) {
+    End();
+    return;
+  }
+  const double now = GetTime();
+  const ilmeee::DeviceMonitor &monitor = deviceMonitor;
+  const auto &samples = monitor.Samples();
+  const auto &device = monitor.Device();
+  const auto &battery = monitor.Battery();
+  const auto text = [](const nlohmann::json &j, const char *key) {
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null())
+      return std::string();
+    return it->is_string() ? it->get<std::string>() : it->dump();
+  };
+
+  if (monitor.Target().empty()) {
+    TextWrapped("Build > Run (or Build and Run) a game to see its live FPS, "
+                "frame times and memory here. Android: USB debugging on, "
+                "target Android.");
+    End();
+    return;
+  }
+  const bool live = monitor.Live(now);
+  const ImVec4 state = live                ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
+                       : monitor.Running() ? ImVec4(0.9f, 0.8f, 0.3f, 1.0f)
+                                           : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+  TextColored(state, "%s",
+              live                ? "LIVE"
+              : monitor.Running() ? (samples.empty() ? "Waiting for the game..."
+                                                     : "No stats (paused or "
+                                                       "in background?)")
+                                  : "Game ended");
+  SameLine();
+  TextDisabled("%s", monitor.Target().c_str());
+
+  // Who: phone (from adb) and GPU (from the player).
+  std::string who = text(device, "manufacturer") + " " + text(device, "model");
+  if (!text(device, "android").empty())
+    who += "  |  Android " + text(device, "android") + " (SDK " +
+           text(device, "sdk") + ")";
+  if (!text(device, "soc").empty())
+    who += "  |  " + text(device, "soc");
+  if (who.find_first_not_of(' ') != std::string::npos)
+    TextWrapped("%s", who.c_str());
+  if (!text(device, "gpu").empty())
+    TextWrapped("GPU %s  |  Vulkan %s", text(device, "gpu").c_str(),
+                text(device, "vulkan").c_str());
+  if (!text(device, "width").empty())
+    Text("Render %sx%s  |  %s objects%s", text(device, "width").c_str(),
+         text(device, "height").c_str(), text(device, "objects").c_str(),
+         text(device, "paused") == "true" ? "  |  paused" : "");
+  if (!battery.empty()) {
+    static const char *kThermal[] = {"none",   "light",     "moderate",
+                                     "severe", "critical",  "emergency",
+                                     "shutdown"};
+    const int thermal = battery.value("thermal", -1);
+    const double temp = battery.value("tempC", 0.0);
+    TextColored(temp >= 42.0 || thermal >= 2 ? ImVec4(1.0f, 0.5f, 0.3f, 1.0f)
+                                             : GetStyleColorVec4(ImGuiCol_Text),
+                "Battery %d%%%s  |  %.1f C  |  thermal throttling: %s",
+                battery.value("level", 0),
+                battery.value("charging", false) ? " (charging)" : "", temp,
+                thermal >= 0 && thermal <= 6 ? kThermal[thermal] : "n/a");
+  }
+  Separator();
+
+  if (samples.empty()) {
+    TextDisabled("No frame stats yet. They need a game built by this editor "
+                 "version (rebuild the APK / player).");
+  } else {
+    const ilmeee::DeviceSample &last = samples.back();
+    const ImVec4 fpsColor = last.fps >= 55   ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
+                            : last.fps >= 30 ? ImVec4(0.95f, 0.8f, 0.3f, 1.0f)
+                                             : ImVec4(1.0f, 0.4f, 0.3f, 1.0f);
+    SetWindowFontScale(2.2f);
+    TextColored(fpsColor, "%.1f FPS", last.fps);
+    SetWindowFontScale(1.0f);
+    Text("Frame %.2f ms (worst %.1f)  |  update %.2f  media %.2f  scene %.2f",
+         last.frameMs, last.worstMs, last.updateMs, last.mediaMs,
+         last.sceneMs);
+    if (last.rssMiB >= 0) {
+      SameLine();
+      Text(" |  RAM %.0f MiB", last.rssMiB);
+    }
+    for (double seconds : {10.0, 60.0}) {
+      const auto s = monitor.Summary(now, seconds);
+      if (s.value("samples", 0) > 0)
+        TextDisabled("Last %.0f s: avg %.1f fps, min %.1f fps, avg frame "
+                     "%.2f ms, worst frame %.1f ms",
+                     seconds, s.value("avgFps", 0.0), s.value("minFps", 0.0),
+                     s.value("avgFrameMs", 0.0), s.value("worstFrameMs", 0.0));
+    }
+
+    // Last minute at two samples per second.
+    const size_t n = std::min<size_t>(samples.size(), 120);
+    std::vector<float> fps(n), frame(n), worst(n);
+    float maxFps = 60.0f, maxMs = 33.4f;
+    for (size_t i = 0; i < n; ++i) {
+      const auto &s = samples[samples.size() - n + i];
+      fps[i] = (float)s.fps;
+      frame[i] = (float)s.frameMs;
+      worst[i] = (float)s.worstMs;
+      maxFps = std::max(maxFps, fps[i]);
+      maxMs = std::max(maxMs, worst[i]);
+    }
+    PlotLines("##fps", fps.data(), (int)n, 0, "FPS (last minute)", 0.0f,
+              maxFps * 1.1f, ImVec2(-1, 80));
+    PlotLines("##frame", frame.data(), (int)n, 0, "Frame time ms", 0.0f,
+              maxMs * 1.1f, ImVec2(-1, 60));
+    PlotHistogram("##worst", worst.data(), (int)n, 0,
+                  "Worst frame ms per 0.5 s (spikes = stutter)", 0.0f,
+                  maxMs * 1.1f, ImVec2(-1, 60));
+  }
+
+  if (CollapsingHeader("Game log")) {
+    static char filter[128] = "";
+    SetNextItemWidth(-1);
+    InputTextWithHint("##devfilter", "Filter...", filter, sizeof filter);
+    BeginChild("##devlog", ImVec2(0, 220), true,
+               ImGuiWindowFlags_HorizontalScrollbar);
+    const auto &log = monitor.Log();
+    const size_t first = log.size() > 500 ? log.size() - 500 : 0;
+    for (size_t i = first; i < log.size(); ++i) {
+      const std::string &line = log[i];
+      if (filter[0] && line.find(filter) == std::string::npos)
+        continue;
+      const bool bad = line.size() > 2 && line[1] == '/' &&
+                       (line[0] == 'E' || line[0] == 'F');
+      const bool warn = line.size() > 2 && line[1] == '/' && line[0] == 'W';
+      if (bad || warn)
+        TextColored(bad ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f)
+                        : ImVec4(1.0f, 0.8f, 0.35f, 1.0f),
+                    "%s", line.c_str());
+      else
+        TextUnformatted(line.c_str());
+    }
+    if (GetScrollY() >= GetScrollMaxY() - 5.0f)
+      SetScrollHereY(1.0f);
+    EndChild();
+  }
+  End();
 }

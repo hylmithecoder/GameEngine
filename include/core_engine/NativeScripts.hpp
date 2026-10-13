@@ -11,6 +11,9 @@ namespace ilmeee {
 struct ScriptCompileOptions {
   std::filesystem::path project, sdkInclude, cache;
   std::string compiler = "c++";
+  // Empty: desktop. Android modules use the exact NDK recorded by the player.
+  std::string androidAbi;
+  int androidApi = 26;
 };
 struct CompiledScript {
   std::string source, className, diagnostics;
@@ -19,6 +22,9 @@ struct CompiledScript {
 };
 ScriptCompileOptions
 DefaultScriptCompileOptions(const std::filesystem::path &project);
+ScriptCompileOptions AndroidScriptCompileOptions(
+    const std::filesystem::path &project,
+    const std::filesystem::path &androidPlayer, const std::string &abi);
 std::vector<std::string>
 DiscoverNativeScripts(const std::filesystem::path &project);
 CompiledScript CompileNativeScript(const ScriptCompileOptions &options,

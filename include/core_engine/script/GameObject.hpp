@@ -3,11 +3,14 @@
 #include <string>
 
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 1;
+inline constexpr uint32_t kApiVersion = 2;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {
     return {x + other.x, y + other.y, z + other.z};
+  }
+  Vec3 operator-(Vec3 other) const {
+    return {x - other.x, y - other.y, z - other.z};
   }
   Vec3 operator*(float value) const {
     return {x * value, y * value, z * value};
@@ -16,6 +19,45 @@ struct Vec3 {
 struct Transform {
   Vec3 position, rotation, scale{1, 1, 1};
 };
+// What an object carries; one object can be several (a video screen with
+// an audio source). Bit values are part of the script ABI.
+enum class ObjectKind : uint32_t {
+  Light = 1u << 0,
+  Camera = 1u << 1,
+  Audio = 1u << 2,
+  Video = 1u << 3,
+};
+// Component data reached through HostApi::get*/set*. Append only: the
+// values are part of the script ABI.
+enum class Prop : uint32_t {
+  AudioEnabled,     // bool
+  AudioClip,        // string, project-relative path
+  AudioVolume,      // float
+  AudioLoop,        // bool
+  AudioPlayOnStart, // bool
+  AudioSpatial,     // bool
+  AudioMinDistance, // float
+  AudioMaxDistance, // float
+  AudioPlaying,     // bool, read-only
+  VideoEnabled,     // bool
+  VideoClip,        // string, project-relative path
+  VideoVolume,      // float
+  VideoLoop,        // bool
+  VideoPlayOnStart, // bool
+  VideoUnlit,       // bool
+  VideoPlaying,     // bool, read-only
+  LightColor,       // Vec3, 0..1
+  LightIntensity,   // float
+  LightRange,       // float
+  LightSpotAngle,   // float, degrees
+  LightType,        // float: 0 directional, 1 point, 2 spot
+  CameraOrthographic, // bool
+  CameraFov,          // float, degrees
+  CameraOrthoSize,    // float
+  CameraNear,         // float
+  CameraFar,          // float
+};
+enum class Command : uint32_t { AudioPlay, AudioStop, VideoPlay, VideoStop };
 // Only the editor/player calls these callbacks, on its scene thread.
 struct HostApi {
   void *context = nullptr;
@@ -26,6 +68,18 @@ struct HostApi {
   const char *(*name)(void *, uint64_t) = nullptr;
   bool (*keyDown)(void *, const char *) = nullptr;
   void (*log)(void *, const char *) = nullptr;
+  // API 2: typed components.
+  uint32_t (*kinds)(void *, uint64_t) = nullptr;
+  bool (*getFloat)(void *, uint64_t, Prop, float *) = nullptr;
+  bool (*setFloat)(void *, uint64_t, Prop, float) = nullptr;
+  bool (*getBool)(void *, uint64_t, Prop, bool *) = nullptr;
+  bool (*setBool)(void *, uint64_t, Prop, bool) = nullptr;
+  bool (*getVec3)(void *, uint64_t, Prop, Vec3 *) = nullptr;
+  bool (*setVec3)(void *, uint64_t, Prop, const Vec3 *) = nullptr;
+  // The returned text stays valid until the property changes.
+  const char *(*getString)(void *, uint64_t, Prop) = nullptr;
+  bool (*setString)(void *, uint64_t, Prop, const char *) = nullptr;
+  bool (*command)(void *, uint64_t, Command) = nullptr;
 };
 class GameObject {
 public:
@@ -65,6 +119,59 @@ public:
                                  : 0,
             host_};
   }
+  bool Is(ObjectKind kind) const {
+    return host_ && host_->kinds &&
+           (host_->kinds(host_->context, id_) & static_cast<uint32_t>(kind));
+  }
+  // Typed view, e.g. target.Get().As<AudioGameObject>(). Check IsValid():
+  // it is false when the object lacks that component.
+  template <class T> T As() const { return T(*this); }
+
+protected:
+  float GetFloat(Prop prop) const {
+    float value = 0;
+    if (host_ && host_->getFloat)
+      host_->getFloat(host_->context, id_, prop, &value);
+    return value;
+  }
+  bool SetFloat(Prop prop, float value) const {
+    return host_ && host_->setFloat &&
+           host_->setFloat(host_->context, id_, prop, value);
+  }
+  bool GetBool(Prop prop) const {
+    bool value = false;
+    if (host_ && host_->getBool)
+      host_->getBool(host_->context, id_, prop, &value);
+    return value;
+  }
+  bool SetBool(Prop prop, bool value) const {
+    return host_ && host_->setBool &&
+           host_->setBool(host_->context, id_, prop, value);
+  }
+  Vec3 GetVec3(Prop prop) const {
+    Vec3 value;
+    if (host_ && host_->getVec3)
+      host_->getVec3(host_->context, id_, prop, &value);
+    return value;
+  }
+  bool SetVec3(Prop prop, Vec3 value) const {
+    return host_ && host_->setVec3 &&
+           host_->setVec3(host_->context, id_, prop, &value);
+  }
+  std::string GetString(Prop prop) const {
+    const char *value =
+        host_ && host_->getString ? host_->getString(host_->context, id_, prop)
+                                  : nullptr;
+    return value ? value : "";
+  }
+  bool SetString(Prop prop, const std::string &value) const {
+    return host_ && host_->setString &&
+           host_->setString(host_->context, id_, prop, value.c_str());
+  }
+  bool Run(Command command) const {
+    return host_ && host_->command &&
+           host_->command(host_->context, id_, command);
+  }
 
 private:
   uint64_t id_ = 0;
@@ -79,6 +186,12 @@ public:
 
 private:
   const HostApi *host_ = nullptr;
+};
+// Inspector field that resolves to a typed object: ObjectRef<AudioGameObject>.
+template <class T> class ObjectRef : public GameObjectRef {
+public:
+  T Get() const { return GameObjectRef::Get().template As<T>(); }
+  bool IsValid() const { return Get().IsValid(); }
 };
 } // namespace ilmeee::script
 using GameObjectRef = ilmeee::script::GameObjectRef;

@@ -33,6 +33,11 @@
 //      float32 maxDistance; Video Player: uint32 enabled, string clip,
 //      uint32 flags (1 loop, 2 playOnStart, 4 unlit), float32 volume,
 //      int32 surface; AudioSource / Screen entities --
+//   -- v1.9 then uint64 objectId, uint32 scriptCount, per script: string
+//      source, string class, uint32 enabled, uint32 valueCount, per value:
+//      string name, uint32 type, float32 number, uint32 boolean,
+//      uint64 object --
+//   -- v1.10 each script value also carries float32 x, y, z (Vec3 type) --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -55,7 +60,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 9;
+constexpr uint16_t kSceneFormatMinor = 10;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -303,6 +308,9 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
         detail::WriteF32(f, value.number);
         detail::WriteU32(f, value.boolean ? 1 : 0);
         detail::WriteBytes(f, &value.object, sizeof(value.object));
+        // Version 1.10: Vec3 fields.
+        for (float component : value.vec3)
+          detail::WriteF32(f, component);
       }
     }
   }
@@ -468,9 +476,13 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
           ScriptValue value;
           uint32_t type = 0, boolean = 0;
           if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
-              type > static_cast<uint32_t>(ScriptValueType::Object) ||
+              type > static_cast<uint32_t>(minor >= 10 ? ScriptValueType::Vec3
+                                                       : ScriptValueType::Object) ||
               !detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
               !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
+          if (minor >= 10)
+            for (float &component : value.vec3)
+              if (!detail::ReadF32(f, component)) return false;
           value.type = static_cast<ScriptValueType>(type);
           value.boolean = boolean != 0;
           script.values.push_back(value);

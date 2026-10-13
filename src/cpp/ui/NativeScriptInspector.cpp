@@ -64,6 +64,9 @@ void MainWindow::RenderNativeScriptInspector(size_t meshIndex) {
         if (value.type == ilmeee::ScriptValueType::Float) {
           changed = DragFloat(value.name.c_str(), &value.number, 0.05f);
           finished = IsItemDeactivatedAfterEdit();
+        } else if (value.type == ilmeee::ScriptValueType::Vec3) {
+          changed = DragFloat3(value.name.c_str(), value.vec3, 0.05f);
+          finished = IsItemDeactivatedAfterEdit();
         } else if (value.type == ilmeee::ScriptValueType::Bool) {
           changed = Checkbox(value.name.c_str(), &value.boolean);
           finished = changed;

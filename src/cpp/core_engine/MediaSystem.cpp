@@ -82,26 +82,117 @@ void MediaSystem::Start(SceneRenderer &renderer) {
 
   sources_.assign(n, 0);
   for (size_t i = 0; i < n; ++i) {
-    const AudioSourceComponent &a = renderer.meshes3d[i].audio;
-    if (!a.enabled || !a.playOnStart || a.clip.empty())
-      continue;
-    std::string err;
-    auto clip = audio_.LoadClip(ResolvePath(a.clip), &err);
-    SetError(a.clip, clip ? "" : err);
-    if (clip)
-      sources_[i] = audio_.PlayClip(clip, a.loop);
+    const auto request = audioRequests_.find(i);
+    if (request == audioRequests_.end() ? renderer.meshes3d[i].audio.playOnStart
+                                        : request->second)
+      sources_[i] = StartAudio(renderer, i);
   }
+  audioRequests_.clear();
   UpdateAudioGains(renderer);
+}
+
+VoiceId MediaSystem::StartAudio(SceneRenderer &renderer, size_t mesh) {
+  const AudioSourceComponent &a = renderer.meshes3d[mesh].audio;
+  if (!a.enabled || a.clip.empty())
+    return 0;
+  std::string err;
+  auto clip = audio_.LoadClip(ResolvePath(a.clip), &err);
+  SetError(a.clip, clip ? "" : err);
+  return clip ? audio_.PlayClip(clip, a.loop) : 0;
+}
+
+bool MediaSystem::PlayAudio(SceneRenderer &renderer, size_t mesh) {
+  if (mesh >= renderer.GetMesh3DCount())
+    return false;
+  if (state_ == State::Stopped) {
+    audioRequests_[mesh] = true;
+    return true;
+  }
+  StopAudio(mesh);
+  if (sources_.size() <= mesh)
+    sources_.resize(mesh + 1, 0);
+  sources_[mesh] = StartAudio(renderer, mesh);
+  UpdateAudioGains(renderer);
+  return sources_[mesh] != 0;
+}
+
+void MediaSystem::StopAudio(size_t mesh) {
+  if (state_ == State::Stopped) {
+    audioRequests_[mesh] = false;
+    return;
+  }
+  if (mesh < sources_.size() && sources_[mesh]) {
+    audio_.StopVoice(sources_[mesh]);
+    sources_[mesh] = 0;
+  }
+}
+
+bool MediaSystem::IsAudioPlaying(const SceneRenderer &renderer,
+                                 size_t mesh) const {
+  if (mesh >= renderer.GetMesh3DCount())
+    return false;
+  if (state_ == State::Stopped) {
+    const AudioSourceComponent &a = renderer.meshes3d[mesh].audio;
+    const auto request = audioRequests_.find(mesh);
+    return a.enabled && !a.clip.empty() &&
+           (request == audioRequests_.end() ? a.playOnStart : request->second);
+  }
+  return mesh < sources_.size() && sources_[mesh] &&
+         audio_.IsVoiceActive(sources_[mesh]);
+}
+
+MediaSystem::VideoSlot &MediaSystem::VideoAt(size_t mesh) {
+  while (videos_.size() <= mesh) {
+    videos_.emplace_back();
+    videos_.back().playing = state_ != State::Stopped;
+  }
+  return videos_[mesh];
+}
+
+bool MediaSystem::PlayVideo(SceneRenderer &renderer, size_t mesh) {
+  if (mesh >= renderer.GetMesh3DCount())
+    return false;
+  VideoSlot &slot = VideoAt(mesh);
+  slot.request = 1;
+  // Before playback begins Start() rewinds every video anyway.
+  if (state_ != State::Stopped) {
+    ResetVideo(renderer, slot);
+    slot.playing = true;
+  }
+  const VideoPlayerComponent &v = renderer.meshes3d[mesh].video;
+  return v.enabled && !v.clip.empty();
+}
+
+void MediaSystem::StopVideo(size_t mesh) { VideoAt(mesh).request = -1; }
+
+bool MediaSystem::IsVideoPlaying(const SceneRenderer &renderer,
+                                 size_t mesh) const {
+  if (mesh >= renderer.GetMesh3DCount())
+    return false;
+  const VideoPlayerComponent &v = renderer.meshes3d[mesh].video;
+  const int request = mesh < videos_.size() ? videos_[mesh].request : 0;
+  if (!v.enabled || v.clip.empty() || request < 0 ||
+      (request == 0 && !v.playOnStart))
+    return false;
+  if (state_ == State::Stopped || mesh >= videos_.size())
+    return true; // starts with playback
+  const VideoSlot &slot = videos_[mesh];
+  if (slot.failed)
+    return false;
+  // No decoder yet: Play() was just called, it opens on the next update.
+  return !slot.decoder || slot.loop || !slot.decoder->Finished();
 }
 
 void MediaSystem::StopPlayback(SceneRenderer &renderer) {
   audio_.StopAll();
   preview_ = 0;
   sources_.clear();
+  audioRequests_.clear();
   audio_.SetPaused(false);
   for (VideoSlot &slot : videos_) {
     ResetVideo(renderer, slot);
     slot.playing = false;
+    slot.request = 0;
   }
 }
 
@@ -178,8 +269,10 @@ void MediaSystem::UpdateVideos(SceneRenderer &renderer, bool advance,
     auto &mesh = renderer.meshes3d[i];
     VideoSlot &slot = videos_[i];
     const VideoPlayerComponent &v = mesh.video;
-    const bool wanted = v.enabled && !v.clip.empty() &&
-                        (state_ == State::Stopped || v.playOnStart);
+    const bool wanted =
+        v.enabled && !v.clip.empty() &&
+        (state_ == State::Stopped || slot.request > 0 ||
+         (slot.request == 0 && v.playOnStart));
     if (!wanted) {
       if (!slot.clip.empty() || slot.texture)
         ResetVideo(renderer, slot);

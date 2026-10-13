@@ -45,6 +45,17 @@ public:
   void StopPreview();
   bool IsPreviewing() const;
 
+  // Script control by mesh index, for scripts in play mode. Calls made
+  // before playback begins (from a script's Start) replace Play On Start
+  // for that object. Play restarts from the beginning. IsPlaying is also
+  // true for a clip about to start (requested, not yet opened).
+  bool PlayAudio(SceneRenderer &renderer, size_t mesh);
+  void StopAudio(size_t mesh);
+  bool IsAudioPlaying(const SceneRenderer &renderer, size_t mesh) const;
+  bool PlayVideo(SceneRenderer &renderer, size_t mesh);
+  void StopVideo(size_t mesh);
+  bool IsVideoPlaying(const SceneRenderer &renderer, size_t mesh) const;
+
   // Last load/playback error for a clip ("" = fine / not tried).
   std::string ErrorFor(const std::string &clip) const;
   static bool VideoSupported() { return VideoDecoder::Available(); }
@@ -63,6 +74,8 @@ private:
     bool shown = false;
     double lastFramePts = 0.0; // newest frame handed to the screen
     bool warnedSlow = false;
+    // Script override of Play On Start: 1 play, -1 stopped, 0 none.
+    int request = 0;
   };
 
   void Start(SceneRenderer &renderer);
@@ -71,12 +84,16 @@ private:
   void UpdateVideos(SceneRenderer &renderer, bool advance, float dt);
   void UpdateAudioGains(SceneRenderer &renderer);
   void SetError(const std::string &clip, const std::string &message);
+  VoiceId StartAudio(SceneRenderer &renderer, size_t mesh);
+  VideoSlot &VideoAt(size_t mesh);
 
   std::filesystem::path root_;
   AudioEngine audio_;
   State state_ = State::Stopped;
   std::vector<VideoSlot> videos_;
   std::vector<VoiceId> sources_; // per mesh while playing, 0 = none
+  // Script Play/Stop calls before playback began, by mesh index.
+  std::unordered_map<size_t, bool> audioRequests_;
   VoiceId preview_ = 0;
   std::unordered_map<std::string, std::string> errors_;
 };

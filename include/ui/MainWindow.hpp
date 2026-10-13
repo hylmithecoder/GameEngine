@@ -2,6 +2,7 @@
 #include "../core_engine/EditorSessionHistory.hpp"
 #include "../core_engine/GameBuilder.hpp"
 #include "../core_engine/net/MessageBus.hpp"
+#include "../core_engine/DeviceMonitor.hpp"
 #include "../core_engine/net/McpServer.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
@@ -218,6 +219,14 @@ public:
   void RenderBuildMenu();
   void RenderBuildTab();
   void PushBuildLog(const std::string &line);
+  // One line of the running game's output: telemetry to the Device Monitor,
+  // the rest to the Build log and Console.
+  void HandleGameOutput(const std::string &line);
+  // Windows > Device Monitor: live FPS/frame time/RAM of the game started
+  // with Run (desktop or the phone), plus device and battery state.
+  void RenderDeviceMonitorWindow();
+  ilmeee::DeviceMonitor deviceMonitor;
+  bool showDeviceMonitor = false;
   std::thread gameBuildThread;
   std::atomic<bool> gameBuildRunning{false};
   std::atomic<bool> gameBuildFinished{false};

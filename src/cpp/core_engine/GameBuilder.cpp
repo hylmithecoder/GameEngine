@@ -266,8 +266,6 @@ public:
       }
       for (SceneEntity &e : scene.entities) {
         for (const auto &script : e.scripts) {
-          if (o_.target == BuildTarget::Android)
-            throw std::runtime_error("Native project scripts currently require the Linux desktop runtime; Android cross-compilation is not configured.");
           nativeSources_.insert(script.source);
         }
         if (e.kind == PrimitiveKind::ExternalObj ||
@@ -714,15 +712,40 @@ public:
       auto options = DefaultScriptCompileOptions(root_);
       options.cache = stage_ / ".native-script-build";
       nlohmann::json modules = nlohmann::json::array();
-      fs::create_directories(gameDir_ / "lib");
+      std::map<std::string, ScriptCompileOptions> androidOptions;
+      if (android)
+        for (const auto &abi : abis) {
+          auto cross = AndroidScriptCompileOptions(root_, o_.androidPlayerDir, abi);
+          cross.cache = options.cache / abi;
+          androidOptions.emplace(abi, std::move(cross));
+        }
+      else
+        fs::create_directories(gameDir_ / "lib");
       for (const auto &source : nativeSources_) {
-        Say("Compiling native component " + source + " ...");
-        const auto compiled = CompileNativeScript(options, source);
-        if (!compiled.ok) throw std::runtime_error("Script compile failed: " + source + "\n" + compiled.diagnostics);
-        const fs::path relative = fs::path("lib") / ("ilmeee-script-" + compiled.className + "-" +
-                                    std::to_string(NewObjectId()) + ".so");
-        CopyFile(compiled.library, gameDir_ / relative);
-        modules.push_back({{"source", source}, {"className", compiled.className}, {"library", relative.generic_string()}});
+        const auto className = fs::path(source).stem().string();
+        const auto name = "libilmeee_script_" + className + "_" +
+                          std::to_string(NewObjectId()) + ".so";
+        if (android) {
+          // Libraries belong in APK jniLibs, not writable/extracted game assets.
+          // One manifest entry resolves the same filename for the device's ABI.
+          for (const auto &[abi, cross] : androidOptions) {
+            Say("Compiling native component " + source + " (Android " + abi + ") ...");
+            const auto compiled = CompileNativeScript(cross, source);
+            if (!compiled.ok)
+              throw std::runtime_error("Android script compile failed (" + abi + "): " + source + "\n" + compiled.diagnostics);
+            CopyFile(compiled.library, stage_ / "app/src/main/jniLibs" / abi / name);
+          }
+          modules.push_back({{"source", source}, {"className", className},
+                             {"library", name}, {"androidNativeLibrary", true}});
+        } else {
+          Say("Compiling native component " + source + " ...");
+          const auto compiled = CompileNativeScript(options, source);
+          if (!compiled.ok)
+            throw std::runtime_error("Script compile failed: " + source + "\n" + compiled.diagnostics);
+          const fs::path relative = fs::path("lib") / name;
+          CopyFile(compiled.library, gameDir_ / relative);
+          modules.push_back({{"source", source}, {"className", className}, {"library", relative.generic_string()}});
+        }
       }
       std::ofstream(gameDir_ / "native-scripts.json") << modules.dump(2) << '\n';
       fs::remove_all(stage_ / ".native-script-build");

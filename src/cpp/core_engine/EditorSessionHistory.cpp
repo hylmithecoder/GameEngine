@@ -152,6 +152,8 @@ void AppendEntitySignature(std::ostringstream &out,
       out << static_cast<uint32_t>(value.type) << ';' << value.object << ';';
       AppendFloat(out, value.number);
       AppendBool(out, value.boolean);
+      for (float component : value.vec3)
+        AppendFloat(out, component);
     }
   }
   AppendString(out, entity.name);
@@ -349,6 +351,8 @@ void WriteEntity(std::ostream &out,
       WriteFloat(out, 18, "number", value.number);
       WriteBool(out, 18, "boolean", value.boolean);
       out << "                  object_id: " << value.object << '\n';
+      WriteVec3(out, 18, "vec3",
+                {value.vec3[0], value.vec3[1], value.vec3[2]});
     }
   }
   WriteString(out, 10, "path", entity.path);

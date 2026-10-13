@@ -2730,10 +2730,23 @@ void MainWindow::RenderMenuBar() {
       }
       if (MenuItem("Console", "Ctrl+2", &showConsole)) {
       }
+      MenuItem("Device Monitor", nullptr, &showDeviceMonitor);
       EndMenu();
     }
 
     // Status bar di menu kanan
+    if (deviceMonitor.Live(GetTime())) {
+      SetCursorPosX(GetWindowWidth() - 420);
+      const double fps = deviceMonitor.Samples().back().fps;
+      TextColored(fps >= 55   ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
+                  : fps >= 30 ? ImVec4(0.95f, 0.8f, 0.3f, 1.0f)
+                              : ImVec4(1.0f, 0.4f, 0.3f, 1.0f),
+                  "%s: %.1f FPS", deviceMonitor.Target().c_str(), fps);
+      if (IsItemClicked())
+        showDeviceMonitor = true;
+      if (IsItemHovered())
+        SetTooltip("Running game (click for the Device Monitor)");
+    }
     SetCursorPosX(GetWindowWidth() - 200);
     Text("FPS: %.1f", GetIO().Framerate);
 

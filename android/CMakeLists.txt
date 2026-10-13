@@ -38,6 +38,8 @@ add_library(main SHARED
     ${ENGINE_ROOT}/src/cpp/core_engine/MovementScript.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/MovementRuntime.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/UserMovementScripts.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/NativeScripts.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/NativeScriptScene.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneLoader.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneRenderer.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/AudioEngine.cpp
@@ -65,6 +67,7 @@ target_include_directories(main PRIVATE
     ${ENGINE_ROOT}/include
     ${ENGINE_ROOT}/include/vulkan
     ${ENGINE_ROOT}/vendor/ufbx
+    ${ENGINE_ROOT}/vendor/nlohmann
     ${GLM_INCLUDE_DIR}
     ${STB_INCLUDE_DIR}
 )
@@ -79,9 +82,28 @@ set_source_files_properties(
 # mp4/H.264...) through the platform's MediaCodec (libmediandk).
 target_compile_definitions(main PRIVATE ILMEEE_NO_KTX)
 target_link_libraries(main PRIVATE SDL3::SDL3-shared vulkan android log m
-    mediandk)
+    mediandk dl)
 # Android 15+ devices may use 16 KB memory pages: every LOAD segment must be
 # 16 KB aligned or the app warns / fails to load. (build-player.sh also sets
 # ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES, which covers SDL3; this keeps libmain
 # right even when configured by hand.)
 target_link_options(main PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Export the exact NDK plus a snapshot of the public script SDK. configure_file
+# tracks header changes so this snapshot and the rebuilt player stay in sync.
+if(NOT ANDROID_STL STREQUAL "c++_shared")
+  message(FATAL_ERROR "Native script modules require ANDROID_STL=c++_shared")
+endif()
+file(GLOB_RECURSE SCRIPT_PUBLIC_HEADERS CONFIGURE_DEPENDS
+    "${ENGINE_ROOT}/include/core_engine/script/*")
+list(APPEND SCRIPT_PUBLIC_HEADERS
+    "${ENGINE_ROOT}/include/core_engine/core/Component.hpp"
+    "${ENGINE_ROOT}/include/core_engine/NativeScriptTypes.hpp")
+foreach(header IN LISTS SCRIPT_PUBLIC_HEADERS)
+  file(RELATIVE_PATH relative "${ENGINE_ROOT}/include" "${header}")
+  configure_file("${header}" "${CMAKE_CURRENT_BINARY_DIR}/script-sdk/${relative}" COPYONLY)
+endforeach()
+string(REPLACE "\\" "\\\\" SCRIPT_COMPILER_JSON "${CMAKE_CXX_COMPILER}")
+string(REPLACE "\"" "\\\"" SCRIPT_COMPILER_JSON "${SCRIPT_COMPILER_JSON}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/script-toolchain.json" CONTENT
+  "{\"schema\":1,\"abi\":\"${ANDROID_ABI}\",\"api\":${ANDROID_PLATFORM_LEVEL},\"stl\":\"c++_shared\",\"compiler\":\"${SCRIPT_COMPILER_JSON}\"}\n")

@@ -173,10 +173,20 @@ void PlayerController::Update(float deltaTime) {
 still compile and can be attached. The compiler writes `compile_commands.json`
 for code-editor completion and include validation. Native desktop game builds
 compile attached scripts and ship their modules; the player needs no compiler.
-Android cross-compilation of project scripts is not configured yet, so an
-Android export with native bindings reports an error. Rebuild players after
-updating the engine's scene format. Override the desktop compiler executable
-with `ILMEEE_SCRIPT_CXX` if needed.
+Android exports compile the same component sources with the player's Android
+NDK, once per bundled ABI, and package the modules under APK `jniLibs` alongside
+one shared `libc++_shared.so`. The Android player runs the same script lifecycle
+and GameObject/Inspector-property bridge as the desktop player. No compiler is
+needed on the phone. Scripts using desktop-only APIs or libraries still need
+Android-compatible replacements; this is cross-compilation, not transpilation.
+
+Rebuild the Android player once with `scripts/android/build-player.sh` after
+upgrading. It exports `script-toolchain-<abi>.json` and a public SDK snapshot
+under `build-android/script-sdk/<abi>`. The editor refuses stale or missing
+metadata/headers and uses the recorded NDK compiler, not the host compiler.
+Keep that NDK installed. Rebuild players after updating the engine's scene
+format or script SDK. Override only the **desktop** compiler executable with
+`ILMEEE_SCRIPT_CXX` if needed; Android uses the player's toolchain.
 
 Use **Edit → Code Editor...** to select the system default, VS Code, VSCodium,
 Cursor, Antigravity, or a custom executable. This user preference is saved in

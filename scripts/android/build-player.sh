@@ -93,6 +93,12 @@ case "$ABI" in
 esac
 cp "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$TRIPLE/libc++_shared.so" "$LIBS/"
 
+# Export metadata for the editor's per-project Android cross-compilation.
+# Keep the SDK snapshot next to jniLibs, never in an APK's game assets.
+mkdir -p "$OUT/script-sdk/$ABI"
+cp -r "$BUILD/script-sdk/." "$OUT/script-sdk/$ABI/"
+cp "$BUILD/script-toolchain.json" "$OUT/script-toolchain-$ABI.json"
+
 rm -rf "$OUT/sdl-java"
 mkdir -p "$OUT/sdl-java"
 cp -r "$SDL3_DIR/android-project/app/src/main/java/org" "$OUT/sdl-java/"

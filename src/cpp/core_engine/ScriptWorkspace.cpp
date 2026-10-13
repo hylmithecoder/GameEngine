@@ -97,7 +97,11 @@ std::string ValidateScriptName(const std::string &name) {
       "typename",      "union",       "unsigned",
       "using",         "virtual",     "void",
       "volatile",      "wchar_t",     "while",
-      "xor",           "xor_eq",      "Component"};
+      "xor",           "xor_eq",      "Component",
+      // Script SDK names (core_engine/script/SceneObjects.hpp).
+      "Vec3", "Transform", "GameObject", "GameObjectRef", "ObjectRef",
+      "AudioGameObject", "VideoPlayerGameObject", "LightGameObject",
+      "CameraGameObject", "ScriptProperties"};
   if (reserved.contains(name))
     return "Choose a name that is not a C++ keyword or engine base class.";
   std::string upper = name;

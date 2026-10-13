@@ -7,6 +7,7 @@
 #include <fstream>
 #include <json.hpp>
 #include <set>
+#include <stdexcept>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -14,7 +15,9 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <fcntl.h>
+#ifndef __ANDROID__
 #include <spawn.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 extern char **environ;
@@ -35,6 +38,18 @@ std::string ReadLog(const fs::path &file) {
   result.resize(static_cast<size_t>(input.gcount()));
   return result;
 }
+std::string AndroidTriple(const std::string &abi) {
+  if (abi == "arm64-v8a") return "aarch64-linux-android";
+  if (abi == "armeabi-v7a") return "armv7a-linux-androideabi";
+  if (abi == "x86_64") return "x86_64-linux-android";
+  if (abi == "x86") return "i686-linux-android";
+  throw std::runtime_error("Unsupported Android script ABI: " + abi);
+}
+std::string ReadFile(const fs::path &file) {
+  std::ifstream input(file, std::ios::binary);
+  if (!input) throw std::runtime_error("Cannot read script SDK header: " + file.string());
+  return {std::istreambuf_iterator<char>(input), {}};
+}
 std::string ScriptRevision(const fs::path &project) {
   std::string revision;
   std::error_code ec;
@@ -52,7 +67,7 @@ std::string ScriptRevision(const fs::path &project) {
     const auto time = fs::last_write_time(it->path(), ec);
     if (!ec)
       revision +=
-          it->path().string() + std::to_string(time.time_since_epoch().count());
+          it->path().string() + std::to_string(static_cast<long long>(time.time_since_epoch().count()));
   }
   return revision;
 }
@@ -66,7 +81,21 @@ ScriptValue ReadProperty(const ScriptProperty &field) {
     value.boolean = *static_cast<bool *>(field.value);
   if (value.type == ScriptValueType::Object)
     value.object = static_cast<GameObjectRef *>(field.value)->id;
+  if (value.type == ScriptValueType::Vec3) {
+    const auto *vec = static_cast<script::Vec3 *>(field.value);
+    value.vec3[0] = vec->x;
+    value.vec3[1] = vec->y;
+    value.vec3[2] = vec->z;
+  }
   return value;
+}
+bool Finite(const ScriptValue &value) {
+  if (value.type == ScriptValueType::Float)
+    return std::isfinite(value.number);
+  if (value.type == ScriptValueType::Vec3)
+    return std::isfinite(value.vec3[0]) && std::isfinite(value.vec3[1]) &&
+           std::isfinite(value.vec3[2]);
+  return true;
 }
 void ApplyProperties(Component &component, const NativeScriptBinding &binding,
                      const script::HostApi *host) {
@@ -74,10 +103,14 @@ void ApplyProperties(Component &component, const NativeScriptBinding &binding,
   component.DescribeProperties(properties);
   for (const auto &field : properties.fields) {
     for (const auto &value : binding.values) {
-      if (value.name != field.name || value.type != field.type)
+      if (value.name != field.name || value.type != field.type ||
+          !Finite(value))
         continue;
-      if (field.type == ScriptValueType::Float && std::isfinite(value.number))
+      if (field.type == ScriptValueType::Float)
         *static_cast<float *>(field.value) = value.number;
+      if (field.type == ScriptValueType::Vec3)
+        *static_cast<script::Vec3 *>(field.value) = {
+            value.vec3[0], value.vec3[1], value.vec3[2]};
       if (field.type == ScriptValueType::Bool)
         *static_cast<bool *>(field.value) = value.boolean;
       if (field.type == ScriptValueType::Object)
@@ -113,6 +146,46 @@ ScriptCompileOptions DefaultScriptCompileOptions(const fs::path &project) {
   if (const char *compiler = std::getenv("ILMEEE_SCRIPT_CXX");
       compiler && *compiler)
     options.compiler = compiler;
+  return options;
+}
+
+ScriptCompileOptions AndroidScriptCompileOptions(const fs::path &project,
+                                                 const fs::path &player,
+                                                 const std::string &abi) {
+  AndroidTriple(abi); // Validate before constructing any paths.
+  auto options = DefaultScriptCompileOptions(project);
+  const auto metadata = player / ("script-toolchain-" + abi + ".json");
+  std::ifstream input(metadata);
+  if (!input)
+    throw std::runtime_error("Android player has no native-script toolchain for " + abi +
+                             ". Rebuild it with scripts/android/build-player.sh.");
+  const auto config = nlohmann::json::parse(input);
+  if (config.at("schema").get<int>() != 1 ||
+      config.at("abi").get<std::string>() != abi ||
+      config.at("stl").get<std::string>() != "c++_shared")
+    throw std::runtime_error("Incompatible Android script toolchain; rebuild the Android player.");
+  options.compiler = config.at("compiler").get<std::string>();
+  options.androidAbi = abi;
+  options.androidApi = config.at("api").get<int>();
+  if (options.androidApi != 26)
+    throw std::runtime_error("Android script API must match the APK minSdk (26); rebuild the player.");
+  if (!fs::is_regular_file(options.compiler))
+    throw std::runtime_error("Player's Android NDK compiler is missing: " + options.compiler +
+                             ". Restore that NDK or rebuild the Android player.");
+  const auto snapshot = player / "script-sdk" / abi;
+  const auto current = options.sdkInclude;
+  if (!fs::is_directory(current / "core_engine/script"))
+    throw std::runtime_error("Current engine script SDK not found.");
+  std::vector<fs::path> headers = {"core_engine/core/Component.hpp", "core_engine/NativeScriptTypes.hpp"};
+  for (const auto &entry : fs::recursive_directory_iterator(current / "core_engine/script"))
+    if (entry.is_regular_file()) headers.push_back(entry.path().lexically_relative(current));
+  for (const auto &header : headers)
+    if (!fs::is_regular_file(snapshot / header) ||
+        ReadFile(current / header) != ReadFile(snapshot / header))
+      throw std::runtime_error("Android player script SDK is outdated (" + header.generic_string() +
+                               "); rebuild with scripts/android/build-player.sh.");
+  options.sdkInclude = snapshot;
+  options.cache = project / ".ilmeee/native-scripts-android" / abi;
   return options;
 }
 
@@ -168,7 +241,8 @@ bool WriteScriptCompilationDatabase(const ScriptCompileOptions &options,
       merged.push_back({{"directory", fs::absolute(options.project).string()},
                         {"file", path},
                         {"arguments",
-                         {options.compiler, "-std=c++20", "-fPIC", "-I",
+                         {options.compiler, "-std=c++20", "-fPIC",
+                          "-DILMEEE_SCRIPT_BUILD", "-I",
                           options.sdkInclude.string(), "-c", path}}});
     }
     old.close();
@@ -191,7 +265,12 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
   CompiledScript result;
   result.source = source;
   result.className = fs::path(source).stem().string();
+#ifdef __ANDROID__
+  result.diagnostics = "Compile project scripts on the desktop with the Android NDK, not on the device.";
+  return result;
+#else
   try {
+    if (!options.androidAbi.empty()) AndroidTriple(options.androidAbi);
     result.diagnostics = ValidateScriptName(result.className);
     if (!result.diagnostics.empty())
       return result;
@@ -236,7 +315,7 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
       result.diagnostics = "Cannot write the script build wrapper.";
       return result;
     }
-#if defined(_WIN32) || defined(__ANDROID__)
+#if defined(_WIN32)
     result.diagnostics = "Native project script compilation currently requires "
                          "the Linux desktop toolchain.";
     return result;
@@ -248,6 +327,7 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
                                      "-Wextra",
                                      "-Werror=overloaded-virtual",
                                      "-std=c++20",
+                                     "-DILMEEE_SCRIPT_BUILD",
                                      "-shared",
                                      "-fPIC",
                                      "-fvisibility=hidden",
@@ -262,6 +342,15 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
                                      wrapper.string(),
                                      "-o",
                                      result.library.string()};
+    if (!options.androidAbi.empty()) {
+      if (options.androidApi < 26 || options.androidApi > 100)
+        throw std::runtime_error("Invalid Android script API level.");
+      args.insert(args.begin() + 1,
+                  {"--target=" + AndroidTriple(options.androidAbi) + std::to_string(options.androidApi),
+                   "-O2", "-stdlib=libc++", "-nostdlib++", "-Wl,-z,max-page-size=16384"});
+      // One shared libc++ for the player and all modules (no static STL copies).
+      args.push_back("-lc++_shared");
+    }
     std::vector<char *> argv;
     for (auto &arg : args)
       argv.push_back(arg.data());
@@ -302,6 +391,7 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
     result.diagnostics = e.what();
   }
   return result;
+#endif
 }
 
 struct NativeScripts::Module {
@@ -468,9 +558,8 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
         return false;
       }
       const auto value = ReadProperty(field);
-      if (value.type == ScriptValueType::Float &&
-          !std::isfinite(value.number)) {
-        error = "Exposed float defaults must be finite.";
+      if (!Finite(value)) {
+        error = "Exposed float and Vec3 defaults must be finite.";
         return false;
       }
       module->defaults.push_back(value);

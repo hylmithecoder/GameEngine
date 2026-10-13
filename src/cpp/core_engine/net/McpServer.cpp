@@ -105,7 +105,37 @@ json ToolList() {
        {{"name", "save_scene"},
         {"description",
          "Save the current stopped 3D scene to the active project."},
-        {"inputSchema", ObjectSchema()}}});
+        {"inputSchema", ObjectSchema()}},
+       {{"name", "get_device_stats"},
+        {"description",
+         "Live performance of the game started with Build > Run (desktop, "
+         "or an Android phone over adb): device/GPU info, battery and "
+         "thermal state, latest frame stats, 10 s / 60 s summaries and the "
+         "recent per-0.5 s samples."},
+        {"inputSchema",
+         ObjectSchema({{"samples",
+                        {{"type", "integer"},
+                         {"minimum", 0},
+                         {"maximum", 600},
+                         {"description",
+                          "History samples to return (default 20)"}}}})}},
+       {{"name", "get_game_log"},
+        {"description",
+         "Recent output of the running game (Android: its whole logcat, "
+         "Info and above, plus crash reports), newest last."},
+        {"inputSchema",
+         ObjectSchema({{"lines",
+                        {{"type", "integer"},
+                         {"minimum", 1},
+                         {"maximum", 2000},
+                         {"description", "Lines to return (default 200)"}}},
+                       {"contains",
+                        {{"type", "string"},
+                         {"description", "Only lines containing this text"}}},
+                       {"errorsOnly",
+                        {{"type", "boolean"},
+                         {"description",
+                          "Only logcat Error/Fatal lines and crash output"}}}})}}});
 }
 
 } // namespace

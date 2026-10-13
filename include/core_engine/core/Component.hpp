@@ -1,6 +1,6 @@
 #pragma once
 #include "../NativeScriptTypes.hpp"
-#include "../script/GameObject.hpp"
+#include "../script/SceneObjects.hpp"
 
 struct ScriptProperty {
   std::string name;
@@ -19,6 +19,9 @@ public:
   void Field(const char *name, GameObjectRef &value) {
     fields.push_back({name, ilmeee::ScriptValueType::Object, &value});
   }
+  void Field(const char *name, ilmeee::script::Vec3 &value) {
+    fields.push_back({name, ilmeee::ScriptValueType::Vec3, &value});
+  }
 };
 
 class Component {
@@ -34,6 +37,13 @@ public:
   void Log(const std::string &message) const {
     if (host_ && host_->log)
       host_->log(host_->context, message.c_str());
+  }
+  void LogWarning(const std::string &message) const {
+    Log("[WARNING] " + message);
+  }
+  // Also brings the Console to the front in the editor.
+  void LogError(const std::string &message) const {
+    Log("[ERROR] " + message);
   }
   virtual ~Component() = default;
   virtual void Awake() {}

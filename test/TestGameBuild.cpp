@@ -400,6 +400,66 @@ int main() {
     IlmeeeScene reloaded;
     CHECK(LoadScene((scriptOptions.outputDir / "scenes/main.ilmeeescene").string(), reloaded));
     CHECK(reloaded.entities[0].objectId == 42 && reloaded.entities[0].scripts.size() == 1);
+    // Android exports cannot pretend an old player supports project modules.
+    const auto androidPlayer = tmp / "android-script-player";
+    Write(androidPlayer / "jniLibs/arm64-v8a/libmain.so", "elf");
+    Write(androidPlayer / "jniLibs/arm64-v8a/libSDL3.so", "elf");
+    Write(androidPlayer / "sdl-java/org/libsdl/app/SDLActivity.java", "class");
+    const auto androidTemplate = tmp / "android-script-template";
+    Write(androidTemplate / "app/build.gradle", "@ABIS@");
+    Write(androidTemplate / "app/src/main/res/values/strings.xml", "@APP_NAME@");
+    auto androidOptions = scriptOptions;
+    androidOptions.target = BuildTarget::Android;
+    androidOptions.outputDir = tmp / "android-script-game";
+    androidOptions.androidPlayerDir = androidPlayer;
+    androidOptions.androidTemplateDir = androidTemplate;
+    androidOptions.gradleCommand.clear();
+    auto androidBuilt = BuildGame(androidOptions, logger);
+    CHECK(!androidBuilt.ok && androidBuilt.error.find("build-player.sh") != std::string::npos);
+    CHECK(!fs::exists(tmp / "android-script-game.building"));
+    if (const char *player = std::getenv("ILMEEE_TEST_ANDROID_PLAYER")) {
+      androidOptions.androidPlayerDir = player;
+      androidBuilt = BuildGame(androidOptions, logger);
+      if (!androidBuilt.ok) std::fprintf(stderr, "%s\n", androidBuilt.error.c_str());
+      CHECK(androidBuilt.ok);
+      const auto game = androidOptions.outputDir / "app/src/main/assets/game";
+      std::ifstream androidManifest(game / "native-scripts.json");
+      const auto androidModules = nlohmann::json::parse(androidManifest);
+      CHECK(androidModules.size() == 1);
+      CHECK(androidModules[0].at("androidNativeLibrary").get<bool>());
+      const auto name = androidModules[0].at("library").get<std::string>();
+      CHECK(fs::path(name).filename() == name && name.starts_with("libilmeee_script_"));
+      CHECK(!fs::exists(game / name));
+      const auto lib = androidOptions.outputDir / "app/src/main/jniLibs/arm64-v8a" / name;
+      CHECK(fs::exists(lib));
+      unsigned char elf[20]{};
+      std::ifstream(lib, std::ios::binary).read(reinterpret_cast<char *>(elf), sizeof elf);
+      CHECK(elf[4] == 2 && elf[18] == 183 && elf[19] == 0);
+      CHECK(fs::exists(androidOptions.outputDir / "app/src/main/jniLibs/arm64-v8a/libc++_shared.so"));
+      std::ifstream index(game / "ilmeee_files.txt");
+      const std::string indexText{std::istreambuf_iterator<char>(index), {}};
+      CHECK(indexText.find("native-scripts.json") != std::string::npos);
+      CHECK(indexText.find(name) == std::string::npos);
+      IlmeeeScene androidScene;
+      CHECK(LoadScene((game / "scenes/main.ilmeeescene").string(), androidScene));
+      CHECK(androidScene.entities[0].scripts[0].source == "assets/scripts/ShipComponent.cpp");
+      // A stale SDK is rejected before compilation and cannot replace the APK.
+      fs::copy_file(fs::path(player) / "script-toolchain-arm64-v8a.json",
+                    androidPlayer / "script-toolchain-arm64-v8a.json");
+      fs::create_directories(androidPlayer / "script-sdk");
+      fs::copy(fs::path(player) / "script-sdk/arm64-v8a",
+               androidPlayer / "script-sdk/arm64-v8a", fs::copy_options::recursive);
+      Write(androidPlayer / "script-sdk/arm64-v8a/core_engine/core/Component.hpp",
+            "outdated player SDK");
+      auto stalePlayer = androidOptions;
+      stalePlayer.androidPlayerDir = androidPlayer;
+      const auto stale = BuildGame(stalePlayer, logger);
+      CHECK(!stale.ok && stale.error.find("outdated") != std::string::npos);
+      CHECK(fs::exists(lib));
+      Write(scripted / "assets/scripts/ShipComponent.cpp", "this is invalid C++");
+      CHECK(!BuildGame(androidOptions, logger).ok);
+      CHECK(fs::exists(lib)); // a failed NDK compile preserves the previous build
+    }
     // Failed recompiles preserve the previous runnable output.
     Write(scripted / "assets/scripts/ShipComponent.cpp", "this is invalid C++");
     CHECK(!BuildGame(scriptOptions, logger).ok);

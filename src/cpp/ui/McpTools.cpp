@@ -1,4 +1,5 @@
 #include "../../../include/ui/MainWindow.hpp"
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -58,6 +59,50 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
         {"sceneLoaded", sceneRenderer != nullptr},
         {"playing", !builder.IsStopped()},
         {"objectCount", sceneRenderer ? sceneRenderer->GetMesh3DCount() : 0}};
+  }
+  if (name == "get_device_stats") {
+    size_t samples = 20;
+    if (args.contains("samples") && !Index(args, "samples", 601, samples))
+      return Error("samples must be 0..600");
+    return deviceMonitor.ToJson(ImGui::GetTime(), samples);
+  }
+  if (name == "get_game_log") {
+    size_t lines = 200;
+    if (args.contains("lines") &&
+        (!Index(args, "lines", 2001, lines) || lines == 0))
+      return Error("lines must be 1..2000");
+    std::string contains;
+    if (auto it = args.find("contains"); it != args.end()) {
+      if (!it->is_string())
+        return Error("contains must be a string");
+      contains = it->get<std::string>();
+    }
+    bool errorsOnly = false;
+    if (auto it = args.find("errorsOnly"); it != args.end()) {
+      if (!it->is_boolean())
+        return Error("errorsOnly must be a boolean");
+      errorsOnly = it->get<bool>();
+    }
+    const auto &log = deviceMonitor.Log();
+    json out = json::array();
+    for (auto it = log.rbegin(); it != log.rend() && out.size() < lines;
+         ++it) {
+      const std::string &line = *it;
+      if (!contains.empty() && line.find(contains) == std::string::npos)
+        continue;
+      if (errorsOnly &&
+          !(line.size() > 2 && line[1] == '/' &&
+            (line[0] == 'E' || line[0] == 'F')) &&
+          line.find("FATAL") == std::string::npos &&
+          line.find("Fatal signal") == std::string::npos)
+        continue;
+      out.push_back(line);
+    }
+    std::reverse(out.begin(), out.end());
+    return {{"target", deviceMonitor.Target()},
+            {"running", deviceMonitor.Running()},
+            {"totalBuffered", log.size()},
+            {"lines", std::move(out)}};
   }
   if (!sceneRenderer)
     return Error("Scene is not ready");

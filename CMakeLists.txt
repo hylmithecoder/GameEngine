@@ -212,6 +212,8 @@ target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
 add_executable(TestTransformMath test/TestTransformMath.cpp)
 target_link_libraries(TestTransformMath PRIVATE glm::glm)
 
+add_executable(TestDeviceMonitor test/TestDeviceMonitor.cpp)
+
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
 

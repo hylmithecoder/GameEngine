@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <thread>
+#include <tuple>
 
 namespace fs = std::filesystem;
 static int checks = 0, failures = 0;
@@ -23,6 +24,8 @@ static void Write(const fs::path &path, const std::string &text) {
 struct World {
   std::unordered_map<uint64_t, ilmeee::script::Transform> objects;
   std::vector<std::string> log;
+  float volume = 1;
+  int played = 0;
 };
 int main(int argc, char **argv) {
   const auto project =
@@ -52,6 +55,48 @@ void Probe::Update(float dt) {
   ilmeee::NativeScripts runtime;
   CHECK(runtime.Load(compiled, error));
   CHECK(runtime.Ready(source));
+  // Target validation must never silently fall back to a host .so.
+  auto unsupported = options;
+  unsupported.androidAbi = "not-an-android-abi";
+  const auto rejectedTarget = ilmeee::CompileNativeScript(unsupported, source);
+  CHECK(!rejectedTarget.ok);
+  CHECK(rejectedTarget.diagnostics.find("Unsupported Android") != std::string::npos);
+  bool missingToolchain = false;
+  try {
+    ilmeee::AndroidScriptCompileOptions(project, project / "no-player", "arm64-v8a");
+  } catch (const std::exception &e) {
+    missingToolchain = std::string(e.what()).find("build-player.sh") != std::string::npos;
+  }
+  CHECK(missingToolchain);
+  // Optional NDK integration: use metadata from the real rebuilt player.
+  if (const char *player = std::getenv("ILMEEE_TEST_ANDROID_PLAYER")) {
+    const auto android = ilmeee::AndroidScriptCompileOptions(project, player, "arm64-v8a");
+    CHECK(android.androidAbi == "arm64-v8a" && android.androidApi == 26);
+    CHECK(android.sdkInclude != options.sdkInclude);
+    const auto module = ilmeee::CompileNativeScript(android, source);
+    if (!module.ok) std::fprintf(stderr, "%s\n", module.diagnostics.c_str());
+    CHECK(module.ok);
+    unsigned char elf[20]{};
+    std::ifstream(module.library, std::ios::binary).read(reinterpret_cast<char *>(elf), sizeof elf);
+    CHECK(elf[0] == 0x7f && elf[1] == 'E' && elf[2] == 'L' && elf[3] == 'F');
+    CHECK(elf[4] == 2 && elf[18] == 183 && elf[19] == 0); // ELF64 / AArch64
+    CHECK(!runtime.Load(module, error)); // an ARM module cannot be loaded by the host
+    for (const auto &[abi, machine, bits] :
+         {std::tuple{"armeabi-v7a", 40, 1}, std::tuple{"x86_64", 62, 2},
+          std::tuple{"x86", 3, 1}}) {
+      auto other = android;
+      other.androidAbi = abi;
+      other.cache /= abi;
+      const auto built = ilmeee::CompileNativeScript(other, source);
+      if (!built.ok) std::fprintf(stderr, "%s\n", built.diagnostics.c_str());
+      CHECK(built.ok);
+      std::ifstream(built.library, std::ios::binary).read(reinterpret_cast<char *>(elf), sizeof elf);
+      CHECK(elf[4] == bits && elf[18] == machine && elf[19] == 0);
+    }
+    auto badApi = android;
+    badApi.androidApi = 0;
+    CHECK(!ilmeee::CompileNativeScript(badApi, source).ok);
+  }
   // Scripts made by the earlier template have no DescribeProperties override.
   Write(project / "assets/scripts/Legacy.hpp",
         "#pragma once\n#include <core_engine/core/Component.hpp>\nclass Legacy "
@@ -128,6 +173,69 @@ void Probe::Update(float dt) {
   world.objects[43] = {};
   runtime.Update(0.1f);
   CHECK(world.objects[43].position.x == 0);
+  runtime.Stop();
+  // Vec3 fields and typed objects.
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Typed", error));
+  Write(project / "assets/scripts/Typed.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Typed : public Component {
+public:
+  Vec3 offset{0, 1, 0};
+  ObjectRef<AudioGameObject> music;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Offset", offset);
+    p.Field("Music", music);
+  }
+  void Start() override {
+    gameObject.SetPosition(offset);
+    if (music.IsValid() && music.Get().SetVolume(0.5f)) music.Get().Play();
+    if (!gameObject.As<LightGameObject>().IsValid()) LogWarning("not a light");
+  }
+};
+)cpp");
+  Write(project / "assets/scripts/Typed.cpp", "#include \"Typed.hpp\"\n");
+  const auto typed =
+      ilmeee::CompileNativeScript(options, "assets/scripts/Typed.cpp");
+  if (!typed.ok)
+    std::fprintf(stderr, "%s\n", typed.diagnostics.c_str());
+  CHECK(typed.ok);
+  CHECK(runtime.Load(typed, error));
+  ilmeee::NativeScriptBinding typedBinding{"assets/scripts/Typed.cpp", "Typed",
+                                           true, {}};
+  typedBinding.values = runtime.Properties(typedBinding);
+  CHECK(typedBinding.values.size() == 2 &&
+        typedBinding.values[0].type == ilmeee::ScriptValueType::Vec3 &&
+        typedBinding.values[0].vec3[1] == 1);
+  typedBinding.values[0].vec3[0] = 4;
+  typedBinding.values[0].vec3[2] = 6;
+  typedBinding.values[1].object = 84;
+  world.objects[42] = {};
+  world.objects[84] = {};
+  world.log.clear();
+  host.kinds = [](void *, uint64_t id) -> uint32_t {
+    return id == 84 ? static_cast<uint32_t>(ilmeee::script::ObjectKind::Audio)
+                    : 0;
+  };
+  host.setFloat = [](void *ctx, uint64_t id, ilmeee::script::Prop prop,
+                     float value) {
+    if (id != 84 || prop != ilmeee::script::Prop::AudioVolume)
+      return false;
+    static_cast<World *>(ctx)->volume = value;
+    return true;
+  };
+  host.command = [](void *ctx, uint64_t id, ilmeee::script::Command command) {
+    if (id != 84 || command != ilmeee::script::Command::AudioPlay)
+      return false;
+    ++static_cast<World *>(ctx)->played;
+    return true;
+  };
+  std::vector<ilmeee::NativeScriptBinding> typedBindings{typedBinding};
+  runtime.Start(host, {{42, &typedBindings}});
+  const auto placed = world.objects[42].position;
+  CHECK(placed.x == 4 && placed.y == 1 && placed.z == 6);
+  CHECK(world.volume == 0.5f && world.played == 1);
+  CHECK(world.log.size() == 1 && world.log.front() == "[WARNING] not a light");
   runtime.Stop();
   CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "InvalidClass",
                                   error));

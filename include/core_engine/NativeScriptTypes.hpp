@@ -13,13 +13,14 @@ inline uint64_t NewObjectId() {
       1u};
   return next.fetch_add(1);
 }
-enum class ScriptValueType : uint32_t { Float, Bool, Object };
+enum class ScriptValueType : uint32_t { Float, Bool, Object, Vec3 };
 struct ScriptValue {
   std::string name;
   ScriptValueType type = ScriptValueType::Float;
   float number = 0;
   bool boolean = false;
   uint64_t object = 0;
+  float vec3[3] = {0, 0, 0};
 };
 struct NativeScriptBinding {
   std::string source; // project-relative .cpp
