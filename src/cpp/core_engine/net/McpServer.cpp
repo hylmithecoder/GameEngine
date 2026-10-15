@@ -69,6 +69,10 @@ json ToolList() {
                      {"items", {{"type", "number"}}},
                      {"minItems", 3},
                      {"maxItems", 3}};
+  const json vec2 = {{"type", "array"},
+                     {"items", {{"type", "number"}}},
+                     {"minItems", 2},
+                     {"maxItems", 2}};
   return json::array(
       {{{"name", "get_project_info"},
         {"description", "Get the open editor project and scene status."},
@@ -106,6 +110,69 @@ json ToolList() {
         {"description",
          "Save the current stopped 3D scene to the active project."},
         {"inputSchema", ObjectSchema()}},
+       {{"name", "list_ui_elements"},
+        {"description", "List the game Canvas elements (Text, Image, Button, "
+                        "Joystick) in draw order; later ones are on top. "
+                        "Elements are addressed by their unique name."},
+        {"inputSchema", ObjectSchema()}},
+       {{"name", "set_ui_element"},
+        {"description", "Edit a Canvas element in the stopped editor. "
+                        "position/size are reference pixels [x, y]; image is "
+                        "a project-relative path (Image picture or Button "
+                        "sprite, \"\" clears); action \"Interact\" makes a "
+                        "button talk to the nearest Dialog."},
+        {"inputSchema",
+         ObjectSchema({{"name", {{"type", "string"}}},
+                       {"text", {{"type", "string"}}},
+                       {"action", {{"type", "string"}}},
+                       {"image", {{"type", "string"}}},
+                       {"visible", {{"type", "boolean"}}},
+                       {"position", vec2},
+                       {"size", vec2},
+                       {"fontSize", {{"type", "number"}, {"minimum", 1}}}},
+                      {"name"})}},
+       {{"name", "get_dialog"},
+        {"description", "Get the Dialog component of a scene object: "
+                        "trigger, UI links (element names), lines and parsed "
+                        "line count; while playing also whether it is open."},
+        {"inputSchema",
+         ObjectSchema({{"index", {{"type", "integer"}, {"minimum", 0}}}},
+                      {"index"})}},
+       {{"name", "set_dialog"},
+        {"description",
+         "Add or edit the Dialog component of a scene object (stopped "
+         "editor; records Undo). lines: one per line, \"Name: text\", "
+         "\": narration\", \"# comment\". box/text/speaker/prompt take a "
+         "Canvas element name (\"\" clears). createUi adds missing Box/Text/"
+         "Name elements and a Talk button. enabled=false removes it."},
+        {"inputSchema",
+         ObjectSchema(
+             {{"index", {{"type", "integer"}, {"minimum", 0}}},
+              {"enabled", {{"type", "boolean"}}},
+              {"trigger",
+               {{"type", "string"},
+                {"enum", {"interact", "on_start", "script_only"}}}},
+              {"range", {{"type", "number"}, {"minimum", 0}}},
+              {"lines", {{"type", "string"}}},
+              {"file", {{"type", "string"}}},
+              {"typingSpeed",
+               {{"type", "number"},
+                {"minimum", 0},
+                {"description", "Characters per second, 0 = instant"}}},
+              {"repeatable", {{"type", "boolean"}}},
+              {"freezePlayer", {{"type", "boolean"}}},
+              {"box", {{"type", "string"}}},
+              {"text", {{"type", "string"}}},
+              {"speaker", {{"type", "string"}}},
+              {"prompt", {{"type", "string"}}},
+              {"createUi", {{"type", "boolean"}}}},
+             {"index"})}},
+       {{"name", "start_dialog"},
+        {"description", "While the editor is playing, open the Dialog of a "
+                        "scene object (for testing)."},
+        {"inputSchema",
+         ObjectSchema({{"index", {{"type", "integer"}, {"minimum", 0}}}},
+                      {"index"})}},
        {{"name", "get_device_stats"},
         {"description",
          "Live performance of the game started with Build > Run (desktop, "

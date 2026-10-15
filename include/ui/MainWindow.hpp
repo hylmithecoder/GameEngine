@@ -6,6 +6,7 @@
 #include "../core_engine/net/McpServer.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
+#include "../core_engine/DialogSystem.hpp"
 #include "../core_engine/MediaSystem.hpp"
 #include "../core_engine/MovementScript.hpp"
 #include "../core_engine/NativeScriptScene.hpp"
@@ -24,6 +25,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 #include <list>
+#include <memory>
 #include <sys/types.h>
 #include <vector>
 #define IMGUI_HAS_DOCK
@@ -33,8 +35,16 @@ using namespace Debug;
 
 #include "../vulkan/VulkanBase.hpp"
 
+// Asset reference as stored in the scene: relative to the project when the
+// file is inside it, absolute otherwise (HandlerChildWindow.cpp).
+std::string ProjectMediaPath(const std::string &project,
+                             const std::string &source);
+
+class AnimationEditor;
 class MainWindow : public vkhandler::VulkanBase {
+  friend class AnimationEditor;
 private:
+  std::unique_ptr<AnimationEditor> animationEditor;
   bool showSecondary;
 
   bool showConfirmDialog(const char *message, const char *title);
@@ -62,6 +72,8 @@ private:
   std::string gameUiProject;
   std::string loadedSceneProject;
   bool hasGameUiCanvas = false;
+  ilmeee::GameUI gameUiBeforePlay; // restored on Stop
+  ilmeee::DialogSystem dialogSystem;
   // -1 = world object/none, -2 = Canvas, >=0 = UI child index.
   int selectedUiElement = -1;
   bool focusGameTab = false;
@@ -73,6 +85,11 @@ private:
   std::string nativeScriptsProject;
   void RenderNativeScriptInspector(size_t meshIndex);
   void RenderNativeScriptAddMenu(size_t meshIndex);
+  // Combo listing the Canvas elements; true when `objectId` changed.
+  bool UiElementCombo(const char *label, uint64_t &objectId);
+  void RenderDialogInspector(size_t meshIndex);
+  // Adds the Box / Text / Name / Talk-button elements `d` is missing.
+  void CreateDialogUi(ilmeee::DialogComponent &d);
   // Audio Source / Video Player playback (Play mode + editor posters).
   ilmeee::MediaSystem media;
   bool gameWasStopped = true;
@@ -152,6 +169,9 @@ public:
   bool focusOutputTab = false;
   bool showHierarchy = true;
   bool showMainView = true;
+  bool showAnimation = true;
+  void RenderAnimationWindow();
+  void OpenAnimationEditor(size_t meshIndex);
   string currentFilter = "";
   vector<string> logFromIlmeeeEditor = {
       "Welcome to Ilmeee Editor", "This is a log message",

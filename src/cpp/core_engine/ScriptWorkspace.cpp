@@ -101,7 +101,8 @@ std::string ValidateScriptName(const std::string &name) {
       // Script SDK names (core_engine/script/SceneObjects.hpp).
       "Vec3", "Transform", "GameObject", "GameObjectRef", "ObjectRef",
       "AudioGameObject", "VideoPlayerGameObject", "LightGameObject",
-      "CameraGameObject", "ScriptProperties"};
+      "CameraGameObject", "UiGameObject", "DialogGameObject",
+      "ScriptProperties"};
   if (reserved.contains(name))
     return "Choose a name that is not a C++ keyword or engine base class.";
   std::string upper = name;

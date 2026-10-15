@@ -38,18 +38,27 @@
 //      string name, uint32 type, float32 number, uint32 boolean,
 //      uint64 object --
 //   -- v1.10 each script value also carries float32 x, y, z (Vec3 type) --
+//   -- v1.11 then uint32 uiVisible; Dialog: uint32 enabled, uint64 box,
+//      uint64 text, uint64 speaker, uint64 prompt (UI objectIds), string
+//      lines, string file, uint32 trigger, float32 range,
+//      float32 charsPerSecond, uint32 flags (1 repeatable, 2 freezePlayer) --
+//   -- v1.12 then animation: uint32 enabled, string clip, float32 speed,
+//      uint32 loop --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
 // keeping them out of text editors signals to authors that the scene
 // graph is authored through the editor — not by hand.
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include "DialogComponent.hpp"
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include "NativeScriptTypes.hpp"
+#include "SkeletalAnimation.hpp"
 #include <glm/glm.hpp>
 #include <string>
 #include <unordered_set>
@@ -60,7 +69,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 10;
+constexpr uint16_t kSceneFormatMinor = 12;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -133,6 +142,10 @@ struct SceneEntity {
   // v1.8 media components (any entity may carry them).
   AudioSourceComponent audio;
   VideoPlayerComponent video;
+  // v1.11 Dialog component (any entity may carry it).
+  DialogComponent dialog;
+  // v1.12: editable animation clip asset, shared by editor and players.
+  AnimationComponent animation;
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
   // child elements use them as their displayed size.
@@ -145,6 +158,7 @@ struct SceneEntity {
   std::string uiAction;
   glm::vec4 uiColor{1.0f};
   glm::vec4 uiBackground{0.14f, 0.20f, 0.31f, 0.92f};
+  bool uiVisible = true; // v1.11
 };
 
 struct IlmeeeScene {
@@ -165,6 +179,7 @@ inline bool ReadBytes(std::ifstream &f, void *data, size_t n) {
 
 inline void WriteU16(std::ofstream &f, uint16_t v) { WriteBytes(f, &v, 2); }
 inline void WriteU32(std::ofstream &f, uint32_t v) { WriteBytes(f, &v, 4); }
+inline void WriteU64(std::ofstream &f, uint64_t v) { WriteBytes(f, &v, 8); }
 inline void WriteF32(std::ofstream &f, float v) { WriteBytes(f, &v, 4); }
 inline void WriteVec3(std::ofstream &f, const glm::vec3 &v) {
   WriteF32(f, v.x);
@@ -186,6 +201,9 @@ inline bool ReadU16(std::ifstream &f, uint16_t &v) {
 }
 inline bool ReadU32(std::ifstream &f, uint32_t &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 4);
+}
+inline bool ReadU64(std::ifstream &f, uint64_t &v) {
+  return (bool)f.read(reinterpret_cast<char *>(&v), 8);
 }
 inline bool ReadF32(std::ifstream &f, float &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 4);
@@ -313,6 +331,24 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
           detail::WriteF32(f, component);
       }
     }
+    // Version 1.11: UI visibility and the Dialog component.
+    detail::WriteU32(f, e.uiVisible ? 1u : 0u);
+    detail::WriteU32(f, e.dialog.enabled ? 1u : 0u);
+    detail::WriteU64(f, e.dialog.box);
+    detail::WriteU64(f, e.dialog.text);
+    detail::WriteU64(f, e.dialog.speaker);
+    detail::WriteU64(f, e.dialog.prompt);
+    detail::WriteString(f, e.dialog.lines);
+    detail::WriteString(f, e.dialog.file);
+    detail::WriteU32(f, static_cast<uint32_t>(e.dialog.trigger));
+    detail::WriteF32(f, e.dialog.range);
+    detail::WriteF32(f, e.dialog.charsPerSecond);
+    detail::WriteU32(f, (e.dialog.repeatable ? 1u : 0u) |
+                            (e.dialog.freezePlayer ? 2u : 0u));
+    detail::WriteU32(f, e.animation.enabled ? 1u : 0u);
+    detail::WriteString(f, e.animation.clip);
+    detail::WriteF32(f, e.animation.speed);
+    detail::WriteU32(f, e.animation.loop ? 1u : 0u);
   }
 
   // Version 1.4: environment
@@ -489,6 +525,37 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
         }
         e.scripts.push_back(std::move(script));
       }
+    }
+    if (minor >= 11) {
+      uint32_t visible = 0, enabled = 0, trigger = 0, flags = 0;
+      DialogComponent &d = e.dialog;
+      if (!detail::ReadU32(f, visible) || !detail::ReadU32(f, enabled) ||
+          !detail::ReadU64(f, d.box) || !detail::ReadU64(f, d.text) ||
+          !detail::ReadU64(f, d.speaker) || !detail::ReadU64(f, d.prompt) ||
+          !detail::ReadString(f, d.lines) || !detail::ReadString(f, d.file) ||
+          !detail::ReadU32(f, trigger) || !detail::ReadF32(f, d.range) ||
+          !detail::ReadF32(f, d.charsPerSecond) || !detail::ReadU32(f, flags))
+        return false;
+      e.uiVisible = visible != 0;
+      d.enabled = enabled != 0;
+      d.trigger = trigger <= static_cast<uint32_t>(DialogTrigger::ScriptOnly)
+                      ? static_cast<DialogTrigger>(trigger)
+                      : DialogTrigger::Interact;
+      if (!std::isfinite(d.range) || d.range < 0) d.range = DialogComponent().range;
+      if (!std::isfinite(d.charsPerSecond) || d.charsPerSecond < 0)
+        d.charsPerSecond = DialogComponent().charsPerSecond;
+      d.repeatable = (flags & 1u) != 0;
+      d.freezePlayer = (flags & 2u) != 0;
+    }
+    if (minor >= 12) {
+      uint32_t enabled = 0, loop = 0;
+      if (!detail::ReadU32(f, enabled) || !detail::ReadString(f, e.animation.clip) ||
+          !detail::ReadF32(f, e.animation.speed) || !detail::ReadU32(f, loop))
+        return false;
+      e.animation.enabled = enabled != 0;
+      e.animation.loop = loop != 0;
+      if (!std::isfinite(e.animation.speed) || e.animation.speed < 0 ||
+          e.animation.speed > 100) e.animation.speed = 1;
     }
     out.entities.push_back(std::move(e));
   }

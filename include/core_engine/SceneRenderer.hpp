@@ -1,9 +1,11 @@
 #pragma once
+#include "DialogComponent.hpp"
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include "NativeScriptTypes.hpp"
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
+#include "SkeletalAnimation.hpp"
 #include "TextureManager.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -249,6 +251,15 @@ public:
     ilmeee::MovementRig movementRig;
     // PMX bone hierarchy (empty for OBJ meshes / primitives)
     std::vector<pmx::PMXBone> bones;
+    std::vector<pmx::PMXVertex> skinVertices;
+    std::vector<ilmeee::SkeletonBone> skeleton;
+    std::vector<glm::vec3> posedBones;
+    ilmeee::AnimationComponent animation;
+    ilmeee::AnimationClip animationClip;
+    std::string loadedAnimationPath;
+    std::string animationError;
+    float animationTime = 0;
+    bool poseActive = false;
 
     // Per-material surface ranges. Always at least one entry after a
     // successful load; DrawMeshes issues one draw per submesh so each can
@@ -292,6 +303,8 @@ public:
     // Audio Source / Video Player components (played by ilmeee::MediaSystem).
     ilmeee::AudioSourceComponent audio;
     ilmeee::VideoPlayerComponent video;
+    // Dialog component (run by ilmeee::DialogSystem).
+    ilmeee::DialogComponent dialog;
     // Pure "Audio Source" object: its mesh is only an editor marker (hidden
     // in the game, like light/camera markers).
     bool isAudioEmitter = false;
@@ -344,6 +357,7 @@ private:
 
   // Texture manager
   TextureManager textureManager;
+  std::string animationProjectRoot;
 
   struct DynamicTexture {
     int width = 0, height = 0;
@@ -485,6 +499,12 @@ public:
   uint32_t GetMesh3DVertexCount(size_t i) const;
   uint32_t GetMesh3DTriangleCount(size_t i) const;
   uint32_t GetMesh3DBoneCount(size_t i) const;
+  bool SetMesh3DAnimationPose(size_t i, const ilmeee::AnimationClip &clip,
+                             float time);
+  void ResetMesh3DAnimationPose(size_t i);
+  void UpdateAnimations(float deltaSeconds);
+  void ResetAnimations();
+  void SetAnimationProjectRoot(const std::string &root) { animationProjectRoot = root; }
   // ---- hierarchy ----------------------------------------------------------
   int GetMesh3DParent(size_t i) const;
   // True if `i` is `ancestor` or sits anywhere below it.
@@ -697,6 +717,8 @@ public:
 
     ilmeee::AudioSourceComponent audio;
     ilmeee::VideoPlayerComponent video;
+    ilmeee::DialogComponent dialog;
+    ilmeee::AnimationComponent animation;
     bool isAudioEmitter = false;
 
     std::string debugSrcFile;

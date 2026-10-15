@@ -47,7 +47,10 @@ void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
   // Only rebuild if no persisted layout exists for this dockspace,
   // unless the user explicitly asked for a reset.
   ImGuiDockNode *existing = ImGui::DockBuilderGetNode(dockspaceId);
-  if (existing && !s_LayoutResetRequested) {
+  // DockSpace() has just created an empty root on a first launch. Only a
+  // populated/split node represents an existing user layout.
+  if (existing && (existing->ChildNodes[0] || existing->ChildNodes[1] ||
+                   existing->Windows.Size > 0) && !s_LayoutResetRequested) {
     return;
   }
 
@@ -74,6 +77,7 @@ void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
   ImGui::DockBuilderDockWindow("Inspector", dockRight);
   ImGui::DockBuilderDockWindow("Scene", dockMain);
   ImGui::DockBuilderDockWindow("Game", dockMain);
+  ImGui::DockBuilderDockWindow("Animation", dockMain);
   ImGui::DockBuilderDockWindow("Main View", dockMain);
   ImGui::DockBuilderDockWindow("Explorer", dockBottom);
   ImGui::DockBuilderDockWindow("Console", dockBottom);

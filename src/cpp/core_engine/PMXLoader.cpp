@@ -1,4 +1,4 @@
-#include "../../include/core_engine/PMXLoader.hpp"
+#include "core_engine/PMXLoader.hpp"
 #include "core_engine/Debugger.hpp"
 #include <cstring>
 #include <fstream>
@@ -129,10 +129,30 @@ struct Reader {
     return v;
   }
 
-  glm::vec2 readVec2() { return glm::vec2(readF32(), readF32()); }
-  glm::vec3 readVec3() { return glm::vec3(readF32(), readF32(), readF32()); }
+  // Stream reads must be sequenced: function argument evaluation order is
+  // unspecified, so glm::vecN(readF32(), ...) reverses components under GCC
+  // while Clang reads them in file order. This affects UVs, positions,
+  // material colours and every bone/IK vector, not just texture loading.
+  glm::vec2 readVec2() {
+    glm::vec2 v;
+    v.x = readF32();
+    v.y = readF32();
+    return v;
+  }
+  glm::vec3 readVec3() {
+    glm::vec3 v;
+    v.x = readF32();
+    v.y = readF32();
+    v.z = readF32();
+    return v;
+  }
   glm::vec4 readVec4() {
-    return glm::vec4(readF32(), readF32(), readF32(), readF32());
+    glm::vec4 v;
+    v.x = readF32();
+    v.y = readF32();
+    v.z = readF32();
+    v.w = readF32();
+    return v;
   }
 
   // Read a variable-size index. Size is 1, 2, or 4 bytes.

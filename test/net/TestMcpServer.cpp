@@ -76,7 +76,7 @@ int main() {
   assert(discovery["result"]["supportedVersions"].size() == 2);
   auto list = Post(port, Modern(4, "tools/list"), "test-secret", true);
   assert(list->statusCode == 200);
-  assert(json::parse(list->body)["result"]["tools"].size() == 8);
+  assert(json::parse(list->body)["result"]["tools"].size() == 13);
   auto call =
       Post(port,
            Modern(5, "tools/call",

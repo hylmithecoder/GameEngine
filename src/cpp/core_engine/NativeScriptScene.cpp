@@ -1,9 +1,12 @@
 #include "../../../include/core_engine/NativeScriptScene.hpp"
+#include "../../../include/core_engine/DialogSystem.hpp"
+#include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace ilmeee {
 namespace {
@@ -16,6 +19,26 @@ int Find(void *opaque, uint64_t id) {
     if (renderer->meshes3d[i].objectId == id)
       return static_cast<int>(i);
   return -1;
+}
+UiElement *FindUi(void *opaque, uint64_t id) {
+  auto *ui = static_cast<NativeScriptSceneContext *>(opaque)->ui;
+  return ui ? FindUiElement(*ui, id) : nullptr;
+}
+// IsKeyDown / IsKeyPressed names, as bits so the previous frame fits in a word.
+uint32_t KeyBit(const char *key) {
+  static const char *const names[] = {"W", "S", "A", "D", "Space", "E", "Enter"};
+  for (uint32_t i = 0; i < std::size(names); ++i)
+    if (std::strcmp(key, names[i]) == 0)
+      return 1u << i;
+  return std::strcmp(key, "Interact") == 0 ? 1u << 5 : 0u;
+}
+uint32_t KeyBits(const MovementInput *input) {
+  if (!input)
+    return 0;
+  return (input->forward ? 1u : 0u) | (input->backward ? 2u : 0u) |
+         (input->left ? 4u : 0u) | (input->right ? 8u : 0u) |
+         (input->jump ? 16u : 0u) | (input->interact ? 32u : 0u) |
+         (input->submit ? 64u : 0u);
 }
 script::Vec3 ToScript(glm::vec3 value) { return {value.x, value.y, value.z}; }
 glm::vec3 ToEngine(script::Vec3 value) { return {value.x, value.y, value.z}; }
@@ -36,6 +59,9 @@ uint32_t Kinds(const SceneRenderer::Mesh3D &mesh) {
     kinds |= static_cast<uint32_t>(ObjectKind::Audio);
   if (mesh.video.enabled || !mesh.video.clip.empty())
     kinds |= static_cast<uint32_t>(ObjectKind::Video);
+  if (mesh.dialog.enabled || !mesh.dialog.lines.empty() ||
+      !mesh.dialog.file.empty())
+    kinds |= static_cast<uint32_t>(ObjectKind::Dialog);
   return kinds;
 }
 ObjectKind KindOf(Prop prop) {
@@ -45,8 +71,20 @@ ObjectKind KindOf(Prop prop) {
     return ObjectKind::Video;
   if (prop <= Prop::LightType)
     return ObjectKind::Light;
-  return ObjectKind::Camera;
+  if (prop <= Prop::CameraFar)
+    return ObjectKind::Camera;
+  if (prop <= Prop::UiClicked)
+    return ObjectKind::Ui;
+  return ObjectKind::Dialog;
 }
+bool IsUi(Prop prop) { return KindOf(prop) == ObjectKind::Ui; }
+// The Dialog line/speaker, only while `mesh` owns the open dialog.
+const DialogLine *OpenLine(void *ctx, const SceneRenderer::Mesh3D &mesh) {
+  const auto *dialog = static_cast<NativeScriptSceneContext *>(ctx)->dialog;
+  return dialog && dialog->Owner() == mesh.objectId ? dialog->CurrentLine()
+                                                    : nullptr;
+}
+glm::vec3 Rgb(const ImVec4 &color) { return {color.x, color.y, color.z}; }
 // The mesh owning `id` when it carries the component `prop` belongs to.
 SceneRenderer::Mesh3D *Owner(void *ctx, uint64_t id, Prop prop) {
   const int index = Find(ctx, id);
@@ -80,6 +118,10 @@ float *FloatField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.camNear;
   case Prop::CameraFar:
     return &mesh.camFar;
+  case Prop::DialogRange:
+    return &mesh.dialog.range;
+  case Prop::DialogSpeed:
+    return &mesh.dialog.charsPerSecond;
   default:
     return nullptr;
   }
@@ -102,6 +144,8 @@ bool *BoolField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.video.playOnStart;
   case Prop::VideoUnlit:
     return &mesh.video.unlit;
+  case Prop::DialogEnabled:
+    return &mesh.dialog.enabled;
   default:
     return nullptr;
   }
@@ -111,17 +155,38 @@ std::string *StringField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.audio.clip;
   if (prop == Prop::VideoClip)
     return &mesh.video.clip;
+  if (prop == Prop::DialogScript)
+    return &mesh.dialog.lines;
   return nullptr;
+}
+std::string *UiStringField(UiElement &e, Prop prop) {
+  switch (prop) {
+  case Prop::UiText:
+    return &e.text;
+  case Prop::UiImage:
+    return &e.imagePath;
+  case Prop::UiAction:
+    return &e.action;
+  default:
+    return nullptr;
+  }
 }
 } // namespace
 script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   script::HostApi host;
   host.context = &context;
-  host.valid = [](void *ctx, uint64_t id) { return Find(ctx, id) >= 0; };
+  host.valid = [](void *ctx, uint64_t id) {
+    return Find(ctx, id) >= 0 || FindUi(ctx, id) != nullptr;
+  };
   host.getTransform = [](void *ctx, uint64_t id, script::Transform *out) {
     const int index = Find(ctx, id);
-    if (index < 0)
-      return false;
+    if (index < 0) {
+      // UI elements: position is x, y from the anchor in reference pixels.
+      const UiElement *e = FindUi(ctx, id);
+      if (e)
+        *out = {{e->x, e->y, 0}, {}, {1, 1, 1}};
+      return e != nullptr;
+    }
     const auto *renderer =
         static_cast<NativeScriptSceneContext *>(ctx)->renderer;
     *out = {ToScript(renderer->GetMesh3DPosition(index)),
@@ -132,9 +197,17 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   host.setTransform = [](void *ctx, uint64_t id,
                          const script::Transform *value) {
     const int index = Find(ctx, id);
-    if (index < 0 || !Finite(value->position) || !Finite(value->rotation) ||
+    if (!Finite(value->position) || !Finite(value->rotation) ||
         !Finite(value->scale))
       return false;
+    if (index < 0) {
+      UiElement *e = FindUi(ctx, id);
+      if (e) {
+        e->x = value->position.x;
+        e->y = value->position.y;
+      }
+      return e != nullptr;
+    }
     auto *renderer = static_cast<NativeScriptSceneContext *>(ctx)->renderer;
     renderer->SetMesh3DTransform(index, ToEngine(value->position),
                                  ToEngine(value->rotation),
@@ -148,29 +221,29 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       for (const auto &mesh : renderer->meshes3d)
         if (mesh.displayName == name)
           return mesh.objectId;
+    if (const auto *ui = static_cast<NativeScriptSceneContext *>(ctx)->ui)
+      for (const auto &element : ui->elements)
+        if (element.id == name)
+          return element.objectId;
     return 0;
   };
   host.name = [](void *ctx, uint64_t id) -> const char * {
     const int index = Find(ctx, id);
     const auto *renderer =
         static_cast<NativeScriptSceneContext *>(ctx)->renderer;
-    return index < 0 ? "" : renderer->meshes3d[index].displayName.c_str();
+    if (index >= 0)
+      return renderer->meshes3d[index].displayName.c_str();
+    const UiElement *e = FindUi(ctx, id);
+    return e ? e->id.c_str() : "";
   };
   host.keyDown = [](void *ctx, const char *key) {
     const auto *input = static_cast<NativeScriptSceneContext *>(ctx)->input;
-    if (!input)
-      return false;
-    if (std::strcmp(key, "W") == 0)
-      return input->forward;
-    if (std::strcmp(key, "S") == 0)
-      return input->backward;
-    if (std::strcmp(key, "A") == 0)
-      return input->left;
-    if (std::strcmp(key, "D") == 0)
-      return input->right;
-    if (std::strcmp(key, "Space") == 0)
-      return input->jump;
-    return false;
+    return key && (KeyBits(input) & KeyBit(key)) != 0;
+  };
+  host.keyPressed = [](void *ctx, const char *key) {
+    const auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    const uint32_t bit = key ? KeyBit(key) : 0u;
+    return (KeyBits(context->input) & bit) && !(context->previousKeys & bit);
   };
   host.log = [](void *ctx, const char *message) {
     const auto &log = static_cast<NativeScriptSceneContext *>(ctx)->log;
@@ -179,14 +252,36 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   };
   host.kinds = [](void *ctx, uint64_t id) -> uint32_t {
     const int index = Find(ctx, id);
-    return index < 0 ? 0
-                     : Kinds(static_cast<NativeScriptSceneContext *>(ctx)
+    if (index < 0)
+      return FindUi(ctx, id) ? static_cast<uint32_t>(ObjectKind::Ui) : 0u;
+    return Kinds(static_cast<NativeScriptSceneContext *>(ctx)
                                  ->renderer->meshes3d[index]);
   };
   host.getFloat = [](void *ctx, uint64_t id, Prop prop, float *out) {
+    if (IsUi(prop)) {
+      const UiElement *e = FindUi(ctx, id);
+      if (!e)
+        return false;
+      if (prop == Prop::UiFontSize)
+        *out = e->fontSize;
+      else if (prop == Prop::UiAlpha)
+        *out = e->color.w;
+      else if (prop == Prop::UiBackgroundAlpha)
+        *out = e->background.w;
+      else
+        return false;
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
     if (!mesh)
       return false;
+    if (prop == Prop::DialogLineIndex) {
+      const auto *dialog = static_cast<NativeScriptSceneContext *>(ctx)->dialog;
+      *out = dialog && dialog->Owner() == mesh->objectId
+                 ? static_cast<float>(dialog->LineIndex())
+                 : -1.0f;
+      return true;
+    }
     if (prop == Prop::LightType) {
       *out = static_cast<float>(mesh->lightType);
       return true;
@@ -197,8 +292,24 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return field != nullptr;
   };
   host.setFloat = [](void *ctx, uint64_t id, Prop prop, float value) {
+    if (!std::isfinite(value))
+      return false;
+    if (IsUi(prop)) {
+      UiElement *e = FindUi(ctx, id);
+      if (!e)
+        return false;
+      if (prop == Prop::UiFontSize)
+        e->fontSize = std::clamp(value, 1.0f, 512.0f);
+      else if (prop == Prop::UiAlpha)
+        e->color.w = std::clamp(value, 0.0f, 1.0f);
+      else if (prop == Prop::UiBackgroundAlpha)
+        e->background.w = std::clamp(value, 0.0f, 1.0f);
+      else
+        return false;
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
-    if (!mesh || !std::isfinite(value))
+    if (!mesh)
       return false;
     if (prop == Prop::LightType) {
       if (value < 0 || value > 2)
@@ -221,10 +332,30 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return true;
   };
   host.getBool = [](void *ctx, uint64_t id, Prop prop, bool *out) {
+    const auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    if (IsUi(prop)) {
+      const UiElement *e = FindUi(ctx, id);
+      if (!e)
+        return false;
+      if (prop == Prop::UiVisible) {
+        *out = e->visible;
+      } else if (prop == Prop::UiClicked) {
+        const auto *input = context->input;
+        *out = input && std::find(input->uiPressed.begin(),
+                                  input->uiPressed.end(),
+                                  id) != input->uiPressed.end();
+      } else {
+        return false;
+      }
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
     if (!mesh)
       return false;
-    const auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    if (prop == Prop::DialogTalking) {
+      *out = context->dialog && context->dialog->Owner() == mesh->objectId;
+      return true;
+    }
     const auto index =
         static_cast<size_t>(mesh - context->renderer->meshes3d.data());
     if (prop == Prop::AudioPlaying || prop == Prop::VideoPlaying) {
@@ -245,6 +376,12 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return field != nullptr;
   };
   host.setBool = [](void *ctx, uint64_t id, Prop prop, bool value) {
+    if (prop == Prop::UiVisible) {
+      UiElement *e = FindUi(ctx, id);
+      if (e)
+        e->visible = value;
+      return e != nullptr;
+    }
     auto *mesh = Owner(ctx, id, prop);
     if (!mesh)
       return false;
@@ -258,6 +395,22 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return field != nullptr;
   };
   host.getVec3 = [](void *ctx, uint64_t id, Prop prop, script::Vec3 *out) {
+    if (IsUi(prop)) {
+      const UiElement *e = FindUi(ctx, id);
+      if (!e)
+        return false;
+      if (prop == Prop::UiPosition)
+        *out = {e->x, e->y, 0};
+      else if (prop == Prop::UiSize)
+        *out = {e->width, e->height, 0};
+      else if (prop == Prop::UiColor)
+        *out = ToScript(Rgb(e->color));
+      else if (prop == Prop::UiBackground)
+        *out = ToScript(Rgb(e->background));
+      else
+        return false;
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
     if (!mesh || prop != Prop::LightColor)
       return false;
@@ -266,6 +419,26 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   };
   host.setVec3 = [](void *ctx, uint64_t id, Prop prop,
                     const script::Vec3 *value) {
+    if (IsUi(prop)) {
+      UiElement *e = FindUi(ctx, id);
+      if (!e || !Finite(*value))
+        return false;
+      const glm::vec3 rgb = glm::clamp(ToEngine(*value), 0.0f, 1.0f);
+      if (prop == Prop::UiPosition) {
+        e->x = value->x;
+        e->y = value->y;
+      } else if (prop == Prop::UiSize) {
+        e->width = std::clamp(value->x, 1.0f, 8192.0f);
+        e->height = std::clamp(value->y, 1.0f, 8192.0f);
+      } else if (prop == Prop::UiColor) {
+        e->color = ImVec4(rgb.x, rgb.y, rgb.z, e->color.w);
+      } else if (prop == Prop::UiBackground) {
+        e->background = ImVec4(rgb.x, rgb.y, rgb.z, e->background.w);
+      } else {
+        return false;
+      }
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
     if (!mesh || prop != Prop::LightColor || !Finite(*value))
       return false;
@@ -273,11 +446,30 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return true;
   };
   host.getString = [](void *ctx, uint64_t id, Prop prop) -> const char * {
+    if (IsUi(prop)) {
+      UiElement *e = FindUi(ctx, id);
+      const std::string *field = e ? UiStringField(*e, prop) : nullptr;
+      return field ? field->c_str() : "";
+    }
     auto *mesh = Owner(ctx, id, prop);
+    if (mesh && (prop == Prop::DialogSpeaker || prop == Prop::DialogLine)) {
+      const DialogLine *line = OpenLine(ctx, *mesh);
+      return !line ? ""
+             : prop == Prop::DialogSpeaker ? line->speaker.c_str()
+                                           : line->text.c_str();
+    }
     const std::string *field = mesh ? StringField(*mesh, prop) : nullptr;
     return field ? field->c_str() : "";
   };
   host.setString = [](void *ctx, uint64_t id, Prop prop, const char *value) {
+    if (IsUi(prop)) {
+      UiElement *e = FindUi(ctx, id);
+      std::string *field = e ? UiStringField(*e, prop) : nullptr;
+      if (!field || !value)
+        return false;
+      *field = value;
+      return true;
+    }
     auto *mesh = Owner(ctx, id, prop);
     std::string *field = mesh ? StringField(*mesh, prop) : nullptr;
     if (!field || !value)
@@ -287,6 +479,23 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   };
   host.command = [](void *ctx, uint64_t id, script::Command command) {
     auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    if (command >= script::Command::DialogStart) {
+      auto *mesh = Owner(ctx, id, Prop::DialogEnabled);
+      auto *dialog = context->dialog;
+      if (!mesh || !dialog || !context->ui)
+        return false;
+      auto &renderer = *context->renderer;
+      if (command == script::Command::DialogStart)
+        return dialog->Begin(
+            renderer, *context->ui,
+            static_cast<size_t>(mesh - renderer.meshes3d.data()));
+      if (dialog->Owner() != mesh->objectId)
+        return false;
+      if (command == script::Command::DialogNext)
+        return dialog->Next(renderer, *context->ui);
+      dialog->End(renderer, *context->ui);
+      return true;
+    }
     const bool audio = command == script::Command::AudioPlay ||
                        command == script::Command::AudioStop;
     auto *mesh = Owner(ctx, id, audio ? Prop::AudioEnabled : Prop::VideoEnabled);
@@ -305,10 +514,15 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     case script::Command::VideoStop:
       context->media->StopVideo(index);
       return true;
+    default:
+      break;
     }
     return false;
   };
   return host;
+}
+void ScriptSceneEndFrame(NativeScriptSceneContext &context) {
+  context.previousKeys = KeyBits(context.input);
 }
 std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer) {
   std::vector<ScriptOwner> owners;

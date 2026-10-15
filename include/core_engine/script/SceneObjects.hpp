@@ -131,6 +131,98 @@ public:
   float GetFar() const { return GetFloat(Prop::CameraFar); }
   bool SetFar(float value) const { return SetFloat(Prop::CameraFar, value); }
 };
+// An element of the game Canvas (Text, Image, Button, Joystick). Its
+// GetPosition/SetPosition/Translate move it in reference pixels from its
+// anchor (z is ignored). Changes last until Stop, like transforms.
+class UiGameObject : public GameObject {
+public:
+  UiGameObject() = default;
+  explicit UiGameObject(const GameObject &object) : GameObject(object) {}
+  bool IsValid() const { return GameObject::IsValid() && Is(ObjectKind::Ui); }
+  std::string GetText() const { return GetString(Prop::UiText); }
+  bool SetText(const std::string &text) const {
+    return SetString(Prop::UiText, text);
+  }
+  // Image elements: path relative to the project, e.g. assets/ui/face.png.
+  std::string GetImage() const { return GetString(Prop::UiImage); }
+  bool SetImage(const std::string &path) const {
+    return SetString(Prop::UiImage, path);
+  }
+  std::string GetAction() const { return GetString(Prop::UiAction); }
+  bool SetAction(const std::string &action) const {
+    return SetString(Prop::UiAction, action);
+  }
+  bool IsVisible() const { return GetBool(Prop::UiVisible); }
+  bool SetVisible(bool value) const { return SetBool(Prop::UiVisible, value); }
+  bool Show() const { return SetVisible(true); }
+  bool Hide() const { return SetVisible(false); }
+  // x = width, y = height (reference pixels, >= 1).
+  Vec3 GetSize() const { return GetVec3(Prop::UiSize); }
+  bool SetSize(Vec3 size) const { return SetVec3(Prop::UiSize, size); }
+  float GetFontSize() const { return GetFloat(Prop::UiFontSize); }
+  bool SetFontSize(float value) const {
+    return SetFloat(Prop::UiFontSize, value);
+  }
+  // Text / knob colour and its alpha, RGB 0..1.
+  Vec3 GetColor() const { return GetVec3(Prop::UiColor); }
+  bool SetColor(Vec3 rgb) const { return SetVec3(Prop::UiColor, rgb); }
+  float GetAlpha() const { return GetFloat(Prop::UiAlpha); }
+  bool SetAlpha(float value) const { return SetFloat(Prop::UiAlpha, value); }
+  Vec3 GetBackground() const { return GetVec3(Prop::UiBackground); }
+  bool SetBackground(Vec3 rgb) const {
+    return SetVec3(Prop::UiBackground, rgb);
+  }
+  float GetBackgroundAlpha() const {
+    return GetFloat(Prop::UiBackgroundAlpha);
+  }
+  bool SetBackgroundAlpha(float value) const {
+    return SetFloat(Prop::UiBackgroundAlpha, value);
+  }
+  // Clicked or tapped since the previous Update. Any visible element counts,
+  // not only buttons.
+  bool WasClicked() const { return GetBool(Prop::UiClicked); }
+};
+
+// An object with the engine's Dialog component (a character you talk to).
+// The component shows its dialog box, types the lines into the text element
+// and advances on E / Enter / a tap on the box; these let a script drive it.
+class DialogGameObject : public GameObject {
+public:
+  DialogGameObject() = default;
+  explicit DialogGameObject(const GameObject &object) : GameObject(object) {}
+  bool IsValid() const {
+    return GameObject::IsValid() && Is(ObjectKind::Dialog);
+  }
+  // Opens the dialog from its first line. False when another dialog is open,
+  // the script has no lines, or the component is disabled. Play mode only.
+  bool StartDialog() const { return Run(Command::DialogStart); }
+  // Finishes the typing line, otherwise goes to the next line (or closes).
+  bool Next() const { return Run(Command::DialogNext); }
+  bool StopDialog() const { return Run(Command::DialogStop); }
+  bool IsTalking() const { return GetBool(Prop::DialogTalking); }
+  // 0-based line shown now, -1 when the dialog is closed.
+  int GetLineIndex() const {
+    return static_cast<int>(GetFloat(Prop::DialogLineIndex));
+  }
+  std::string GetSpeaker() const { return GetString(Prop::DialogSpeaker); }
+  std::string GetLine() const { return GetString(Prop::DialogLine); }
+  // Dialog text in the Inspector format ("Name: line", one per line). Used
+  // from the next StartDialog(); a Dialog File set in the Inspector wins.
+  std::string GetScript() const { return GetString(Prop::DialogScript); }
+  bool SetScript(const std::string &text) const {
+    return SetString(Prop::DialogScript, text);
+  }
+  bool IsEnabled() const { return GetBool(Prop::DialogEnabled); }
+  bool SetEnabled(bool value) const {
+    return SetBool(Prop::DialogEnabled, value);
+  }
+  float GetRange() const { return GetFloat(Prop::DialogRange); }
+  bool SetRange(float value) const { return SetFloat(Prop::DialogRange, value); }
+  float GetSpeed() const { return GetFloat(Prop::DialogSpeed); }
+  bool SetSpeed(float charsPerSecond) const {
+    return SetFloat(Prop::DialogSpeed, charsPerSecond);
+  }
+};
 } // namespace ilmeee::script
 
 // Short names for project scripts only; engine code has its own GameObject.
@@ -142,5 +234,7 @@ using AudioGameObject = ilmeee::script::AudioGameObject;
 using VideoPlayerGameObject = ilmeee::script::VideoPlayerGameObject;
 using LightGameObject = ilmeee::script::LightGameObject;
 using CameraGameObject = ilmeee::script::CameraGameObject;
+using UiGameObject = ilmeee::script::UiGameObject;
+using DialogGameObject = ilmeee::script::DialogGameObject;
 template <class T> using ObjectRef = ilmeee::script::ObjectRef<T>;
 #endif

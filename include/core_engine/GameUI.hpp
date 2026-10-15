@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include <imgui.h>
+#include "NativeScriptTypes.hpp"
 
 namespace ilmeee {
 struct IlmeeeScene;
@@ -15,6 +16,8 @@ enum class UiKind { Text, Image, Button, Joystick };
 enum class UiAnchor { TopLeft, TopRight, BottomLeft, BottomRight, Center };
 
 struct UiElement {
+  // Stable identity shared with scene objects (scripts, dialog links).
+  uint64_t objectId = NewObjectId();
   std::string id;
   UiKind kind = UiKind::Text;
   UiAnchor anchor = UiAnchor::TopLeft;
@@ -28,6 +31,8 @@ struct UiElement {
   std::string action;
   ImVec4 color{1, 1, 1, 1};
   ImVec4 background{0.14f, 0.20f, 0.31f, 0.92f};
+  // Hidden elements are skipped in Play (drawn faded while editing).
+  bool visible = true;
 };
 
 struct GameUI {
@@ -38,6 +43,8 @@ struct GameUI {
 
 // Screen rectangle of an element after reference-size scaling and anchoring.
 struct UiRect { ImVec2 min, max; };
+UiElement *FindUiElement(GameUI &ui, uint64_t objectId);
+const UiElement *FindUiElement(const GameUI &ui, uint64_t objectId);
 UiRect GameUIElementRect(const GameUI &ui, const UiElement &element,
                          ImVec2 origin, ImVec2 size);
 
@@ -67,10 +74,12 @@ using UiFingers = std::unordered_map<int64_t, UiFinger>;
 // coordinate mapping are shared by the editor preview and the game player.
 // Joystick knobs are drawn at their value in `axes` (e.g. keyboard echo);
 // a held joystick writes its drag value there. Returns the clicked action.
+// `pressed` collects the objectId of every visible element clicked or tapped
+// this frame (any kind; scripts and dialogs read it as UiClicked).
 std::string DrawGameUI(
     const GameUI &ui, ImVec2 origin, ImVec2 size,
     const std::function<ImTextureID(const std::string &)> &imageTexture = {},
     bool interactive = true, bool paused = false, UiAxisMap *axes = nullptr,
-    UiFingers *fingers = nullptr);
+    UiFingers *fingers = nullptr, std::vector<uint64_t> *pressed = nullptr);
 
 } // namespace ilmeee

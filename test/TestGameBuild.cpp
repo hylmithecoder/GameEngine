@@ -62,6 +62,8 @@ int main() {
   Write(outside / "hero/not_used.png", "png");
   // Media and a model folder with textures it does not use.
   Write(project / "assets/audio/rain.ogg", "ogg");
+  Write(project / "assets/animations/idle.ilmeeeanim", "animation asset");
+  Write(outside / "walk.ilmeeeanim", "external animation asset");
   Write(project / "assets/audio/unused.wav", "wav");
   Write(project / "assets/videos/intro.mp4", "mp4");
   Write(project / "assets/videos/huge_unused.mp4", std::string(4096, 'x'));
@@ -79,9 +81,11 @@ int main() {
   cube.movable = true;
   cube.movementScript = "WASD XZ";
   cube.movementSpeed = 4.5f;
+  cube.animation = {true, "assets/animations/idle.ilmeeeanim", 0.8f, true};
   scene.entities.push_back(cube);
   scene.entities.push_back(Model("Inside", "assets/models/inside.obj"));
   scene.entities.push_back(Model("Hero", (outside / "hero/hero.obj").string()));
+  scene.entities.back().animation = {true, (outside / "walk.ilmeeeanim").string(), 1, false};
   scene.entities.back().surfaceTextures.push_back(
       {0, (outside / "skin.png").string()});
   scene.entities.push_back(Model("Thing", "extra/thing.obj"));
@@ -139,6 +143,7 @@ int main() {
   // Only what the scenes use: no readme, no unused clips or textures.
   CHECK(!fs::exists(out / "assets/readme.txt"));
   CHECK(fs::exists(out / "assets/audio/rain.ogg"));
+  CHECK(fs::exists(out / "assets/animations/idle.ilmeeeanim"));
   CHECK(!fs::exists(out / "assets/audio/unused.wav"));
   CHECK(fs::exists(out / "assets/videos/intro.mp4"));
   CHECK(!fs::exists(out / "assets/videos/huge_unused.mp4"));
@@ -176,6 +181,11 @@ int main() {
   CHECK(built.entities[0].movable);
   CHECK(built.entities[0].movementScript == "WASD XZ");
   CHECK(built.entities[0].movementSpeed == 4.5f);
+  CHECK(built.entities[0].animation.enabled && built.entities[0].animation.speed == 0.8f);
+  CHECK(built.entities[0].animation.clip == "assets/animations/idle.ilmeeeanim");
+  CHECK(fs::is_regular_file(out / built.entities[2].animation.clip));
+  CHECK(fs::path(built.entities[2].animation.clip).is_relative());
+  CHECK(!built.entities[2].animation.loop);
   CHECK(built.entities[6].kind == PrimitiveKind::Canvas);
   CHECK(built.entities[7].kind == PrimitiveKind::UiImage);
   CHECK(built.entities[7].parent == 6);
@@ -198,7 +208,7 @@ int main() {
   CHECK(present(built.entities[5].externalPath));
   CHECK(built.entities[4].externalPath == "assets/models/missing.obj");
   CHECK(r.missingReferences == 1);
-  CHECK(r.relocatedReferences == 4); // hero, skin, thing, model_at_root
+  CHECK(r.relocatedReferences == 5); // hero, skin, thing, model_at_root, walk clip
 
   // ---- 2. rebuilding replaces the previous build -------------------------
   Write(out / "stale.txt", "old");

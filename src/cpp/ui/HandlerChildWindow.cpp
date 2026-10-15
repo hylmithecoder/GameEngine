@@ -52,6 +52,8 @@ std::string ProjectUiImagePath(const std::string &project,
   return image.lexically_relative(root).generic_string();
 }
 
+} // namespace
+
 // Audio/video clip reference as stored in the scene: relative to the project
 // when the file is inside it (so built games find it), absolute otherwise
 // (the game build then gathers it under assets/external/).
@@ -70,12 +72,12 @@ std::string ProjectMediaPath(const std::string &project,
     return file.string();
   return rel.generic_string();
 }
-} // namespace
 
 bool MainWindow::BindUiImageAsset(int index, const std::string &sourcePath) {
   if (SceneStructureLocked() || index < 0 ||
       index >= (int)gameUi.elements.size() ||
-      gameUi.elements[index].kind != ilmeee::UiKind::Image) return false;
+      (gameUi.elements[index].kind != ilmeee::UiKind::Image &&
+       gameUi.elements[index].kind != ilmeee::UiKind::Button)) return false;
   const std::string path = ProjectUiImagePath(projectHandler.projectPath,
                                                sourcePath);
   if (path.empty()) {
@@ -233,7 +235,7 @@ void MainWindow::RenderHierarchyWindow() {
   enum class Op {
     None, Spawn, Delete, Reparent,
     SpawnCanvas, DeleteCanvas, SpawnUiText, SpawnUiImage, SpawnUiButton, SpawnUiJoystick,
-    DeleteUi
+    DeleteUi, MoveUi
   };
   Op op = Op::None;
   int opIndex = -1, opParent = -1, opKind = 0;
@@ -388,6 +390,12 @@ void MainWindow::RenderHierarchyWindow() {
       if (!locked && BeginDragDropTarget()) {
         if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
           CreateUiImageAsset((const char *)payload->Data, 24.0f, 24.0f);
+        // A UI element dropped on the Canvas goes to the top of the list.
+        if (const ImGuiPayload *payload = AcceptDragDropPayload("ILMEEE_UI")) {
+          op = Op::MoveUi;
+          opIndex = *(const int *)payload->Data;
+          opParent = 0;
+        }
         EndDragDropTarget();
       }
       if (BeginPopupContextItem("CanvasMenu")) {
@@ -415,16 +423,42 @@ void MainWindow::RenderHierarchyWindow() {
           const char *kind = element.kind == ilmeee::UiKind::Text ? "Text" :
               element.kind == ilmeee::UiKind::Image ? "Image" :
               element.kind == ilmeee::UiKind::Joystick ? "Joystick" : "Button";
-          TreeNodeEx("ui", uiFlags, "%s (%s)", element.id.c_str(), kind);
+          TreeNodeEx("ui", uiFlags, "%s (%s)%s", element.id.c_str(), kind,
+                     element.visible ? "" : " [hidden]");
           if (IsItemClicked(ImGuiMouseButton_Left) ||
               IsItemClicked(ImGuiMouseButton_Right)) {
             selectedUiElement = i;
             objectName[0] = '\0';
           }
-          if (!locked && element.kind == ilmeee::UiKind::Image &&
-              BeginDragDropTarget()) {
-            if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
-              BindUiImageAsset(i, (const char *)payload->Data);
+          // Drag to reorder. List order is draw order: lower rows are
+          // drawn on top (and get clicks first).
+          if (!locked && BeginDragDropSource()) {
+            SetDragDropPayload("ILMEEE_UI", &i, sizeof(i));
+            Text("%s (%s)", element.id.c_str(), kind);
+            EndDragDropSource();
+          }
+          if (!locked && BeginDragDropTarget()) {
+            if (element.kind == ilmeee::UiKind::Image ||
+                element.kind == ilmeee::UiKind::Button)
+              if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
+                BindUiImageAsset(i, (const char *)payload->Data);
+            // Upper half of the row inserts before it, lower half after.
+            const ImVec2 rowMin = GetItemRectMin(), rowMax = GetItemRectMax();
+            const bool after = GetMousePos().y > (rowMin.y + rowMax.y) * 0.5f;
+            if (const ImGuiPayload *payload = AcceptDragDropPayload(
+                    "ILMEEE_UI", ImGuiDragDropFlags_AcceptBeforeDelivery |
+                                     ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
+              const float y = after ? rowMax.y : rowMin.y;
+              GetWindowDrawList()->AddLine(ImVec2(rowMin.x, y),
+                                           ImVec2(rowMax.x, y),
+                                           GetColorU32(ImGuiCol_DragDropTarget),
+                                           2.0f);
+              if (payload->IsDelivery()) {
+                op = Op::MoveUi;
+                opIndex = *(const int *)payload->Data;
+                opParent = after ? i + 1 : i;
+              }
+            }
             EndDragDropTarget();
           }
           if (BeginPopupContextItem("UiItemMenu")) {
@@ -541,6 +575,24 @@ void MainWindow::RenderHierarchyWindow() {
       selectedUiElement = -2;
     }
     break;
+  case Op::MoveUi: {
+    // opIndex = dragged element, opParent = insert position before removal.
+    auto &elements = gameUi.elements;
+    const int n = (int)elements.size();
+    if (locked || opIndex < 0 || opIndex >= n || opParent < 0 || opParent > n)
+      break;
+    const uint64_t selected =
+        selectedUiElement >= 0 && selectedUiElement < n
+            ? elements[selectedUiElement].objectId : 0;
+    const int to = opParent > opIndex ? opParent - 1 : opParent;
+    if (to == opIndex) break;
+    ilmeee::UiElement moved = std::move(elements[opIndex]);
+    elements.erase(elements.begin() + opIndex);
+    elements.insert(elements.begin() + to, std::move(moved));
+    for (int k = 0; selected && k < n; ++k)
+      if (elements[k].objectId == selected) selectedUiElement = k;
+    break;
+  }
   }
   End();
 }
@@ -814,6 +866,15 @@ void MainWindow::RenderInspectorWindow() {
       uint32_t boneCount = sceneRenderer->GetMesh3DBoneCount((size_t)meshIdx);
       if (boneCount > 0) {
         Text("Bones: %u", boneCount);
+        if (Button("Open Animation Editor")) OpenAnimationEditor((size_t)meshIdx);
+        auto &animation = sceneRenderer->meshes3d[(size_t)meshIdx].animation;
+        if (!animation.clip.empty()) TextWrapped("Animation: %s", animation.clip.c_str());
+        if (!animation.clip.empty()) {
+          if (Checkbox("Animation Enabled", &animation.enabled)) RecordEditorHistory();
+          if (Checkbox("Loop Animation", &animation.loop)) RecordEditorHistory();
+          DragFloat("Animation Speed", &animation.speed, 0.05f, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+          if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
+        }
       }
 
       // --- Surfaces (materials) → per-surface texture binding ---
@@ -1291,6 +1352,9 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
+  if (meshSelected && sceneRenderer->meshes3d[meshIdx].dialog.enabled)
+    RenderDialogInspector(static_cast<size_t>(meshIdx));
+
   if (meshSelected) RenderNativeScriptInspector(static_cast<size_t>(meshIdx));
 
   if (Button("Add Component", ImVec2(-1, 0))) {
@@ -1326,6 +1390,15 @@ void MainWindow::RenderInspectorWindow() {
         RecordEditorHistory();
       }
     }
+    BeginDisabled(meshSelected &&
+                  sceneRenderer->meshes3d[meshIdx].dialog.enabled);
+    if (Selectable("Dialog")) {
+      if (meshSelected) {
+        sceneRenderer->meshes3d[meshIdx].dialog.enabled = true;
+        RecordEditorHistory();
+      }
+    }
+    EndDisabled();
     if (Selectable("Light")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].isLight = true;
@@ -1696,7 +1769,8 @@ void MainWindow::RenderSceneWindow() {
                   gameUi, gameUi.elements[i], imagePos, imageSize);
               if (mouse.x >= rect.min.x && mouse.x <= rect.max.x &&
                   mouse.y >= rect.min.y && mouse.y <= rect.max.y) {
-                if (gameUi.elements[i].kind == ilmeee::UiKind::Image)
+                if (gameUi.elements[i].kind == ilmeee::UiKind::Image ||
+                    gameUi.elements[i].kind == ilmeee::UiKind::Button)
                   target = i;
                 break;
               }
@@ -1737,8 +1811,11 @@ void MainWindow::RenderSceneWindow() {
           }
           const std::string action = ilmeee::DrawGameUI(
               gameUi, imagePos, imageSize, texture, gamePlaying,
-              builder.IsPaused());
-          if (gamePlaying && action == "TogglePause") {
+              builder.IsPaused(), nullptr, nullptr,
+              &gameMovementInput.uiPressed);
+          if (gamePlaying && action == "Interact") {
+            gameMovementInput.interact = true;
+          } else if (gamePlaying && action == "TogglePause") {
             if (builder.IsPaused()) builder.Resume();
             else builder.Pause();
             PushMessage(builder.IsPaused() ? "[INFO] Game paused" :
@@ -2239,10 +2316,16 @@ void MainWindow::RenderSceneWindow() {
             return (ImTextureID)sceneRenderer->GetUiTextureDescriptor(path.string());
           };
           const bool gamePaused = builder.IsPaused();
-          if (hasGameUiCanvas &&
-              ilmeee::DrawGameUI(gameUi, imagePos, ImVec2(w, h), texture,
-                                 !builder.IsStopped(), gamePaused,
-                                 &gameMovementInput.axes) == "TogglePause") {
+          const std::string action = hasGameUiCanvas
+              ? ilmeee::DrawGameUI(gameUi, imagePos, ImVec2(w, h), texture,
+                                   !builder.IsStopped(), gamePaused,
+                                   &gameMovementInput.axes, nullptr,
+                                   &gameMovementInput.uiPressed)
+              : std::string();
+          // A button with action "Interact" works like the E key (phones).
+          if (action == "Interact") {
+            gameMovementInput.interact = true;
+          } else if (action == "TogglePause") {
             if (builder.IsPaused()) builder.Resume();
             else builder.Pause();
             PushMessage(builder.IsPaused() ? "[INFO] Game paused" :
@@ -2320,6 +2403,10 @@ void MainWindow::RenderGameUiEditor() {
     if (Combo("Anchor", &anchor,
               "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0"))
       e.anchor = (ilmeee::UiAnchor)anchor;
+    Checkbox("Visible", &e.visible);
+    if (IsItemHovered())
+      SetTooltip("Hidden elements are skipped in Play; scripts and dialogs "
+                 "can show them");
     DragFloat("X", &e.x, 1.0f);
     DragFloat("Y", &e.y, 1.0f);
     DragFloat("Width", &e.width, 1.0f, 1.0f, 8192.0f);
@@ -2330,8 +2417,10 @@ void MainWindow::RenderGameUiEditor() {
     } else if (e.kind != ilmeee::UiKind::Image) {
       editString("Text", e.text);
       DragFloat("Font size", &e.fontSize, 1.0f, 1.0f, 200.0f);
-    } else {
-      editString("Image path", e.imagePath);
+    }
+    if (e.kind == ilmeee::UiKind::Image || e.kind == ilmeee::UiKind::Button) {
+      editString(e.kind == ilmeee::UiKind::Button ? "Sprite" : "Image path",
+                 e.imagePath);
       if (!SceneStructureLocked() && BeginDragDropTarget()) {
         if (const ImGuiPayload *payload = AcceptDragDropPayload("ASSET_PATH"))
           BindUiImageAsset(selectedUiElement, (const char *)payload->Data);
@@ -2339,9 +2428,27 @@ void MainWindow::RenderGameUiEditor() {
       }
       TextDisabled("Path relative to project, e.g. assets/logo.png");
       TextDisabled("Drop an image here or onto the Scene canvas");
+      if (e.kind == ilmeee::UiKind::Button) {
+        TextDisabled("Empty: plain Background colour. Held: darker.");
+        if (!e.imagePath.empty() && SmallButton("Clear sprite"))
+          e.imagePath.clear();
+      }
     }
-    if (e.kind == ilmeee::UiKind::Button)
+    if (e.kind == ilmeee::UiKind::Button) {
       editString("Action", e.action);
+      // Built-in actions; anything else is just logged (and scripts can read
+      // clicks with UiGameObject::WasClicked).
+      if (BeginCombo("##actionPreset", "Built-in actions",
+                     ImGuiComboFlags_NoPreview)) {
+        if (Selectable("Interact  (talk to the nearest Dialog / E key)"))
+          e.action = "Interact";
+        if (Selectable("TogglePause  (pause / resume the game)"))
+          e.action = "TogglePause";
+        EndCombo();
+      }
+      SameLine();
+      TextDisabled("Built-in actions");
+    }
     ColorEdit4("Color", &e.color.x);
     ColorEdit4("Background", &e.background.x);
     if (Button("Delete element") && !SceneStructureLocked()) {
@@ -2367,7 +2474,12 @@ void MainWindow::RenderMainViewWindow() {
     }
 
     if (BeginTabItem("Animation")) {
-      Text("Animation editor will be displayed here");
+      TextWrapped("Edit PMX poses and animation clips in the Animation panel.");
+      if (Button("Open Animation")) {
+        showAnimation = true;
+        const int selected = SelectedMeshIndex();
+        if (selected >= 0) OpenAnimationEditor((size_t)selected);
+      }
       EndTabItem();
     }
 
@@ -2717,6 +2829,7 @@ void MainWindow::RenderMenuBar() {
     }
 
     if (BeginMenu("Windows")) {
+      MenuItem("Animation", nullptr, &showAnimation);
       if (MenuItem("Main View", nullptr, &showMainView)) {
       }
       if (MenuItem("Explorer", nullptr, &showExplorer)) {
@@ -3107,6 +3220,8 @@ bool MainWindow::Save3DScene() {
     e.movementRig = mesh.movementRig;
     e.audio = mesh.audio;
     e.video = mesh.video;
+    e.dialog = mesh.dialog;
+    e.animation = mesh.animation;
 
     if (mesh.isAudioEmitter) {
       e.kind = ilmeee::PrimitiveKind::AudioSource;

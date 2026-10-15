@@ -206,6 +206,20 @@ void AppendEntitySignature(std::ostringstream &out,
   AppendFloat(out, entity.video.volume);
   AppendBool(out, entity.video.unlit);
   out << entity.video.surface << ';';
+  AppendBool(out, entity.dialog.enabled);
+  out << entity.dialog.box << ';' << entity.dialog.text << ';'
+      << entity.dialog.speaker << ';' << entity.dialog.prompt << ';';
+  AppendString(out, entity.dialog.lines);
+  AppendString(out, entity.dialog.file);
+  out << static_cast<uint32_t>(entity.dialog.trigger) << ';';
+  AppendFloat(out, entity.dialog.range);
+  AppendFloat(out, entity.dialog.charsPerSecond);
+  AppendBool(out, entity.dialog.repeatable);
+  AppendBool(out, entity.dialog.freezePlayer);
+  AppendBool(out, entity.animation.enabled);
+  AppendString(out, entity.animation.clip);
+  AppendFloat(out, entity.animation.speed);
+  AppendBool(out, entity.animation.loop);
   AppendString(out, entity.debugSrcFile);
   out << entity.debugSrcLine << ';';
   out << entity.submeshTextures.size() << ';';
@@ -407,6 +421,21 @@ void WriteEntity(std::ostream &out,
   WriteFloat(out, 10, "video_volume", entity.video.volume);
   WriteBool(out, 10, "video_unlit", entity.video.unlit);
   WriteInt(out, 10, "video_surface", entity.video.surface);
+  WriteBool(out, 10, "dialog_enabled", entity.dialog.enabled);
+  out << "          dialog_ui: [" << entity.dialog.box << ", "
+      << entity.dialog.text << ", " << entity.dialog.speaker << ", "
+      << entity.dialog.prompt << "]\n";
+  WriteString(out, 10, "dialog_lines", entity.dialog.lines);
+  WriteString(out, 10, "dialog_file", entity.dialog.file);
+  WriteInt(out, 10, "dialog_trigger", static_cast<int>(entity.dialog.trigger));
+  WriteFloat(out, 10, "dialog_range", entity.dialog.range);
+  WriteFloat(out, 10, "dialog_speed", entity.dialog.charsPerSecond);
+  WriteBool(out, 10, "dialog_repeatable", entity.dialog.repeatable);
+  WriteBool(out, 10, "dialog_freeze_player", entity.dialog.freezePlayer);
+  WriteBool(out, 10, "animation_enabled", entity.animation.enabled);
+  WriteString(out, 10, "animation_clip", entity.animation.clip);
+  WriteFloat(out, 10, "animation_speed", entity.animation.speed);
+  WriteBool(out, 10, "animation_loop", entity.animation.loop);
 
   WriteString(out, 10, "debug_source_file", entity.debugSrcFile);
   WriteInt(out, 10, "debug_source_line", entity.debugSrcLine);

@@ -108,6 +108,8 @@ bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out) {
     if (e.parent != static_cast<int32_t>(canvasIndex))
       continue;
     UiElement element;
+    if (e.objectId) element.objectId = e.objectId;
+    element.visible = e.uiVisible;
     switch (e.kind) {
     case PrimitiveKind::UiText: element.kind = UiKind::Text; break;
     case PrimitiveKind::UiImage: element.kind = UiKind::Image; break;
@@ -145,6 +147,8 @@ void AppendGameUIToScene(IlmeeeScene &scene, const GameUI &ui) {
   scene.entities.push_back(std::move(canvas));
   for (const UiElement &element : ui.elements) {
     SceneEntity e;
+    e.objectId = element.objectId;
+    e.uiVisible = element.visible;
     e.name = element.id;
     e.parent = parent;
     switch (element.kind) {
@@ -270,6 +274,17 @@ bool SaveGameUI(const std::string &path, const GameUI &ui, std::string *error) {
   return true;
 }
 
+UiElement *FindUiElement(GameUI &ui, uint64_t objectId) {
+  if (!objectId) return nullptr;
+  for (UiElement &e : ui.elements)
+    if (e.objectId == objectId) return &e;
+  return nullptr;
+}
+
+const UiElement *FindUiElement(const GameUI &ui, uint64_t objectId) {
+  return FindUiElement(const_cast<GameUI &>(ui), objectId);
+}
+
 UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
                          ImVec2 origin, ImVec2 size) {
   if (ui.referenceWidth <= 0.0f || ui.referenceHeight <= 0.0f)
@@ -297,7 +312,8 @@ UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
 std::string DrawGameUI(
     const GameUI &ui, ImVec2 origin, ImVec2 size,
     const std::function<ImTextureID(const std::string &)> &imageTexture,
-    bool interactive, bool paused, UiAxisMap *axes, UiFingers *fingers) {
+    bool interactive, bool paused, UiAxisMap *axes, UiFingers *fingers,
+    std::vector<uint64_t> *pressed) {
   if (size.x <= 0 || size.y <= 0)
     return {};
   const float scale = std::min(size.x / ui.referenceWidth,
@@ -308,11 +324,39 @@ std::string DrawGameUI(
   const ImVec2 oldCursor = ImGui::GetCursorScreenPos();
   std::string clicked;
   draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
-  for (const UiElement &e : ui.elements) {
+  const bool hovered = ImGui::IsWindowHovered();
+  const ImVec2 mouse = ImGui::GetIO().MousePos;
+  const auto press = [&](uint64_t id) {
+    if (pressed && std::find(pressed->begin(), pressed->end(), id) == pressed->end())
+      pressed->push_back(id);
+  };
+  for (const UiElement &source : ui.elements) {
+    if (interactive && !source.visible)
+      continue;
+    UiElement faded;
+    if (!source.visible) {
+      faded = source;
+      faded.color.w *= 0.35f;
+      faded.background.w *= 0.35f;
+    }
+    const UiElement &e = source.visible ? source : faded;
     const UiRect rect = GameUIElementRect(ui, e, origin, size);
     const ImVec2 pos = rect.min;
     const ImVec2 max = rect.max;
     const float w = max.x - pos.x, h = max.y - pos.y;
+    // Clicks and taps are reported for every kind without capturing the
+    // mouse, so a Text or Image still lets a camera drag start on it.
+    if (interactive && pressed) {
+      if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+          mouse.x >= pos.x && mouse.x < max.x && mouse.y >= pos.y &&
+          mouse.y < max.y)
+        press(e.objectId);
+      if (fingers)
+        for (const auto &[id, f] : *fingers)
+          if (f.fresh && f.pos.x >= pos.x && f.pos.x < max.x &&
+              f.pos.y >= pos.y && f.pos.y < max.y)
+            press(e.objectId);
+    }
     // Touch ownership: new fingers on an interactive element are claimed.
     const UiFinger *finger = nullptr;
     if (fingers && interactive &&
@@ -364,20 +408,42 @@ std::string DrawGameUI(
       else
         draw->AddRectFilled(pos, max, bg);
     } else {
-      if (e.background.w > 0.0f)
+      // Buttons may use a sprite instead of the background colour; it is
+      // darkened while held.
+      const ImTextureID sprite = e.kind == UiKind::Button && imageTexture &&
+                                         !e.imagePath.empty()
+          ? imageTexture(e.imagePath) : ImTextureID{};
+      if (sprite) {
+        const bool held = interactive &&
+            (finger || (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                        mouse.x >= pos.x && mouse.x < max.x &&
+                        mouse.y >= pos.y && mouse.y < max.y));
+        const float shade = held ? 0.7f : 1.0f;
+        draw->AddImage(sprite, pos, max, ImVec2(0, 0), ImVec2(1, 1),
+                       ImGui::ColorConvertFloat4ToU32(ImVec4(
+                           shade, shade, shade, source.visible ? 1.0f : 0.35f)));
+      } else if (e.background.w > 0.0f) {
         draw->AddRectFilled(pos, max, bg, 6.0f * scale);
+      }
       const std::string &label = paused && e.action == "TogglePause"
           ? std::string("Resume") : e.text;
       if (!label.empty()) {
         const float fontSize = std::max(1.0f, e.fontSize * scale);
+        const float pad = 8.0f * scale;
+        // Text wraps inside the element (dialog lines); a single line stays
+        // vertically centred, several start at the top.
+        const float wrap = e.kind == UiKind::Text
+            ? std::max(1.0f, w - 2.0f * pad) : 0.0f;
         const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
-            fontSize, FLT_MAX, 0.0f, label.c_str());
+            fontSize, FLT_MAX, wrap, label.c_str());
+        const bool multiline = textSize.y > fontSize * 1.5f;
         const ImVec2 textPos = e.kind == UiKind::Button
             ? ImVec2(pos.x + (w - textSize.x) * 0.5f,
                      pos.y + (h - textSize.y) * 0.5f)
-            : ImVec2(pos.x + 8.0f * scale,
-                     pos.y + (h - textSize.y) * 0.5f);
-        draw->AddText(ImGui::GetFont(), fontSize, textPos, color, label.c_str());
+            : ImVec2(pos.x + pad,
+                     multiline ? pos.y + pad : pos.y + (h - textSize.y) * 0.5f);
+        draw->AddText(ImGui::GetFont(), fontSize, textPos, color,
+                      label.c_str(), nullptr, wrap);
       }
     }
     if (interactive && e.kind == UiKind::Button) {

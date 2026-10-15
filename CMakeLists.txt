@@ -212,7 +212,18 @@ target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
 add_executable(TestTransformMath test/TestTransformMath.cpp)
 target_link_libraries(TestTransformMath PRIVATE glm::glm)
 
+add_executable(TestPMXLoader test/TestPMXLoader.cpp
+    src/cpp/core_engine/PMXLoader.cpp)
+target_include_directories(TestPMXLoader PRIVATE ${CMAKE_SOURCE_DIR}/include
+    ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
+target_link_libraries(TestPMXLoader PRIVATE glm::glm)
+
 add_executable(TestDeviceMonitor test/TestDeviceMonitor.cpp)
+
+add_executable(TestSkeletalAnimation test/TestSkeletalAnimation.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp)
+target_include_directories(TestSkeletalAnimation PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm)
 
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
@@ -260,6 +271,8 @@ target_compile_definitions(TestGameBuild PRIVATE ILMEEE_SCRIPT_COMPILER="${CMAKE
 # for Video Player components and non-wav/ogg audio (the Android build of
 # the same sources goes without).
 add_executable(IlmeeePlayer
+    src/cpp/core_engine/SkeletalAnimation.cpp
+    src/cpp/core_engine/AnimationRuntime.cpp
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
     src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/player/PlayerMain.cpp
@@ -267,6 +280,7 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/VideoDecoder.cpp
     src/cpp/core_engine/MediaSystem.cpp
     src/cpp/core_engine/GameUI.cpp
+    src/cpp/core_engine/DialogSystem.cpp
     src/cpp/core_engine/MovementScript.cpp
     src/cpp/core_engine/MovementRuntime.cpp
     src/cpp/core_engine/UserMovementScripts.cpp

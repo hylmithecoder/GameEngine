@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.8: round trip, reading
+// .ilmeeescene v1.3–v1.12: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -28,6 +28,9 @@ static int g_checks = 0;
 // Bytes the v1.8 media fields add to an entity with empty clips:
 // audio u32+str+f32+u32+f32+f32, video u32+str+u32+f32+i32.
 static constexpr int kMediaBytes = 22 + 18;
+static constexpr int kNativeBytes = 8 + 4; // objectId + zero scripts
+static constexpr int kDialogBytes = 4 + 4 + 32 + 2 + 2 + 16;
+static constexpr int kAnimationBytes = 4 + 2 + 4 + 4;
 
 static SceneEntity Entity(const char *name, int parent) {
   SceneEntity e;
@@ -217,7 +220,7 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 7;
     bytes[7] = 0;
-    bytes.erase(bytes.end() - 16 - kMediaBytes, bytes.end() - 16);
+    bytes.erase(bytes.end() - 16 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -249,7 +252,7 @@ int main() {
     bytes[7] = 0;
     // Drop v1.4 environment, v1.3 parent, v1.6 movement, v1.7 rig and v1.8
     // media.
-    bytes.resize(bytes.size() - 16 - 4 - 10 - 20 - kMediaBytes);
+    bytes.resize(bytes.size() - 16 - 4 - 10 - 20 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -267,7 +270,7 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 5;
     bytes[7] = 0;
-    bytes.erase(bytes.end() - 16 - 10 - 20 - kMediaBytes, bytes.end() - 16);
+    bytes.erase(bytes.end() - 16 - 10 - 20 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -286,7 +289,7 @@ int main() {
     std::vector<char> bytes = ReadAll(file);
     bytes[6] = 6;
     bytes[7] = 0;
-    bytes.erase(bytes.end() - 16 - 20 - kMediaBytes, bytes.end() - 16);
+    bytes.erase(bytes.end() - 16 - 20 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     IlmeeeScene in;
     CHECK(LoadScene(file.string(), in));
@@ -345,6 +348,94 @@ int main() {
     scene.entities[1].objectId = 42;
     CHECK(SaveScene(file.string(), scene)); CHECK(LoadScene(file.string(), loaded));
     CHECK(loaded.entities[1].objectId != 42 && loaded.entities[1].objectId != 0);
+  }
+  // v1.11: UI visibility and the Dialog component.
+  {
+    IlmeeeScene scene;
+    scene.entities = {Entity("Npc", -1), Entity("Box", -1)};
+    DialogComponent &d = scene.entities[0].dialog;
+    d.enabled = true;
+    d.box = 11;
+    d.text = 22;
+    d.speaker = 33;
+    d.prompt = 44;
+    d.lines = "Sakura: Halo!\n: angin";
+    d.file = "assets/dialog/sakura.txt";
+    d.trigger = DialogTrigger::ScriptOnly;
+    d.range = 4.5f;
+    d.charsPerSecond = 0;
+    d.repeatable = false;
+    d.freezePlayer = true;
+    scene.entities[1].kind = PrimitiveKind::UiText;
+    scene.entities[1].uiVisible = false;
+    CHECK(SaveScene(file.string(), scene));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    const DialogComponent &l = in.entities[0].dialog;
+    CHECK(l.enabled && l.box == 11 && l.text == 22 && l.speaker == 33 &&
+          l.prompt == 44);
+    CHECK(l.lines == d.lines && l.file == d.file);
+    CHECK(l.trigger == DialogTrigger::ScriptOnly && l.range == 4.5f &&
+          l.charsPerSecond == 0 && !l.repeatable && l.freezePlayer);
+    CHECK(in.entities[0].uiVisible && !in.entities[1].uiVisible);
+    CHECK(!in.entities[1].dialog.enabled);
+
+    // A v1.10 file (no v1.11 block) loads with defaults.
+    IlmeeeScene old;
+    old.entities = {Entity("Old", -1)};
+    CHECK(SaveScene(file.string(), old));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = 10;
+    bytes[7] = 0;
+    // uiVisible + dialog with empty strings: 4 + 4 + 32 + 2 + 2 + 4*4.
+    constexpr int kV11Bytes = 4 + 4 + 32 + 2 + 2 + 16;
+    bytes.erase(bytes.end() - 16 - kV11Bytes - kAnimationBytes, bytes.end() - 16);
+    WriteAll(file, bytes);
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1 && in.entities[0].uiVisible &&
+          !in.entities[0].dialog.enabled);
+    CHECK(in.backgroundColor == IlmeeeScene().backgroundColor);
+  }
+
+  // v1.12: animation binding and defaults when loading a real v1.11 layout.
+  {
+    IlmeeeScene scene;
+    scene.entities = {Entity("Animated", -1), Entity("Static", -1)};
+    scene.entities[0].animation = {true, "assets/animations/idle.ilmeeeanim", 0.75f, false};
+    CHECK(SaveScene(file.string(), scene));
+    IlmeeeScene loaded;
+    CHECK(LoadScene(file.string(), loaded));
+    const auto &a = loaded.entities[0].animation;
+    CHECK(a.enabled && a.clip == scene.entities[0].animation.clip);
+    CHECK(a.speed == 0.75f && !a.loop);
+    CHECK(!loaded.entities[1].animation.enabled);
+    scene.entities = {Entity("Legacy", -1)};
+    CHECK(SaveScene(file.string(), scene));
+    auto bytes = ReadAll(file);
+    bytes[6] = 11; bytes[7] = 0;
+    bytes.erase(bytes.end() - 16 - kAnimationBytes, bytes.end() - 16);
+    WriteAll(file, bytes);
+    CHECK(LoadScene(file.string(), loaded));
+    CHECK(!loaded.entities[0].animation.enabled && loaded.entities[0].animation.clip.empty());
+    CHECK(loaded.backgroundColor == scene.backgroundColor);
+  }
+
+  // Dialog script parsing and UTF-8 typing.
+  {
+    const auto lines = ParseDialogScript(
+        "# intro\r\nSakura: Halo!\n\n  Apa kabar?  \n: Angin bertiup.\n"
+        "Jam 10:30 sudah lewat\nBaris\\npanjang\nKosong: \n", "Npc");
+    CHECK(lines.size() == 6);
+    CHECK(lines[0].speaker == "Sakura" && lines[0].text == "Halo!");
+    CHECK(lines[1].speaker == "Npc" && lines[1].text == "Apa kabar?");
+    CHECK(lines[2].speaker.empty() && lines[2].text == "Angin bertiup.");
+    CHECK(lines[3].speaker == "Npc" && lines[3].text == "Jam 10:30 sudah lewat");
+    CHECK(lines[4].text == "Baris\npanjang");
+    // "Name:" without text after it is plain text, not an empty line.
+    CHECK(lines[5].speaker == "Npc" && lines[5].text == "Kosong:");
+    CHECK(Utf8Length("héllo") == 5);
+    CHECK(Utf8Prefix("héllo", 2) == "hé" && Utf8Prefix("héllo", 0).empty());
+    CHECK(Utf8Prefix("héllo", 99) == "héllo");
   }
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

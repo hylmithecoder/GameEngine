@@ -273,10 +273,15 @@ public:
           e.externalPath = Relocate(e.externalPath, true);
         for (SurfaceTexture &t : e.surfaceTextures)
           t.texturePath = Relocate(t.texturePath, false);
-        if (e.kind == PrimitiveKind::UiImage && !e.uiImagePath.empty())
+        if ((e.kind == PrimitiveKind::UiImage ||
+             e.kind == PrimitiveKind::UiButton) && !e.uiImagePath.empty())
           e.uiImagePath = Relocate(e.uiImagePath, false);
         if (!e.audio.clip.empty())
           e.audio.clip = Relocate(e.audio.clip, false, "audio");
+        if (!e.dialog.file.empty())
+          e.dialog.file = Relocate(e.dialog.file, false, "dialog");
+        if (!e.animation.clip.empty())
+          e.animation.clip = Relocate(e.animation.clip, false, "animations");
         if (!e.video.clip.empty()) {
           const fs::path original = Canonical(
               fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)

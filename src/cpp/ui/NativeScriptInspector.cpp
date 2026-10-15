@@ -77,6 +77,8 @@ void MainWindow::RenderNativeScriptInspector(size_t meshIndex) {
             for (const auto &mesh : sceneRenderer->meshes3d)
               if (mesh.objectId == id)
                 return mesh.displayName;
+            if (const auto *element = ilmeee::FindUiElement(gameUi, id))
+              return element->id + " (UI)";
             return "Missing GameObject";
           };
           if (BeginCombo(value.name.c_str(), label(value.object).c_str())) {
@@ -92,6 +94,19 @@ void MainWindow::RenderNativeScriptInspector(size_t meshIndex) {
                 changed = true;
               }
               PopID();
+            }
+            // Canvas elements, for UiGameObject fields.
+            if (hasGameUiCanvas && !gameUi.elements.empty()) {
+              SeparatorText("UI");
+              for (const auto &element : gameUi.elements) {
+                PushID(std::to_string(element.objectId).c_str());
+                if (Selectable((element.id + " (UI)").c_str(),
+                               value.object == element.objectId)) {
+                  value.object = element.objectId;
+                  changed = true;
+                }
+                PopID();
+              }
             }
             EndCombo();
           }

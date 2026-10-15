@@ -1,4 +1,5 @@
 #include "../../../include/ui/MainWindow.hpp"
+#include "../../../include/ui/AnimationEditor.hpp"
 #include "../../../include/audio/FFmpegWrapper.hpp"
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
@@ -111,6 +112,7 @@ void MainWindow::OnInit() {
     }
   };
   nativeScriptContext.log = nativeScripts.log;
+  dialogSystem.log = nativeScripts.log;
   projectHandler.onScriptCreated = [this] { nativeScripts.CompileAll(); };
 
   set_window_icon();
@@ -190,18 +192,42 @@ void MainWindow::OnUpdate(float deltaTime) {
   // restores the transforms (camera included) on Stop.
   if (gameWasStopped && !builder.IsStopped()) {
     movementSystem.Reset();
+    if (sceneRenderer) sceneRenderer->ResetAnimations();
+    // Scripts and dialogs change the Canvas during Play; Stop restores it.
+    gameUiBeforePlay = gameUi;
     nativeScriptContext.renderer = sceneRenderer;
     nativeScriptContext.input = &gameMovementInput;
     nativeScriptContext.media = &media;
-    if (sceneRenderer) nativeScripts.Start(ilmeee::ScriptSceneHost(nativeScriptContext),
-                                          ilmeee::ScriptSceneOwners(*sceneRenderer));
+    nativeScriptContext.ui = &gameUi;
+    nativeScriptContext.dialog = &dialogSystem;
+    nativeScriptContext.previousKeys = 0;
+    if (sceneRenderer) {
+      dialogSystem.SetProjectRoot(projectHandler.projectPath);
+      dialogSystem.Start(*sceneRenderer, gameUi);
+      nativeScripts.Start(ilmeee::ScriptSceneHost(nativeScriptContext),
+                          ilmeee::ScriptSceneOwners(*sceneRenderer));
+    }
   }
-  if (!gameWasStopped && builder.IsStopped()) nativeScripts.Stop();
+  if (!gameWasStopped && builder.IsStopped()) {
+    if (sceneRenderer) sceneRenderer->ResetAnimations();
+    nativeScripts.Stop();
+    dialogSystem.Stop();
+    gameUi = gameUiBeforePlay;
+  }
   gameWasStopped = builder.IsStopped();
-  if (builder.IsPlaying() && sceneRenderer)
-    movementSystem.Update(*sceneRenderer, gameMovementInput,
+  if (builder.IsPlaying() && sceneRenderer) {
+    sceneRenderer->UpdateAnimations(std::max(0.0f, deltaTime));
+    movementSystem.Update(*sceneRenderer,
+                          dialogSystem.FreezesPlayer()
+                              ? ilmeee::FrozenMovementInput(gameMovementInput)
+                              : gameMovementInput,
                           std::max(0.0f, deltaTime));
-  if (builder.IsPlaying()) nativeScripts.Update(deltaTime);
+    dialogSystem.Update(*sceneRenderer, gameUi, gameMovementInput, deltaTime);
+  }
+  if (builder.IsPlaying()) {
+    nativeScripts.Update(deltaTime);
+    ilmeee::ScriptSceneEndFrame(nativeScriptContext);
+  }
   if (sceneRenderer) {
     media.SetProjectRoot(projectHandler.projectPath);
     const auto state = builder.IsStopped()  ? ilmeee::MediaSystem::State::Stopped
@@ -266,6 +292,7 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
   if (showMainView)
     RenderMainViewWindow();
   RenderSceneWindow(); // Also owns the independent Game tab.
+  if (showAnimation) RenderAnimationWindow();
   if (showHierarchy)
     RenderHierarchyWindow();
   if (showExplorer) {
@@ -293,6 +320,7 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 }
 
 void MainWindow::OnCleanup() {
+  animationEditor.reset(); // preview owns Vulkan resources; release before device shutdown
   ::Log("MainWindow::OnCleanup");
   projectHandler.StopFileWatcher();
   nativeScripts.Stop();

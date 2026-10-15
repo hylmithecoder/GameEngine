@@ -19,6 +19,7 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
   // entity index -> mesh index (an entity that fails to load shifts all
   // later meshes, so parents are linked through this at the end)
   std::vector<int> loadedAs(scene.entities.size(), -1);
+  renderer.SetAnimationProjectRoot(projectRoot.string());
   for (size_t ei = 0; ei < scene.entities.size(); ++ei) {
     const SceneEntity &e = scene.entities[ei];
     if (e.kind == PrimitiveKind::Canvas || e.kind == PrimitiveKind::UiText ||
@@ -92,6 +93,8 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     renderer.meshes3d[idx].movementRig = e.movementRig;
     renderer.meshes3d[idx].audio = e.audio;
     renderer.meshes3d[idx].video = e.video;
+    renderer.meshes3d[idx].dialog = e.dialog;
+    renderer.meshes3d[idx].animation = e.animation;
     // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
     // so hover-to-source lands users on the deserializer.
     renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);

@@ -31,16 +31,21 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerProject.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/ScriptDialogs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/NativeScriptInspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/DialogInspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/AnimationEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/GameBuildPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/ViewportGizmo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SkeletalAnimation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationRuntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/VideoDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MediaSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneLoader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/GameUI.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/DialogSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementScript.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementRuntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/UserMovementScripts.cpp

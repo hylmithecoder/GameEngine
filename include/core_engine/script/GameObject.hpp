@@ -3,7 +3,7 @@
 #include <string>
 
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 2;
+inline constexpr uint32_t kApiVersion = 3;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {
@@ -26,6 +26,8 @@ enum class ObjectKind : uint32_t {
   Camera = 1u << 1,
   Audio = 1u << 2,
   Video = 1u << 3,
+  Ui = 1u << 4,     // element of the game Canvas (API 3)
+  Dialog = 1u << 5, // Dialog component (API 3)
 };
 // Component data reached through HostApi::get*/set*. Append only: the
 // values are part of the script ABI.
@@ -56,8 +58,38 @@ enum class Prop : uint32_t {
   CameraOrthoSize,    // float
   CameraNear,         // float
   CameraFar,          // float
+  // API 3: Canvas UI elements.
+  UiText,            // string
+  UiImage,           // string, project-relative path
+  UiAction,          // string, button action
+  UiVisible,         // bool
+  UiPosition,        // Vec3: x, y in reference pixels from the anchor
+  UiSize,            // Vec3: width, height in reference pixels
+  UiFontSize,        // float
+  UiColor,           // Vec3, 0..1
+  UiAlpha,           // float, 0..1
+  UiBackground,      // Vec3, 0..1
+  UiBackgroundAlpha, // float, 0..1
+  UiClicked,         // bool, read-only: pressed since the last Update
+  // API 3: Dialog component.
+  DialogEnabled,   // bool
+  DialogScript,    // string, inline dialog text
+  DialogTalking,   // bool, read-only
+  DialogLineIndex, // float, read-only: current line, -1 when not talking
+  DialogRange,     // float
+  DialogSpeed,     // float, characters per second (0 = instant)
+  DialogSpeaker,   // string, read-only: speaker of the current line
+  DialogLine,      // string, read-only: full text of the current line
 };
-enum class Command : uint32_t { AudioPlay, AudioStop, VideoPlay, VideoStop };
+enum class Command : uint32_t {
+  AudioPlay,
+  AudioStop,
+  VideoPlay,
+  VideoStop,
+  DialogStart, // API 3
+  DialogNext,
+  DialogStop,
+};
 // Only the editor/player calls these callbacks, on its scene thread.
 struct HostApi {
   void *context = nullptr;
@@ -80,6 +112,8 @@ struct HostApi {
   const char *(*getString)(void *, uint64_t, Prop) = nullptr;
   bool (*setString)(void *, uint64_t, Prop, const char *) = nullptr;
   bool (*command)(void *, uint64_t, Command) = nullptr;
+  // API 3: true only on the frame the key went down.
+  bool (*keyPressed)(void *, const char *) = nullptr;
 };
 class GameObject {
 public:

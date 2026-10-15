@@ -55,7 +55,11 @@ is available only while the editor is running; a port collision stops startup
 with an error. It binds to loopback and checks the HTTP Host and Origin.
 
 Available tools are `get_project_info`, `list_scene_objects`, `get_object`,
-`create_object`, `set_transform`, and `save_scene`. Object indices are relative
+`create_object`, `set_transform`, `save_scene`, `get_device_stats`,
+`get_game_log`, and for dialogs/UI `list_ui_elements`, `set_ui_element`,
+`get_dialog`, `set_dialog` (add/edit a Dialog component, optionally creating
+its UI) and `start_dialog` (Play mode, for testing). UI elements are addressed
+by name. Object indices are relative
 to the current scene and may change after structural edits. Edits are blocked
 during Play mode and are included in editor Undo/Redo history. The endpoint
 supports MCP protocol revisions `2026-07-28` and `2025-11-25`.
@@ -205,6 +209,33 @@ with Canvas → Create Child → **Joystick** and link them as *Move Joystick* /
 *Look Joystick*. Keyboard (WASD, Space, arrows, right-drag look) and the sticks
 stay in sync; on a phone both sticks work at once and swiping the open screen
 turns the camera.
+
+## PMX Animation Editor
+
+Open **Windows > Animation**, or select a PMX character and use **Inspector >
+Mesh > Open Animation Editor**. The dockable Animation tab has its own model
+preview, orbit camera (right mouse drag), zoom (wheel), bone search and optional
+bone overlay. Previewing a clip does not move the editable Scene.
+
+Use **Create Breathing Idle** for an editable starting loop, or **New Clip** to
+author a pose sequence. Select a bone, scrub the timeline, and edit Position or
+Rotation to add a key at the playhead. **Set Key**, **Rest Key**, **Delete Key**,
+Undo and Redo work on the clip. Play/Pause/Stop, loop, speed, duration and FPS
+control preview playback. Bone rotations interpolate as quaternions.
+
+Clips are `.ilmeeeanim` JSON assets inside the project. **Save** writes the clip;
+**Open Clip** (or dropping an animation asset onto its path) reopens its keys.
+**Save + Assign to Character** saves the clip and scene binding. Game Play and
+built players use that binding; Inspector exposes enabled, loop and speed.
+Stop restores the bind pose. Game exports include the referenced clip.
+
+This first version supports FK bone animation with CPU linear blend skinning.
+SDEF/QDEF vertices use their linear weights; PMX IK, grant transforms, morphs,
+hair/clothing physics, VMD import and blending between clips are not implemented.
+Animation playback does not replace the model's material shader.
+
+Scene format v1.12 adds the animation binding and reads older scenes. Rebuild
+players before exporting v1.12 scenes, including the Android native player.
 
 ## Android
 

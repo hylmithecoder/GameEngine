@@ -94,6 +94,8 @@ MovementInput ReadKeyboardMouseInput() {
   input.left = IsKeyDown(ImGuiKey_A);
   input.right = IsKeyDown(ImGuiKey_D);
   input.jump = IsKeyDown(ImGuiKey_Space);
+  input.interact = IsKeyDown(ImGuiKey_E);
+  input.submit = IsKeyDown(ImGuiKey_Enter) || IsKeyDown(ImGuiKey_KeypadEnter);
   input.look.x = (IsKeyDown(ImGuiKey_RightArrow) ? 1.0f : 0.0f) -
                  (IsKeyDown(ImGuiKey_LeftArrow) ? 1.0f : 0.0f);
   input.look.y = (IsKeyDown(ImGuiKey_UpArrow) ? 1.0f : 0.0f) -

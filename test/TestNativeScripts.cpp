@@ -26,6 +26,9 @@ struct World {
   std::vector<std::string> log;
   float volume = 1;
   int played = 0;
+  std::string uiText;
+  bool uiVisible = true, clicked = false, ePressed = false;
+  int dialogStarts = 0;
 };
 int main(int argc, char **argv) {
   const auto project =
@@ -236,6 +239,93 @@ public:
   CHECK(placed.x == 4 && placed.y == 1 && placed.z == 6);
   CHECK(world.volume == 0.5f && world.played == 1);
   CHECK(world.log.size() == 1 && world.log.front() == "[WARNING] not a light");
+  runtime.Stop();
+  // API 3: UI elements, Dialog commands and IsKeyPressed.
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Talker", error));
+  Write(project / "assets/scripts/Talker.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Talker : public Component {
+public:
+  ObjectRef<UiGameObject> label;
+  ObjectRef<DialogGameObject> npc;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Label", label);
+    p.Field("Npc", npc);
+  }
+  void Start() override {
+    if (label.IsValid() && label.Get().SetText("Halo")) label.Get().Hide();
+    if (!npc.Get().As<UiGameObject>().IsValid() && npc.IsValid())
+      npc.Get().StartDialog();
+  }
+  void Update(float) override {
+    if (IsKeyPressed("E")) Log("pressed");
+    if (label.Get().WasClicked()) Log("clicked");
+  }
+};
+)cpp");
+  Write(project / "assets/scripts/Talker.cpp", "#include \"Talker.hpp\"\n");
+  const auto talker =
+      ilmeee::CompileNativeScript(options, "assets/scripts/Talker.cpp");
+  if (!talker.ok)
+    std::fprintf(stderr, "%s\n", talker.diagnostics.c_str());
+  CHECK(talker.ok);
+  CHECK(runtime.Load(talker, error));
+  ilmeee::NativeScriptBinding talkerBinding{"assets/scripts/Talker.cpp",
+                                            "Talker", true, {}};
+  talkerBinding.values = runtime.Properties(talkerBinding);
+  CHECK(talkerBinding.values.size() == 2);
+  talkerBinding.values[0].object = 100;
+  talkerBinding.values[1].object = 200;
+  world.objects[100] = {};
+  world.objects[200] = {};
+  world.log.clear();
+  host.kinds = [](void *, uint64_t id) -> uint32_t {
+    using ilmeee::script::ObjectKind;
+    return id == 100 ? static_cast<uint32_t>(ObjectKind::Ui)
+           : id == 200 ? static_cast<uint32_t>(ObjectKind::Dialog)
+                       : 0;
+  };
+  host.setString = [](void *ctx, uint64_t id, ilmeee::script::Prop prop,
+                      const char *value) {
+    if (id != 100 || prop != ilmeee::script::Prop::UiText)
+      return false;
+    static_cast<World *>(ctx)->uiText = value;
+    return true;
+  };
+  host.setBool = [](void *ctx, uint64_t id, ilmeee::script::Prop prop,
+                    bool value) {
+    if (id != 100 || prop != ilmeee::script::Prop::UiVisible)
+      return false;
+    static_cast<World *>(ctx)->uiVisible = value;
+    return true;
+  };
+  host.getBool = [](void *ctx, uint64_t id, ilmeee::script::Prop prop,
+                    bool *out) {
+    if (id != 100 || prop != ilmeee::script::Prop::UiClicked)
+      return false;
+    *out = static_cast<World *>(ctx)->clicked;
+    return true;
+  };
+  host.command = [](void *ctx, uint64_t id, ilmeee::script::Command command) {
+    if (id != 200 || command != ilmeee::script::Command::DialogStart)
+      return false;
+    ++static_cast<World *>(ctx)->dialogStarts;
+    return true;
+  };
+  host.keyPressed = [](void *ctx, const char *key) {
+    return std::string(key) == "E" && static_cast<World *>(ctx)->ePressed;
+  };
+  std::vector<ilmeee::NativeScriptBinding> talkerBindings{talkerBinding};
+  runtime.Start(host, {{42, &talkerBindings}});
+  CHECK(world.uiText == "Halo" && !world.uiVisible);
+  CHECK(world.dialogStarts == 1);
+  runtime.Update(0.1f);
+  CHECK(world.log.empty());
+  world.ePressed = world.clicked = true;
+  runtime.Update(0.1f);
+  CHECK(world.log.size() == 2 && world.log[0] == "pressed" &&
+        world.log[1] == "clicked");
   runtime.Stop();
   CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "InvalidClass",
                                   error));

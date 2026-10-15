@@ -34,6 +34,10 @@ public:
   bool IsKeyDown(const char *key) const {
     return host_ && host_->keyDown && host_->keyDown(host_->context, key);
   }
+  // Only on the first frame the key is held (menus, dialog, interaction).
+  bool IsKeyPressed(const char *key) const {
+    return host_ && host_->keyPressed && host_->keyPressed(host_->context, key);
+  }
   void Log(const std::string &message) const {
     if (host_ && host_->log)
       host_->log(host_->context, message.c_str());

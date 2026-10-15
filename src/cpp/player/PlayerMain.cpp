@@ -21,6 +21,7 @@
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/NativeScriptScene.hpp"
+#include "../../../include/core_engine/DialogSystem.hpp"
 #include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
@@ -165,7 +166,23 @@ protected:
         ilmeee::InstantiateScene(*renderer_, scene, root_);
     media_.SetProjectRoot(root_);
     native_.log = [](const std::string &line) { SDL_Log("%s", line.c_str()); };
-    nativeContext_ = {renderer_.get(), &input_, &media_, native_.log};
+    nativeContext_ = {renderer_.get(), &input_, &media_, native_.log,
+                      &gameUi_, &dialog_};
+    // The Canvas is loaded before scripts so their Start() can use it.
+    gameUi_ = ilmeee::GameUI{};
+    if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
+      // Older projects stored the canvas as a separate asset.
+      const fs::path uiPath = root_ / "assets/ui/main.json";
+      std::error_code uiEc;
+      if (fs::exists(uiPath, uiEc)) {
+        std::string uiError;
+        if (!ilmeee::LoadGameUI(uiPath.string(), gameUi_, &uiError))
+          ::Log("Game UI: " + uiError, Debug::LogLevel::WARNING);
+      }
+    }
+    dialog_.log = native_.log;
+    dialog_.SetProjectRoot(root_);
+    dialog_.Start(*renderer_, gameUi_);
     try {
       std::ifstream modulesFile(root_ / "native-scripts.json");
       if (modulesFile) {
@@ -210,18 +227,6 @@ protected:
     if (!renderer_->HasPlayerCamera()) {
       error_ = "This scene has no camera. Add a Camera in the editor.";
       ::Log(error_, Debug::LogLevel::ERROR);
-    }
-
-    gameUi_ = ilmeee::GameUI{};
-    if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
-      // Older projects stored the canvas as a separate asset.
-      const fs::path uiPath = root_ / "assets/ui/main.json";
-      std::error_code uiEc;
-      if (fs::exists(uiPath, uiEc)) {
-        std::string uiError;
-        if (!ilmeee::LoadGameUI(uiPath.string(), gameUi_, &uiError))
-          ::Log("Game UI: " + uiError, Debug::LogLevel::WARNING);
-      }
     }
 
     if (manifest_.fullscreen)
@@ -353,9 +358,19 @@ protected:
       SDL_SetWindowFullscreen(window, !fs);
     }
     // Input gathered while drawing the previous frame (keyboard + sticks).
-    if (renderer_ && !paused_ && error_.empty())
-      movement_.Update(*renderer_, input_, deltaTime);
-    if (!paused_ && error_.empty()) native_.Update(deltaTime);
+    if (renderer_ && !paused_ && error_.empty()) {
+      renderer_->UpdateAnimations(std::max(0.0f, deltaTime));
+      movement_.Update(*renderer_,
+                       dialog_.FreezesPlayer()
+                           ? ilmeee::FrozenMovementInput(input_)
+                           : input_,
+                       deltaTime);
+      dialog_.Update(*renderer_, gameUi_, input_, deltaTime);
+    }
+    if (!paused_ && error_.empty()) {
+      native_.Update(deltaTime);
+      ilmeee::ScriptSceneEndFrame(nativeContext_);
+    }
     // A game is always playing; sounds and videos start on the first frame.
     const auto mediaStart = FrameStats::Clock::now();
     if (renderer_ && error_.empty())
@@ -411,10 +426,14 @@ protected:
         // Same flow as the editor's Game tab: sticks mirror the keyboard,
         // a held stick overrides it.
         ilmeee::EchoKeyboardOnJoysticks(*renderer_, input_);
-        if (ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true,
-                               paused_, &input_.axes, &fingers_) ==
-            "TogglePause")
+        const std::string action =
+            ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true,
+                               paused_, &input_.axes, &fingers_,
+                               &input_.uiPressed);
+        if (action == "TogglePause")
           paused_ = !paused_;
+        else if (action == "Interact" && !paused_)
+          input_.interact = true;
         if (paused_)
           GetWindowDrawList()->AddText(
               ImVec2(imagePos.x + vp->Size.x * 0.5f - 35,
@@ -469,6 +488,7 @@ private:
   fs::path root_;
   GameManifest manifest_;
   ilmeee::GameUI gameUi_;
+  ilmeee::DialogSystem dialog_;
   bool paused_ = false;
   ilmeee::MovementSystem movement_;
   ilmeee::NativeScripts native_;

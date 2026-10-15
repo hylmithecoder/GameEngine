@@ -1927,6 +1927,16 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
   mesh.aabbMax = mx;
   mesh.vertexCount = (uint32_t)outVerts.size();
   mesh.bones = std::move(pmxModel.bones);
+  mesh.skinVertices = std::move(pmxModel.vertices);
+  for (size_t i = 0; i < mesh.bones.size(); ++i) {
+    const auto &bone = mesh.bones[i];
+    // PMX bind positions use the same left-handed space as its vertices.
+    std::string name = !bone.nameJP.empty() ? bone.nameJP : bone.nameEN;
+    if (name.empty()) name = "Bone " + std::to_string(i);
+    mesh.skeleton.push_back({name, bone.parentIndex,
+        glm::vec3(bone.position.x, bone.position.y, -bone.position.z)});
+    mesh.posedBones.push_back(mesh.skeleton.back().bindPosition);
+  }
 
   // Auto-fit: center + scale to ~1.5 units
   glm::vec3 center = (mn + mx) * 0.5f;
@@ -3321,6 +3331,8 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
 
     entity.audio = mesh.audio;
     entity.video = mesh.video;
+    entity.dialog = mesh.dialog;
+    entity.animation = mesh.animation;
     entity.isAudioEmitter = mesh.isAudioEmitter;
 
     entity.debugSrcFile = mesh.debugSrcFile;
@@ -3424,6 +3436,8 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.velocity = entity.velocity;
     mesh.audio = entity.audio;
     mesh.video = entity.video;
+    mesh.dialog = entity.dialog;
+    mesh.animation = entity.animation;
     mesh.movable = entity.movable;
     mesh.objectId = entity.objectId ? entity.objectId : ilmeee::NewObjectId();
     mesh.scripts = entity.scripts;

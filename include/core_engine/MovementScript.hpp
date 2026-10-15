@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 #include <unordered_map>
@@ -17,12 +18,16 @@ struct MovementInput {
   bool left = false;
   bool right = false;
   bool jump = false;
+  bool interact = false; // E, or a UI button with action "Interact"
+  bool submit = false;   // Enter
   // Keyboard look axis (arrow keys), -1..1, x = turn right, y = look up.
   glm::vec2 look{0.0f};
   // Mouse look this frame in pixels (right button drag). Consumed once.
   glm::vec2 lookDelta{0.0f};
   // On-screen joystick values keyed by UI element id, filled by DrawGameUI.
   std::unordered_map<std::string, glm::vec2> axes;
+  // objectIds of UI elements clicked/tapped this frame, filled by DrawGameUI.
+  std::vector<uint64_t> uiPressed;
 };
 
 // How the camera referenced by a movable object follows it.
@@ -81,7 +86,7 @@ void RegisterUserMovementScripts();
 // WASD as an analog axis (x = right, y = forward), length <= 1.
 glm::vec2 KeyboardMoveAxis(const MovementInput &input);
 
-// Keyboard (WASD, arrows, Space) and right-drag mouse look read through
+// Keyboard (WASD, arrows, Space, E, Enter) and right-drag mouse look read through
 // ImGui. Call only while the game view owns input.
 MovementInput ReadKeyboardMouseInput();
 
