@@ -114,6 +114,12 @@ int main() {
   tv.video.enabled = true;
   tv.video.clip = "assets/videos/intro.mp4";
   scene.entities.push_back(tv);
+  SceneEntity worldText;
+  worldText.name = "NPC Name";
+  worldText.kind = PrimitiveKind::WorldText;
+  worldText.parent = 0;
+  worldText.worldText.text = "Wise";
+  scene.entities.push_back(worldText);
   fs::create_directories(project / "scenes");
   CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
 
@@ -121,6 +127,7 @@ int main() {
   Write(player, "#!/bin/sh\necho player\n");
   const fs::path shaders = tmp / "engine/assets/shaders/vulkan";
   Write(shaders / "scene_mesh.vert.spv", "spv");
+  Write(tmp / "engine/assets/fonts/MiSansLatin-Regular.ttf", "font");
 
   GameBuildOptions o;
   o.projectRoot = project;
@@ -162,6 +169,7 @@ int main() {
     }
   }
   CHECK(fs::exists(out / "assets/shaders/vulkan/scene_mesh.vert.spv"));
+  CHECK(fs::exists(out / "assets/fonts/MiSansLatin-Regular.ttf"));
   CHECK(!fs::exists(out / "build")); // the build is not copied into itself
   CHECK(!fs::exists(out.string() + ".building"));
 
@@ -190,6 +198,8 @@ int main() {
   CHECK(built.entities[7].kind == PrimitiveKind::UiImage);
   CHECK(built.entities[7].parent == 6);
   CHECK(built.entities[7].uiImagePath == "assets/logo.png");
+  CHECK(built.entities.back().kind == PrimitiveKind::WorldText);
+  CHECK(built.entities.back().worldText.text == "Wise" && built.entities.back().parent == 0);
   // Every model/texture path is now relative and exists inside the game.
   auto present = [&](const std::string &p) {
     return fs::path(p).is_relative() && fs::exists(out / p);
@@ -388,7 +398,9 @@ int main() {
     CHECK(CreateScriptFiles(scripted / "assets/scripts", "ShipComponent", error));
     IlmeeeScene scene;
     scene.entities.push_back(SceneEntity{});
+    // A script attached directly to a Canvas Button is also shipped.
     scene.entities[0].objectId = 42;
+    scene.entities[0].kind = PrimitiveKind::UiButton;
     scene.entities[0].scripts.push_back({"assets/scripts/ShipComponent.cpp", "ShipComponent", true, {}});
     CHECK(SaveScene((scripted / "scenes/main.ilmeeescene").string(), scene));
     auto scriptOptions = o;

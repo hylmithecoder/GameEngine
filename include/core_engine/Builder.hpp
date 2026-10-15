@@ -41,6 +41,7 @@ private:
 
   // Snapshot storage: serialised mesh transforms before entering play.
   struct MeshSnapshot {
+    ilmeee::WorldTextComponent worldText;
     glm::vec3 position;
     glm::vec3 rotation;
     glm::vec3 scale;

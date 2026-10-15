@@ -69,6 +69,9 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     case PrimitiveKind::Screen:
       ok = renderer.LoadScreen(e.name);
       break;
+    case PrimitiveKind::WorldText:
+      ok = renderer.LoadWorldText(e.name, e.worldText);
+      break;
     default:
       break;
     }

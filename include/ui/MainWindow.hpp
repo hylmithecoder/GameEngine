@@ -85,6 +85,8 @@ private:
   std::string nativeScriptsProject;
   void RenderNativeScriptInspector(size_t meshIndex);
   void RenderNativeScriptAddMenu(size_t meshIndex);
+  void RenderNativeScriptBindings(std::vector<ilmeee::NativeScriptBinding> &bindings);
+  void RenderNativeScriptChoices(std::vector<ilmeee::NativeScriptBinding> &bindings);
   // Combo listing the Canvas elements; true when `objectId` changed.
   bool UiElementCombo(const char *label, uint64_t &objectId);
   void RenderDialogInspector(size_t meshIndex);

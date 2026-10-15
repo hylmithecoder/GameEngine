@@ -2,13 +2,15 @@
 #include <filesystem>
 
 void MainWindow::RenderNativeScriptAddMenu(size_t meshIndex) {
-  auto &mesh = sceneRenderer->meshes3d[meshIndex];
+  RenderNativeScriptChoices(sceneRenderer->meshes3d[meshIndex].scripts);
+}
+void MainWindow::RenderNativeScriptChoices(std::vector<ilmeee::NativeScriptBinding> &bindings) {
   const auto sources = nativeScripts.Sources();
   if (!sources.empty())
     TextDisabled("Project scripts");
   for (const auto &source : sources) {
     const bool attached = std::any_of(
-        mesh.scripts.begin(), mesh.scripts.end(),
+        bindings.begin(), bindings.end(),
         [&](const auto &binding) { return binding.source == source; });
     const bool ready = nativeScripts.Ready(source);
     PushID(source.c_str());
@@ -19,7 +21,7 @@ void MainWindow::RenderNativeScriptAddMenu(size_t meshIndex) {
       binding.source = source;
       binding.className = name;
       binding.values = nativeScripts.Properties(binding);
-      mesh.scripts.push_back(std::move(binding));
+      bindings.push_back(std::move(binding));
       RecordEditorHistory();
     }
     EndDisabled();
@@ -32,7 +34,9 @@ void MainWindow::RenderNativeScriptAddMenu(size_t meshIndex) {
 }
 
 void MainWindow::RenderNativeScriptInspector(size_t meshIndex) {
-  auto &bindings = sceneRenderer->meshes3d[meshIndex].scripts;
+  RenderNativeScriptBindings(sceneRenderer->meshes3d[meshIndex].scripts);
+}
+void MainWindow::RenderNativeScriptBindings(std::vector<ilmeee::NativeScriptBinding> &bindings) {
   for (size_t index = 0; index < bindings.size();) {
     auto &binding = bindings[index];
     PushID(static_cast<int>(index));
@@ -111,6 +115,15 @@ void MainWindow::RenderNativeScriptInspector(size_t meshIndex) {
             EndCombo();
           }
           if (BeginDragDropTarget()) {
+            if (const auto *payload = AcceptDragDropPayload("ILMEEE_UI")) {
+              if (payload->DataSize == sizeof(int)) {
+                const int target = *static_cast<const int *>(payload->Data);
+                if (target >= 0 && static_cast<size_t>(target) < gameUi.elements.size()) {
+                  value.object = gameUi.elements[target].objectId;
+                  changed = true;
+                }
+              }
+            }
             if (const auto *payload = AcceptDragDropPayload("ILMEEE_MESH")) {
               if (payload->DataSize == sizeof(int)) {
                 const int target = *static_cast<const int *>(payload->Data);

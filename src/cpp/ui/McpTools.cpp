@@ -229,6 +229,8 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
         kind = "plane";
       else if (path == "<primitive:screen>")
         kind = "screen";
+      else if (path == "<primitive:text>")
+        kind = "text_3d";
     }
     return {{"index", i},
             {"name", sceneRenderer->GetMesh3DName(i)},
@@ -380,6 +382,8 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
       kindIndex = 3;
     else if (kind == "camera")
       kindIndex = 4;
+    else if (kind == "text_3d")
+      kindIndex = 7;
     if (kindIndex < 0)
       return Error("Unsupported object kind");
     glm::vec3 position(0.0f);

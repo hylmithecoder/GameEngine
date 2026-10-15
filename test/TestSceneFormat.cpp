@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.12: round trip, reading
+// .ilmeeescene v1.3–v1.13: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -418,6 +418,58 @@ int main() {
     CHECK(LoadScene(file.string(), loaded));
     CHECK(!loaded.entities[0].animation.enabled && loaded.entities[0].animation.clip.empty());
     CHECK(loaded.backgroundColor == scene.backgroundColor);
+  }
+
+  // World Text is not a Canvas element; all its appearance and transform
+  // fields survive, including a parent link and native script bindings.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("NPC", -1), Entity("Name", 0), Entity("After", -1)};
+    auto &e = s.entities[1];
+    e.kind = PrimitiveKind::WorldText;
+    e.position = {0, 2, 0};
+    e.worldText = {"Wise\nNPC", 0.35f, {0.2f, 0.5f, 0.8f, 0.7f}, 2, false};
+    e.scripts.push_back({"assets/scripts/Name.cpp", "Name", true, {}});
+    CHECK(!IsUiElementKind(e.kind));
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene loaded;
+    CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities.size() == 3);
+    const auto &back = loaded.entities[1];
+    CHECK(back.kind == PrimitiveKind::WorldText && back.parent == 0);
+    CHECK(back.position == e.position && back.worldText.text == e.worldText.text);
+    CHECK(back.worldText.size == 0.35f && back.worldText.color == e.worldText.color);
+    CHECK(back.worldText.alignment == 2 && !back.worldText.visible);
+    CHECK(back.scripts.size() == 1 && back.scripts[0].className == "Name");
+    CHECK(loaded.entities[2].name == "After");
+    // Older players must reject, not misread WorldText data as an entity.
+    auto bytes = ReadAll(file);
+    bytes[6] = 12;
+    WriteAll(file, bytes);
+    CHECK(!LoadScene(file.string(), loaded));
+  }
+
+  // v1.12 world entities are unchanged; malformed Text fields get safe
+  // defaults/clamps before the renderer consumes them.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Legacy", -1)};
+    CHECK(SaveScene(file.string(), s));
+    auto bytes = ReadAll(file);
+    bytes[6] = 12;
+    WriteAll(file, bytes);
+    IlmeeeScene loaded;
+    CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities[0].name == "Legacy");
+    s.entities[0].kind = PrimitiveKind::WorldText;
+    s.entities[0].worldText.size = -100;
+    s.entities[0].worldText.color = {-2, 3, 0.5f, 4};
+    s.entities[0].worldText.alignment = 99;
+    CHECK(SaveScene(file.string(), s));
+    CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities[0].worldText.size == 0.5f);
+    CHECK(loaded.entities[0].worldText.color == glm::vec4(0, 1, 0.5f, 1));
+    CHECK(loaded.entities[0].worldText.alignment == 1);
   }
 
   // Dialog script parsing and UTF-8 typing.

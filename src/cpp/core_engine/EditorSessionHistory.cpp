@@ -220,6 +220,12 @@ void AppendEntitySignature(std::ostringstream &out,
   AppendString(out, entity.animation.clip);
   AppendFloat(out, entity.animation.speed);
   AppendBool(out, entity.animation.loop);
+  AppendBool(out, entity.isWorldText);
+  AppendString(out, entity.worldText.text);
+  AppendFloat(out, entity.worldText.size);
+  AppendVec4(out, entity.worldText.color);
+  out << entity.worldText.alignment << ';';
+  AppendBool(out, entity.worldText.visible);
   AppendString(out, entity.debugSrcFile);
   out << entity.debugSrcLine << ';';
   out << entity.submeshTextures.size() << ';';
@@ -230,6 +236,26 @@ void AppendEntitySignature(std::ostringstream &out,
 std::string SnapshotSignature(const EditorSessionHistory::Snapshot &snapshot) {
   std::ostringstream out;
   AppendString(out, snapshot.selectedName);
+  AppendBool(out, snapshot.hasCanvas);
+  out << snapshot.selectedUiElement << ';';
+  AppendFloat(out, snapshot.ui.referenceWidth);
+  AppendFloat(out, snapshot.ui.referenceHeight);
+  for (const auto &e : snapshot.ui.elements) {
+    SceneRenderer::EditorEntitySnapshot scripts;
+    scripts.objectId = e.objectId;
+    scripts.scripts = e.scripts;
+    AppendEntitySignature(out, scripts);
+    AppendString(out, e.id);
+    out << static_cast<int>(e.kind) << ';' << static_cast<int>(e.anchor) << ';';
+    for (float value : {e.x, e.y, e.width, e.height, e.fontSize,
+                       e.color.x, e.color.y, e.color.z, e.color.w,
+                       e.background.x, e.background.y, e.background.z, e.background.w})
+      AppendFloat(out, value);
+    AppendString(out, e.text);
+    AppendString(out, e.imagePath);
+    AppendString(out, e.action);
+    AppendBool(out, e.visible);
+  }
   out << snapshot.selectedSurface << ';';
   AppendString(out, snapshot.sceneName);
   out << snapshot.sceneObjects.size() << ';';
@@ -436,6 +462,12 @@ void WriteEntity(std::ostream &out,
   WriteString(out, 10, "animation_clip", entity.animation.clip);
   WriteFloat(out, 10, "animation_speed", entity.animation.speed);
   WriteBool(out, 10, "animation_loop", entity.animation.loop);
+  WriteBool(out, 10, "world_text", entity.isWorldText);
+  WriteString(out, 10, "text", entity.worldText.text);
+  WriteFloat(out, 10, "text_size", entity.worldText.size);
+  WriteVec4(out, 10, "text_color", entity.worldText.color);
+  WriteInt(out, 10, "text_alignment", entity.worldText.alignment);
+  WriteBool(out, 10, "text_visible", entity.worldText.visible);
 
   WriteString(out, 10, "debug_source_file", entity.debugSrcFile);
   WriteInt(out, 10, "debug_source_line", entity.debugSrcLine);
@@ -455,6 +487,42 @@ void WriteSnapshot(std::ostream &out, std::size_t index,
   out << "  - index: " << index << '\n';
   WriteString(out, 4, "selected_name", snapshot.selectedName);
   WriteInt(out, 4, "selected_surface", snapshot.selectedSurface);
+  WriteBool(out, 4, "has_canvas", snapshot.hasCanvas);
+  WriteInt(out, 4, "selected_ui_element", snapshot.selectedUiElement);
+  out << "    canvas:\n";
+  WriteFloat(out, 6, "reference_width", snapshot.ui.referenceWidth);
+  WriteFloat(out, 6, "reference_height", snapshot.ui.referenceHeight);
+  out << (snapshot.ui.elements.empty() ? "      elements: []\n" : "      elements:\n");
+  for (const auto &e : snapshot.ui.elements) {
+    out << "        - name: " << YamlQuote(e.id) << '\n';
+    out << "          object_id: " << e.objectId << '\n';
+    WriteInt(out, 10, "kind", static_cast<int>(e.kind));
+    WriteInt(out, 10, "anchor", static_cast<int>(e.anchor));
+    WriteVec2(out, 10, "position", {e.x, e.y});
+    WriteVec2(out, 10, "size", {e.width, e.height});
+    WriteFloat(out, 10, "font_size", e.fontSize);
+    WriteString(out, 10, "text", e.text);
+    WriteString(out, 10, "image", e.imagePath);
+    WriteString(out, 10, "action", e.action);
+    WriteBool(out, 10, "visible", e.visible);
+    WriteVec4(out, 10, "color", {e.color.x, e.color.y, e.color.z, e.color.w});
+    WriteVec4(out, 10, "background", {e.background.x, e.background.y, e.background.z, e.background.w});
+    out << (e.scripts.empty() ? "          scripts: []\n" : "          scripts:\n");
+    for (const auto &script : e.scripts) {
+      WriteString(out, 12, "- source", script.source);
+      WriteString(out, 14, "class", script.className);
+      WriteBool(out, 14, "enabled", script.enabled);
+      out << (script.values.empty() ? "              values: []\n" : "              values:\n");
+      for (const auto &value : script.values) {
+        WriteString(out, 16, "- name", value.name);
+        WriteInt(out, 18, "type", static_cast<int>(value.type));
+        WriteFloat(out, 18, "number", value.number);
+        WriteBool(out, 18, "boolean", value.boolean);
+        out << "                  object: " << value.object << '\n';
+        WriteVec3(out, 18, "vec3", {value.vec3[0], value.vec3[1], value.vec3[2]});
+      }
+    }
+  }
 
   out << "    scene:\n";
   WriteString(out, 6, "name", snapshot.sceneName);

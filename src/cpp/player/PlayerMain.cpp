@@ -212,7 +212,7 @@ protected:
         for (const auto &binding : mesh.scripts)
           if (binding.enabled && !native_.Ready(binding.source))
             throw std::runtime_error("Native script module missing: " + binding.source + "; rebuild this game.");
-      native_.Start(ilmeee::ScriptSceneHost(nativeContext_), ilmeee::ScriptSceneOwners(*renderer_));
+      native_.Start(ilmeee::ScriptSceneHost(nativeContext_), ilmeee::ScriptSceneOwners(*renderer_, &gameUi_));
     } catch (const std::exception &e) {
       error_ = std::string("Script loading failed: ") + e.what();
       ::Log(error_, Debug::LogLevel::ERROR);

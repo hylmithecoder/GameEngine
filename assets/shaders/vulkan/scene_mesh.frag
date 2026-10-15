@@ -17,6 +17,14 @@ layout(set = 0, binding = 0) uniform sampler2D albedoTex;
 layout(location = 0) out vec4 outColor;
 
 void main() {
+    // Font-atlas glyph coverage. Unlike Canvas text this is a depth-tested,
+    // transformed world surface. Empty texels must not occlude the world.
+    if (vMaterial.w > 3.5) {
+        float alpha = texture(albedoTex, vUV).a * (vMaterial.w - 4.0);
+        if (alpha < 0.01) discard;
+        outColor = vec4(vMaterial.rgb, alpha);
+        return;
+    }
     vec3 N = normalize(vNormalWorld);
     if (!gl_FrontFacing) N = -N;
 

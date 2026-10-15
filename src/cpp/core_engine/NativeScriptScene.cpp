@@ -50,6 +50,7 @@ using script::ObjectKind;
 using script::Prop;
 uint32_t Kinds(const SceneRenderer::Mesh3D &mesh) {
   uint32_t kinds = 0;
+  if (mesh.isWorldText) kinds |= static_cast<uint32_t>(ObjectKind::WorldText);
   if (mesh.isLight)
     kinds |= static_cast<uint32_t>(ObjectKind::Light);
   if (mesh.isCamera)
@@ -75,7 +76,8 @@ ObjectKind KindOf(Prop prop) {
     return ObjectKind::Camera;
   if (prop <= Prop::UiClicked)
     return ObjectKind::Ui;
-  return ObjectKind::Dialog;
+  if (prop <= Prop::DialogLine) return ObjectKind::Dialog;
+  return ObjectKind::WorldText;
 }
 bool IsUi(Prop prop) { return KindOf(prop) == ObjectKind::Ui; }
 // The Dialog line/speaker, only while `mesh` owns the open dialog.
@@ -122,6 +124,10 @@ float *FloatField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.dialog.range;
   case Prop::DialogSpeed:
     return &mesh.dialog.charsPerSecond;
+  case Prop::TextSize:
+    return &mesh.worldText.size;
+  case Prop::TextAlpha:
+    return &mesh.worldText.color.a;
   default:
     return nullptr;
   }
@@ -146,6 +152,8 @@ bool *BoolField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.video.unlit;
   case Prop::DialogEnabled:
     return &mesh.dialog.enabled;
+  case Prop::TextVisible:
+    return &mesh.worldText.visible;
   default:
     return nullptr;
   }
@@ -157,6 +165,8 @@ std::string *StringField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.video.clip;
   if (prop == Prop::DialogScript)
     return &mesh.dialog.lines;
+  if (prop == Prop::TextContent)
+    return &mesh.worldText.text;
   return nullptr;
 }
 std::string *UiStringField(UiElement &e, Prop prop) {
@@ -252,8 +262,15 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   };
   host.kinds = [](void *ctx, uint64_t id) -> uint32_t {
     const int index = Find(ctx, id);
-    if (index < 0)
-      return FindUi(ctx, id) ? static_cast<uint32_t>(ObjectKind::Ui) : 0u;
+    if (index < 0) {
+      const auto *element = FindUi(ctx, id);
+      if (!element) return 0u;
+      uint32_t kinds = static_cast<uint32_t>(ObjectKind::Ui);
+      if (element->kind == UiKind::Text) kinds |= static_cast<uint32_t>(ObjectKind::UiText);
+      if (element->kind == UiKind::Image) kinds |= static_cast<uint32_t>(ObjectKind::UiImage);
+      if (element->kind == UiKind::Button) kinds |= static_cast<uint32_t>(ObjectKind::UiButton);
+      return kinds;
+    }
     return Kinds(static_cast<NativeScriptSceneContext *>(ctx)
                                  ->renderer->meshes3d[index]);
   };
@@ -284,6 +301,10 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     }
     if (prop == Prop::LightType) {
       *out = static_cast<float>(mesh->lightType);
+      return true;
+    }
+    if (prop == Prop::TextAlignment) {
+      *out = static_cast<float>(mesh->worldText.alignment);
       return true;
     }
     const float *field = FloatField(*mesh, prop);
@@ -318,9 +339,18 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       return true;
     }
     float *field = FloatField(*mesh, prop);
+    if (prop == Prop::TextAlignment) {
+      if (value < 0 || value > 2 || std::floor(value) != value) return false;
+      mesh->worldText.alignment = static_cast<int>(value);
+      return true;
+    }
     if (!field)
       return false;
-    if (prop == Prop::CameraFov)
+    if (prop == Prop::TextSize)
+      value = std::clamp(value, 0.001f, 100.0f);
+    else if (prop == Prop::TextAlpha)
+      value = std::clamp(value, 0.0f, 1.0f);
+    else if (prop == Prop::CameraFov)
       value = std::clamp(value, 1.0f, 179.0f);
     else if (prop == Prop::CameraNear)
       value = std::max(value, 0.001f);
@@ -412,9 +442,9 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       return true;
     }
     auto *mesh = Owner(ctx, id, prop);
-    if (!mesh || prop != Prop::LightColor)
+    if (!mesh || (prop != Prop::LightColor && prop != Prop::TextColor))
       return false;
-    *out = ToScript(mesh->lightColor);
+    *out = ToScript(prop == Prop::TextColor ? glm::vec3(mesh->worldText.color) : mesh->lightColor);
     return true;
   };
   host.setVec3 = [](void *ctx, uint64_t id, Prop prop,
@@ -440,9 +470,11 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       return true;
     }
     auto *mesh = Owner(ctx, id, prop);
-    if (!mesh || prop != Prop::LightColor || !Finite(*value))
+    if (!mesh || (prop != Prop::LightColor && prop != Prop::TextColor) || !Finite(*value))
       return false;
-    mesh->lightColor = glm::clamp(ToEngine(*value), 0.0f, 1.0f);
+    const auto color = glm::clamp(ToEngine(*value), 0.0f, 1.0f);
+    if (prop == Prop::TextColor) mesh->worldText.color = glm::vec4(color, mesh->worldText.color.a);
+    else mesh->lightColor = color;
     return true;
   };
   host.getString = [](void *ctx, uint64_t id, Prop prop) -> const char * {
@@ -524,10 +556,12 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
 void ScriptSceneEndFrame(NativeScriptSceneContext &context) {
   context.previousKeys = KeyBits(context.input);
 }
-std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer) {
+std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer, GameUI *ui) {
   std::vector<ScriptOwner> owners;
   for (auto &mesh : renderer.meshes3d)
     owners.push_back({mesh.objectId, &mesh.scripts});
+  if (ui) for (auto &element : ui->elements)
+    owners.push_back({element.objectId, &element.scripts});
   return owners;
 }
 } // namespace ilmeee

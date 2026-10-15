@@ -3,7 +3,7 @@
 #include <string>
 
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 3;
+inline constexpr uint32_t kApiVersion = 4;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {
@@ -28,6 +28,10 @@ enum class ObjectKind : uint32_t {
   Video = 1u << 3,
   Ui = 1u << 4,     // element of the game Canvas (API 3)
   Dialog = 1u << 5, // Dialog component (API 3)
+  WorldText = 1u << 6, // world-space Text (API 4)
+  UiText = 1u << 7,
+  UiImage = 1u << 8,
+  UiButton = 1u << 9,
 };
 // Component data reached through HostApi::get*/set*. Append only: the
 // values are part of the script ABI.
@@ -80,6 +84,13 @@ enum class Prop : uint32_t {
   DialogSpeed,     // float, characters per second (0 = instant)
   DialogSpeaker,   // string, read-only: speaker of the current line
   DialogLine,      // string, read-only: full text of the current line
+  // API 4: world-space Text, independent of Canvas properties.
+  TextContent,    // string
+  TextSize,       // float, line height in world units
+  TextColor,      // Vec3
+  TextAlpha,      // float
+  TextVisible,    // bool
+  TextAlignment,  // float: 0 left, 1 center, 2 right
 };
 enum class Command : uint32_t {
   AudioPlay,

@@ -228,6 +228,20 @@ target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm)
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
 
+add_executable(TestWorldText test/TestWorldText.cpp
+    src/cpp/core_engine/WorldText.cpp src/cpp/core_engine/GameUI.cpp
+    ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
+target_include_directories(TestWorldText PRIVATE ${CMAKE_SOURCE_DIR}/include ${IMGUI_DIR})
+target_link_libraries(TestWorldText PRIVATE glm::glm)
+
+add_executable(MakeWorldTextPreview test/MakeWorldTextPreview.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(MakeWorldTextPreview PRIVATE ${CMAKE_SOURCE_DIR}/include ${JSON_DIR})
+target_compile_definitions(MakeWorldTextPreview PRIVATE ILMEEE_ENGINE_ROOT="${CMAKE_SOURCE_DIR}"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+target_link_libraries(MakeWorldTextPreview PRIVATE glm::glm pthread ${CMAKE_DL_LIBS})
+
 add_executable(TestMedia test/TestMedia.cpp
     src/cpp/core_engine/AudioEngine.cpp
     src/cpp/core_engine/VideoDecoder.cpp)
@@ -271,6 +285,8 @@ target_compile_definitions(TestGameBuild PRIVATE ILMEEE_SCRIPT_COMPILER="${CMAKE
 # for Video Player components and non-wav/ogg audio (the Android build of
 # the same sources goes without).
 add_executable(IlmeeePlayer
+    src/cpp/core_engine/WorldText.cpp
+    src/cpp/core_engine/WorldTextRuntime.cpp
     src/cpp/core_engine/SkeletalAnimation.cpp
     src/cpp/core_engine/AnimationRuntime.cpp
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp

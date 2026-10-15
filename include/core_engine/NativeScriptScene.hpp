@@ -18,5 +18,5 @@ struct NativeScriptSceneContext {
 script::HostApi ScriptSceneHost(NativeScriptSceneContext &context);
 // Call once per frame after the scripts' Update so IsKeyPressed sees edges.
 void ScriptSceneEndFrame(NativeScriptSceneContext &context);
-std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer);
+std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer, GameUI *ui = nullptr);
 } // namespace ilmeee

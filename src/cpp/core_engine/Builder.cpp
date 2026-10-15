@@ -12,6 +12,7 @@ void Builder::Play() {
   snapshot_.clear();
   for (const auto &mesh : renderer_->meshes3d) {
     MeshSnapshot snap;
+    snap.worldText = mesh.worldText;
     snap.position = mesh.userPosition;
     snap.rotation = mesh.userRotation;
     snap.scale = mesh.userScale;
@@ -46,6 +47,7 @@ void Builder::Stop() {
       renderer_->meshes3d[i].userPosition = snapshot_[i].position;
       renderer_->meshes3d[i].userRotation = snapshot_[i].rotation;
       renderer_->meshes3d[i].userScale = snapshot_[i].scale;
+      renderer_->meshes3d[i].worldText = snapshot_[i].worldText;
     }
   }
   snapshot_.clear();

@@ -764,6 +764,11 @@ public:
           "shaders replace it in the build");
     Say("Copying engine shaders ...");
     CopyTree(o_.engineShaderDir, shaderDst);
+    // World Text uses the same bundled font in editor, Linux and Android.
+    const auto textFont = o_.engineShaderDir.parent_path().parent_path() /
+                          "fonts" / "MiSansLatin-Regular.ttf";
+    if (fs::is_regular_file(textFont, ec))
+      CopyFile(textFont, gameDir_ / "assets/fonts/MiSansLatin-Regular.ttf");
 
     // ---- runtime ------------------------------------------------------
     if (!android) {

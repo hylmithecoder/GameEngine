@@ -102,6 +102,7 @@ std::string ValidateScriptName(const std::string &name) {
       "Vec3", "Transform", "GameObject", "GameObjectRef", "ObjectRef",
       "AudioGameObject", "VideoPlayerGameObject", "LightGameObject",
       "CameraGameObject", "UiGameObject", "DialogGameObject",
+      "TextGameObject", "UiTextGameObject", "UiImageGameObject", "UiButtonGameObject",
       "ScriptProperties"};
   if (reserved.contains(name))
     return "Choose a name that is not a C++ keyword or engine base class.";

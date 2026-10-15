@@ -32,6 +32,8 @@ add_subdirectory(${SDL3_SOURCE_DIR} SDL3 EXCLUDE_FROM_ALL)
 
 set(IMGUI_DIR ${ENGINE_ROOT}/vendor/imgui)
 add_library(main SHARED
+    ${ENGINE_ROOT}/src/cpp/core_engine/WorldText.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/WorldTextRuntime.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SkeletalAnimation.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/AnimationRuntime.cpp
     ${ENGINE_ROOT}/src/cpp/player/PlayerMain.cpp

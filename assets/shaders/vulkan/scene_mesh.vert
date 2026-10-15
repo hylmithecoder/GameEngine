@@ -41,7 +41,7 @@ void main() {
     vLightParams = scene.lightParams;
     vUV = inUV;
     vMaterial = pc.material;
-    if (pc.material.w > 2.5) {
+    if (pc.material.w > 2.5 && pc.material.w < 3.5) {
         // Solid unlit colour: the fragment shader's emissive path.
         vLightColorType = vec4(pc.material.rgb, -1.0);
         vMaterial.w = 0.0;

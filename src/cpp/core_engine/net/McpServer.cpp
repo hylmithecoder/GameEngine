@@ -93,7 +93,7 @@ json ToolList() {
          ObjectSchema(
              {{"kind",
                {{"type", "string"},
-                {"enum", {"cube", "sphere", "plane", "light", "camera"}}}},
+                {"enum", {"cube", "sphere", "plane", "light", "camera", "text_3d"}}}},
               {"position", vec3},
               {"parent", {{"type", "integer"}, {"minimum", 0}}}},
              {"kind"})}},

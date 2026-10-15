@@ -18,6 +18,7 @@ enum class UiAnchor { TopLeft, TopRight, BottomLeft, BottomRight, Center };
 struct UiElement {
   // Stable identity shared with scene objects (scripts, dialog links).
   uint64_t objectId = NewObjectId();
+  std::vector<NativeScriptBinding> scripts;
   std::string id;
   UiKind kind = UiKind::Text;
   UiAnchor anchor = UiAnchor::TopLeft;

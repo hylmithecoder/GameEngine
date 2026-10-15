@@ -7,6 +7,7 @@
 #include "Scene.hpp"
 #include "SkeletalAnimation.hpp"
 #include "TextureManager.hpp"
+#include "WorldText.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -161,6 +162,8 @@ private:
   // 3D mesh pipeline (pos + normal + uv vertex, MVP+model+material push
   // constants, depth-tested, samples one albedo texture per submesh).
   VkPipeline meshPipeline = VK_NULL_HANDLE;
+  VkPipeline worldTextPipeline = VK_NULL_HANDLE;
+  int worldTextFontTexture = 0;
   VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
   // set=0 binding=0 = combined image sampler (fragment). Defined identically
   // to ImGui's texture layout so descriptors handed out by TextureManager
@@ -255,6 +258,11 @@ public:
     std::vector<ilmeee::SkeletonBone> skeleton;
     std::vector<glm::vec3> posedBones;
     ilmeee::AnimationComponent animation;
+    bool isWorldText = false;
+    ilmeee::WorldTextComponent worldText;
+    std::string builtText;
+    float builtTextSize = -1;
+    int builtTextAlignment = -1;
     ilmeee::AnimationClip animationClip;
     std::string loadedAnimationPath;
     std::string animationError;
@@ -358,6 +366,7 @@ private:
   // Texture manager
   TextureManager textureManager;
   std::string animationProjectRoot;
+  void UpdateWorldTexts();
 
   struct DynamicTexture {
     int width = 0, height = 0;
@@ -448,6 +457,8 @@ private:
 public:
   // Load an OBJ file into the 3D mesh list. Returns true on success.
   bool LoadObjMesh(const std::string &path);
+  bool LoadWorldText(const std::string &name,
+                     const ilmeee::WorldTextComponent &text = {});
 
   // Load a PMX (MikuMikuDance) model. Parses geometry, materials,
   // and bones. Renders in bind pose using the mesh pipeline.
@@ -719,6 +730,8 @@ public:
     ilmeee::VideoPlayerComponent video;
     ilmeee::DialogComponent dialog;
     ilmeee::AnimationComponent animation;
+    bool isWorldText = false;
+    ilmeee::WorldTextComponent worldText;
     bool isAudioEmitter = false;
 
     std::string debugSrcFile;

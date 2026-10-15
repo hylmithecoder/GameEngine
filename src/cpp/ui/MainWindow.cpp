@@ -40,6 +40,9 @@ EditorSessionHistory::Snapshot MainWindow::CaptureEditorSnapshot() const {
   snapshot.selectedSurface = selectedSurface;
   snapshot.sceneName = projectHandler.currentScene.sceneName;
   snapshot.sceneObjects = projectHandler.currentScene.objects;
+  snapshot.ui = gameUi;
+  snapshot.hasCanvas = hasGameUiCanvas;
+  snapshot.selectedUiElement = selectedUiElement;
   return snapshot;
 }
 
@@ -68,6 +71,9 @@ void MainWindow::ApplyEditorSnapshot(
   const bool restored = sceneRenderer->RestoreEditorSnapshot(snapshot.renderer);
   projectHandler.currentScene.sceneName = snapshot.sceneName;
   projectHandler.currentScene.objects = snapshot.sceneObjects;
+  gameUi = snapshot.ui;
+  hasGameUiCanvas = snapshot.hasCanvas;
+  selectedUiElement = snapshot.selectedUiElement;
   sceneRenderer->currentScene = projectHandler.currentScene;
 
   std::snprintf(objectName, sizeof(objectName), "%s",
@@ -205,7 +211,7 @@ void MainWindow::OnUpdate(float deltaTime) {
       dialogSystem.SetProjectRoot(projectHandler.projectPath);
       dialogSystem.Start(*sceneRenderer, gameUi);
       nativeScripts.Start(ilmeee::ScriptSceneHost(nativeScriptContext),
-                          ilmeee::ScriptSceneOwners(*sceneRenderer));
+                          ilmeee::ScriptSceneOwners(*sceneRenderer, &gameUi));
     }
   }
   if (!gameWasStopped && builder.IsStopped()) {

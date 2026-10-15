@@ -110,6 +110,7 @@ bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out) {
     UiElement element;
     if (e.objectId) element.objectId = e.objectId;
     element.visible = e.uiVisible;
+    element.scripts = e.scripts;
     switch (e.kind) {
     case PrimitiveKind::UiText: element.kind = UiKind::Text; break;
     case PrimitiveKind::UiImage: element.kind = UiKind::Image; break;
@@ -158,6 +159,7 @@ void AppendGameUIToScene(IlmeeeScene &scene, const GameUI &ui) {
     case UiKind::Joystick: e.kind = PrimitiveKind::UiJoystick; break;
     }
     e.uiAnchor = static_cast<uint8_t>(element.anchor);
+    e.scripts = element.scripts;
     e.uiX = element.x;
     e.uiY = element.y;
     e.uiWidth = element.width;
@@ -404,7 +406,7 @@ std::string DrawGameUI(
     if (e.kind == UiKind::Image) {
       const ImTextureID texture = imageTexture ? imageTexture(e.imagePath) : ImTextureID{};
       if (texture)
-        draw->AddImage(texture, pos, max);
+        draw->AddImage(texture, pos, max, ImVec2(0, 0), ImVec2(1, 1), color);
       else
         draw->AddRectFilled(pos, max, bg);
     } else {

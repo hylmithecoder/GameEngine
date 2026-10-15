@@ -2,6 +2,7 @@
 
 #include "Scene.hpp"
 #include "SceneRenderer.hpp"
+#include "GameUI.hpp"
 #include <cstddef>
 #include <filesystem>
 #include <string>
@@ -18,6 +19,9 @@ public:
     int selectedSurface = -1;
     std::string sceneName;
     std::vector<GameObject> sceneObjects;
+    ilmeee::GameUI ui;
+    bool hasCanvas = false;
+    int selectedUiElement = -1;
   };
 
   void Start(const std::string &projectPath, const Snapshot &initial);

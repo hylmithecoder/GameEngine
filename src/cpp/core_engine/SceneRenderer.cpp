@@ -64,6 +64,8 @@ SceneRenderer::~SceneRenderer() {
       vkDestroyPipelineLayout(device, testTrianglePipelineLayout, nullptr);
     if (meshPipeline != VK_NULL_HANDLE)
       vkDestroyPipeline(device, meshPipeline, nullptr);
+    if (worldTextPipeline != VK_NULL_HANDLE)
+      vkDestroyPipeline(device, worldTextPipeline, nullptr);
     if (meshPipelineLayout != VK_NULL_HANDLE)
       vkDestroyPipelineLayout(device, meshPipelineLayout, nullptr);
     if (meshTextureSetLayout != VK_NULL_HANDLE)
@@ -499,6 +501,7 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   if (device == VK_NULL_HANDLE || offscreen.framebuffer == VK_NULL_HANDLE)
     return;
   WaitOffscreenWork();
+  UpdateWorldTexts();
 
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1291,6 +1294,20 @@ void SceneRenderer::InitMeshPipeline() {
     throw std::runtime_error("failed to create mesh pipeline");
   }
 
+  // World text shares the mesh descriptors, camera and depth buffer. Draw
+  // after opaque geometry with coverage blending and no depth writes.
+  cba.blendEnable = VK_TRUE;
+  cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+  cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  cba.colorBlendOp = VK_BLEND_OP_ADD;
+  cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+  cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  cba.alphaBlendOp = VK_BLEND_OP_ADD;
+  ds.depthWriteEnable = VK_FALSE;
+  if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr,
+                                &worldTextPipeline) != VK_SUCCESS)
+    throw std::runtime_error("failed to create world text pipeline");
+
   vkDestroyShaderModule(device, vert, nullptr);
   vkDestroyShaderModule(device, frag, nullptr);
 }
@@ -1493,12 +1510,26 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
                           meshPipelineLayout, 1, 1, &meshSceneSet, 0, nullptr);
 
   // 3. Render all meshes in the scene
-  for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
+  std::vector<size_t> drawOrder;
+  for (size_t i = 0; i < meshes3d.size(); ++i) drawOrder.push_back(i);
+  std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](size_t a, size_t b) {
+    if (meshes3d[a].isWorldText != meshes3d[b].isWorldText)
+      return !meshes3d[a].isWorldText;
+    if (!meshes3d[a].isWorldText) return false;
+    const auto za = viewProj * glm::vec4(GetMesh3DWorldPosition(a), 1);
+    const auto zb = viewProj * glm::vec4(GetMesh3DWorldPosition(b), 1);
+    return za.z / (std::abs(za.w) > 1e-6f ? za.w : 1e-6f) >
+           zb.z / (std::abs(zb.w) > 1e-6f ? zb.w : 1e-6f);
+  });
+  for (size_t mi : drawOrder) {
     const Mesh3D &m = meshes3d[mi];
     if (m.indexCount == 0)
       continue;
     if (!drawMarkers && (m.isLight || m.isCamera || m.isAudioEmitter))
       continue;
+    if (m.isWorldText && (!m.worldText.visible || m.worldText.color.a <= 0)) continue;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m.isWorldText ? worldTextPipeline : meshPipeline);
     MeshPushConstants pc;
     pc.model = GetMesh3DWorldModel(mi);
     // Light sources draw as a solid sphere in their light colour, audio
@@ -1529,7 +1560,11 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
 
     // One draw per surface (submesh) so each binds its own texture. Older
     // meshes with no submeshes fall back to a single untextured draw.
-    if (m.submeshes.empty()) {
+    if (m.isWorldText) {
+      drawRange(0, m.indexCount, glm::vec3(m.worldText.color),
+                4.0f + m.worldText.color.a,
+                GetDynamicTextureDescriptor(worldTextFontTexture));
+    } else if (m.submeshes.empty()) {
       drawRange(0, m.indexCount, glm::vec3(0.84f, 0.80f, 0.74f), 0.0f,
                 whiteDescriptor);
     } else {
@@ -3333,6 +3368,8 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     entity.video = mesh.video;
     entity.dialog = mesh.dialog;
     entity.animation = mesh.animation;
+    entity.isWorldText = mesh.isWorldText;
+    entity.worldText = mesh.worldText;
     entity.isAudioEmitter = mesh.isAudioEmitter;
 
     entity.debugSrcFile = mesh.debugSrcFile;
@@ -3375,7 +3412,9 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
   for (size_t si = 0; si < snapshot.entities.size(); ++si) {
     const EditorEntitySnapshot &entity = snapshot.entities[si];
     bool loaded = false;
-    if (entity.isLight) {
+    if (entity.isWorldText) {
+      loaded = LoadWorldText(entity.name, entity.worldText);
+    } else if (entity.isLight) {
       loaded = LoadLight(entity.name, entity.lightType, entity.lightColor,
                          entity.lightIntensity, entity.lightRange,
                          entity.lightSpotAngle, entity.lightGamma);
@@ -4061,6 +4100,7 @@ void SceneRenderer::SubmitOffscreenPass(
     const Offscreen &target, int w, int h,
     const std::function<void(VkCommandBuffer)> &record) {
   WaitOffscreenWork();
+  UpdateWorldTexts();
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocInfo.commandPool = commandPool;

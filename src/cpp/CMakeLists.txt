@@ -19,6 +19,8 @@ set(HANDLER_ENGINE
 )
 
 set(MAIN_PROJECT_SOURCE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/WorldText.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/WorldTextRuntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/MainWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/McpTools.cpp

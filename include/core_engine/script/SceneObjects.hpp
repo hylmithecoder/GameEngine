@@ -163,7 +163,7 @@ public:
   bool SetFontSize(float value) const {
     return SetFloat(Prop::UiFontSize, value);
   }
-  // Text / knob colour and its alpha, RGB 0..1.
+  // Text / image tint / knob colour and its alpha, RGB 0..1.
   Vec3 GetColor() const { return GetVec3(Prop::UiColor); }
   bool SetColor(Vec3 rgb) const { return SetVec3(Prop::UiColor, rgb); }
   float GetAlpha() const { return GetFloat(Prop::UiAlpha); }
@@ -181,6 +181,47 @@ public:
   // Clicked or tapped since the previous Update. Any visible element counts,
   // not only buttons.
   bool WasClicked() const { return GetBool(Prop::UiClicked); }
+};
+
+// Stricter Canvas views; UiGameObject still supports every element kind.
+class UiTextGameObject : public UiGameObject {
+public:
+  UiTextGameObject() = default;
+  explicit UiTextGameObject(const GameObject &o) : UiGameObject(o) {}
+  bool IsValid() const { return UiGameObject::IsValid() && Is(ObjectKind::UiText); }
+};
+class UiImageGameObject : public UiGameObject {
+public:
+  UiImageGameObject() = default;
+  explicit UiImageGameObject(const GameObject &o) : UiGameObject(o) {}
+  bool IsValid() const { return UiGameObject::IsValid() && Is(ObjectKind::UiImage); }
+};
+class UiButtonGameObject : public UiGameObject {
+public:
+  UiButtonGameObject() = default;
+  explicit UiButtonGameObject(const GameObject &o) : UiGameObject(o) {}
+  bool IsValid() const { return UiGameObject::IsValid() && Is(ObjectKind::UiButton); }
+};
+class TextGameObject : public GameObject {
+public:
+  enum class Alignment { Left, Center, Right };
+  TextGameObject() = default;
+  explicit TextGameObject(const GameObject &o) : GameObject(o) {}
+  bool IsValid() const { return GameObject::IsValid() && Is(ObjectKind::WorldText); }
+  std::string GetText() const { return GetString(Prop::TextContent); }
+  bool SetText(const std::string &text) const { return SetString(Prop::TextContent, text); }
+  float GetFontSize() const { return GetFloat(Prop::TextSize); }
+  bool SetFontSize(float size) const { return SetFloat(Prop::TextSize, size); }
+  Vec3 GetColor() const { return GetVec3(Prop::TextColor); }
+  bool SetColor(Vec3 rgb) const { return SetVec3(Prop::TextColor, rgb); }
+  float GetAlpha() const { return GetFloat(Prop::TextAlpha); }
+  bool SetAlpha(float alpha) const { return SetFloat(Prop::TextAlpha, alpha); }
+  bool IsVisible() const { return GetBool(Prop::TextVisible); }
+  bool SetVisible(bool visible) const { return SetBool(Prop::TextVisible, visible); }
+  bool Show() const { return SetVisible(true); }
+  bool Hide() const { return SetVisible(false); }
+  Alignment GetAlignment() const { return static_cast<Alignment>(static_cast<int>(GetFloat(Prop::TextAlignment))); }
+  bool SetAlignment(Alignment alignment) const { return SetFloat(Prop::TextAlignment, static_cast<float>(alignment)); }
 };
 
 // An object with the engine's Dialog component (a character you talk to).
@@ -235,6 +276,10 @@ using VideoPlayerGameObject = ilmeee::script::VideoPlayerGameObject;
 using LightGameObject = ilmeee::script::LightGameObject;
 using CameraGameObject = ilmeee::script::CameraGameObject;
 using UiGameObject = ilmeee::script::UiGameObject;
+using UiTextGameObject = ilmeee::script::UiTextGameObject;
+using UiImageGameObject = ilmeee::script::UiImageGameObject;
+using UiButtonGameObject = ilmeee::script::UiButtonGameObject;
+using TextGameObject = ilmeee::script::TextGameObject;
 using DialogGameObject = ilmeee::script::DialogGameObject;
 template <class T> using ObjectRef = ilmeee::script::ObjectRef<T>;
 #endif

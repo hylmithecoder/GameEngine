@@ -44,12 +44,15 @@
 //      float32 charsPerSecond, uint32 flags (1 repeatable, 2 freezePlayer) --
 //   -- v1.12 then animation: uint32 enabled, string clip, float32 speed,
 //      uint32 loop --
+//   -- v1.13 WorldText only: string text, float32 size, vec4 color,
+//      uint32 alignment, uint32 visible (after animation) --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
 // keeping them out of text editors signals to authors that the scene
 // graph is authored through the editor — not by hand.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -59,6 +62,7 @@
 #include "MovementScript.hpp"
 #include "NativeScriptTypes.hpp"
 #include "SkeletalAnimation.hpp"
+#include "WorldText.hpp"
 #include <glm/glm.hpp>
 #include <string>
 #include <unordered_set>
@@ -69,7 +73,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 12;
+constexpr uint16_t kSceneFormatMinor = 13;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -86,6 +90,7 @@ enum class PrimitiveKind : uint8_t {
   UiJoystick = 11,
   AudioSource = 12, // editor-only marker + Audio Source component (v1.8)
   Screen = 13,      // 16:9 video screen quad (v1.8)
+  WorldText = 14,   // world-space text, not part of the Canvas (v1.13)
 };
 
 inline bool IsUiElementKind(PrimitiveKind kind) {
@@ -146,6 +151,7 @@ struct SceneEntity {
   DialogComponent dialog;
   // v1.12: editable animation clip asset, shared by editor and players.
   AnimationComponent animation;
+  WorldTextComponent worldText; // v1.13, used only by WorldText entities
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
   // child elements use them as their displayed size.
@@ -349,6 +355,13 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteString(f, e.animation.clip);
     detail::WriteF32(f, e.animation.speed);
     detail::WriteU32(f, e.animation.loop ? 1u : 0u);
+    if (e.kind == PrimitiveKind::WorldText) {
+      detail::WriteString(f, e.worldText.text);
+      detail::WriteF32(f, e.worldText.size);
+      detail::WriteVec4(f, e.worldText.color);
+      detail::WriteU32(f, static_cast<uint32_t>(e.worldText.alignment));
+      detail::WriteU32(f, e.worldText.visible ? 1u : 0u);
+    }
   }
 
   // Version 1.4: environment
@@ -556,6 +569,21 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       e.animation.loop = loop != 0;
       if (!std::isfinite(e.animation.speed) || e.animation.speed < 0 ||
           e.animation.speed > 100) e.animation.speed = 1;
+    }
+    if (e.kind == PrimitiveKind::WorldText) {
+      uint32_t alignment = 1, visible = 1;
+      if (minor < 13 || !detail::ReadString(f, e.worldText.text) ||
+          !detail::ReadF32(f, e.worldText.size) ||
+          !detail::ReadVec4(f, e.worldText.color) ||
+          !detail::ReadU32(f, alignment) || !detail::ReadU32(f, visible))
+        return false;
+      if (!std::isfinite(e.worldText.size) || e.worldText.size <= 0 ||
+          e.worldText.size > 100) e.worldText.size = 0.5f;
+      for (int c = 0; c < 4; ++c)
+        e.worldText.color[c] = std::isfinite(e.worldText.color[c])
+            ? std::clamp(e.worldText.color[c], 0.0f, 1.0f) : 1.0f;
+      e.worldText.alignment = alignment <= 2 ? static_cast<int>(alignment) : 1;
+      e.worldText.visible = visible != 0;
     }
     out.entities.push_back(std::move(e));
   }

@@ -19,9 +19,9 @@
 
 static const char *kSpawnNames[] = {"Cube",   "Sphere",       "Plane",
                                     "Light",  "Camera",       "Audio Source",
-                                    "Video Screen", "Canvas"};
+                                    "Video Screen", "Text (3D)", "Canvas"};
 // Scene objects SpawnSceneObject can create; the entry after them is Canvas.
-static constexpr int kSpawnObjectCount = 7;
+static constexpr int kSpawnObjectCount = 8;
 
 namespace {
 // Explorer sends absolute file paths. Keep scene references project-relative
@@ -174,17 +174,20 @@ int MainWindow::SpawnSceneObject(int kind, int parent,
     ok = sceneRenderer->LoadCamera(name);
   else if (kind == 5)
     ok = sceneRenderer->LoadAudioSource(name);
-  else
+  else if (kind == 6)
     ok = sceneRenderer->LoadScreen(name);
+  else
+    ok = sceneRenderer->LoadWorldText(name);
   if (!ok)
     return -1;
 
   size_t idx = sceneRenderer->GetMesh3DCount() - 1;
   glm::vec3 spawnPos = localPosition;
   glm::vec3 spawnRot(0.0f);
-  if (kind == 6 && parent < 0) {
-    // Stand the screen on the ground, turned toward the editor camera.
-    spawnPos.y += 0.45f + 0.5f;
+  if ((kind == 6 || kind == 7) && parent < 0) {
+    // Stand screens on the ground. Text keeps its requested origin; both
+    // face the editor camera initially and remain ordinary rotatable meshes.
+    if (kind == 6) spawnPos.y += 0.45f + 0.5f;
     const glm::vec3 toCam = sceneRenderer->camera3d.position - spawnPos;
     spawnRot.y = glm::degrees(std::atan2(toCam.x, toCam.z));
   } else if (kind == 5 && parent < 0) {
@@ -295,6 +298,8 @@ void MainWindow::RenderHierarchyWindow() {
         svgPath = "assets/icons/svg/music.svg";
       } else if (sceneRenderer->meshes3d[i].video.enabled) {
         svgPath = "assets/icons/svg/video.svg";
+      } else if (sceneRenderer->meshes3d[i].isWorldText) {
+        svgPath = "assets/icons/svg/image.svg";
       }
 
       // Draw icon
@@ -594,6 +599,7 @@ void MainWindow::RenderHierarchyWindow() {
     break;
   }
   }
+  if (op != Op::None) RecordEditorHistory();
   End();
 }
 
@@ -854,9 +860,28 @@ void MainWindow::RenderInspectorWindow() {
       meshSelected && sceneRenderer->IsMesh3DLight((size_t)meshIdx);
   const bool isCamera =
       meshSelected && sceneRenderer->IsMesh3DCamera((size_t)meshIdx);
+  const bool isWorldText = meshSelected && sceneRenderer->meshes3d[(size_t)meshIdx].isWorldText;
+  if (isWorldText && CollapsingHeader("Text (3D)", ImGuiTreeNodeFlags_DefaultOpen)) {
+    auto &text = sceneRenderer->meshes3d[(size_t)meshIdx].worldText;
+    char content[16385];
+    std::snprintf(content, sizeof(content), "%s", text.text.c_str());
+    bool finished = false;
+    TextUnformatted("Content");
+    if (InputTextMultiline("##WorldTextContent", content, sizeof(content), ImVec2(-1, 100))) text.text = content;
+    finished |= IsItemDeactivatedAfterEdit();
+    SetNextItemWidth(105);
+    DragFloat("Font size (world units)", &text.size, 0.01f, 0.001f, 100.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    finished |= IsItemDeactivatedAfterEdit();
+    ColorEdit4("Text Color", &text.color.x);
+    finished |= IsItemDeactivatedAfterEdit();
+    finished |= Combo("Alignment", &text.alignment, "Left\0Center\0Right\0");
+    finished |= Checkbox("Text Visible", &text.visible);
+    TextDisabled("World-space text. Rotate/scale or parent it like a mesh.");
+    if (finished) RecordEditorHistory();
+  }
 
   // Mesh section: shown for any plain mesh (not a light/camera) by name.
-  if (meshSelected && !isLight && !isCamera) {
+  if (meshSelected && !isLight && !isCamera && !isWorldText) {
     if (CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
       Text("Path: %s", sceneRenderer->GetMesh3DPath((size_t)meshIdx).c_str());
       Text("Vertices: %u",
@@ -2376,6 +2401,7 @@ void MainWindow::RenderGameUiEditor() {
     Text("Canvas");
     TextDisabled("Screen-space root for the game UI");
     DragFloat2("Reference size", &gameUi.referenceWidth, 1.0f, 1.0f, 8192.0f);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
   }
   if (selectedUiElement >= 0 &&
       selectedUiElement < (int)gameUi.elements.size()) {
@@ -2384,6 +2410,7 @@ void MainWindow::RenderGameUiEditor() {
     auto editString = [&](const char *label, std::string &value) {
       std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
       if (InputText(label, buffer, sizeof(buffer))) value = buffer;
+      if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     };
     const std::string oldId = e.id;
     editString("Name", e.id);
@@ -2397,26 +2424,35 @@ void MainWindow::RenderGameUiEditor() {
       }
     }
     int kind = (int)e.kind;
-    if (Combo("Type", &kind, "Text\0Image\0Button\0Joystick\0"))
+    if (Combo("Type", &kind, "Text\0Image\0Button\0Joystick\0")) {
       e.kind = (ilmeee::UiKind)kind;
+      RecordEditorHistory();
+    }
     int anchor = (int)e.anchor;
     if (Combo("Anchor", &anchor,
-              "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0"))
+              "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0")) {
       e.anchor = (ilmeee::UiAnchor)anchor;
-    Checkbox("Visible", &e.visible);
+      RecordEditorHistory();
+    }
+    if (Checkbox("Visible", &e.visible)) RecordEditorHistory();
     if (IsItemHovered())
       SetTooltip("Hidden elements are skipped in Play; scripts and dialogs "
                  "can show them");
     DragFloat("X", &e.x, 1.0f);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     DragFloat("Y", &e.y, 1.0f);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     DragFloat("Width", &e.width, 1.0f, 1.0f, 8192.0f);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     DragFloat("Height", &e.height, 1.0f, 1.0f, 8192.0f);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     if (e.kind == ilmeee::UiKind::Joystick) {
       TextDisabled("Analog stick: link it from a movable object's");
       TextDisabled("Movement Script > Move/Look Joystick");
     } else if (e.kind != ilmeee::UiKind::Image) {
       editString("Text", e.text);
       DragFloat("Font size", &e.fontSize, 1.0f, 1.0f, 200.0f);
+      if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     }
     if (e.kind == ilmeee::UiKind::Image || e.kind == ilmeee::UiKind::Button) {
       editString(e.kind == ilmeee::UiKind::Button ? "Sprite" : "Image path",
@@ -2450,10 +2486,25 @@ void MainWindow::RenderGameUiEditor() {
       TextDisabled("Built-in actions");
     }
     ColorEdit4("Color", &e.color.x);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
     ColorEdit4("Background", &e.background.x);
+    if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
+    Separator();
+    RenderNativeScriptBindings(e.scripts);
+    if (Button("Add Component", ImVec2(-1, 0))) OpenPopup("UiAddScript");
+    if (BeginPopup("UiAddScript")) {
+      RenderNativeScriptChoices(e.scripts);
+      if (Selectable("Compile Project Scripts", false,
+                     nativeScripts.IsCompiling() ? ImGuiSelectableFlags_Disabled : ImGuiSelectableFlags_None))
+        nativeScripts.CompileAll();
+      if (Selectable("Create C++ Script...")) projectHandler.RequestCreateScript();
+      if (nativeScripts.Sources().empty()) TextDisabled("Create a C++ script in Explorer first");
+      EndPopup();
+    }
     if (Button("Delete element") && !SceneStructureLocked()) {
       gameUi.elements.erase(gameUi.elements.begin() + selectedUiElement);
       selectedUiElement = -2;
+      RecordEditorHistory();
     }
   }
   Separator();
@@ -3222,8 +3273,11 @@ bool MainWindow::Save3DScene() {
     e.video = mesh.video;
     e.dialog = mesh.dialog;
     e.animation = mesh.animation;
+    e.worldText = mesh.worldText;
 
-    if (mesh.isAudioEmitter) {
+    if (mesh.isWorldText) {
+      e.kind = ilmeee::PrimitiveKind::WorldText;
+    } else if (mesh.isAudioEmitter) {
       e.kind = ilmeee::PrimitiveKind::AudioSource;
     } else if (sceneRenderer->IsMesh3DLight(i)) {
       e.kind = ilmeee::PrimitiveKind::Light;

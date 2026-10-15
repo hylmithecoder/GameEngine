@@ -210,6 +210,22 @@ with Canvas → Create Child → **Joystick** and link them as *Move Joystick* /
 stay in sync; on a phone both sticks work at once and swiping the open screen
 turns the camera.
 
+## World-space Text and scripted UI
+
+Create **Text (3D)** from the Hierarchy's Scene/Create or Create Child menu.
+It has a normal world transform, parent hierarchy, editable multiline content,
+size, colour/alpha, alignment and visibility. It is rendered as depth-tested
+glyph surfaces, not a Canvas overlay, in the Scene, Game and exported players.
+The bundled MiSans Latin font is copied with game exports.
+
+Canvas Text/Image/Button elements also accept native C++ scripts through
+**Inspector > Add Component**. Access their own UI with
+`gameObject.As<UiGameObject>()` (or `UiTextGameObject`, `UiImageGameObject`,
+`UiButtonGameObject`); access world text with `ObjectRef<TextGameObject>`.
+See [Scripting API](docs/ScriptingAPI.md#custom-script-pada-ui) for an example.
+UI edits and world-text properties participate in editor Undo/Redo and scene
+save/load. Play-mode UI and text changes are restored on Stop.
+
 ## PMX Animation Editor
 
 Open **Windows > Animation**, or select a PMX character and use **Inspector >
@@ -234,8 +250,9 @@ SDEF/QDEF vertices use their linear weights; PMX IK, grant transforms, morphs,
 hair/clothing physics, VMD import and blending between clips are not implemented.
 Animation playback does not replace the model's material shader.
 
-Scene format v1.12 adds the animation binding and reads older scenes. Rebuild
-players before exporting v1.12 scenes, including the Android native player.
+Scene format v1.13 adds world-text data after the v1.12 animation binding
+and reads older scenes. Rebuild players before exporting v1.13 scenes,
+including the Android native player and its matching script SDK.
 
 ## Android
 

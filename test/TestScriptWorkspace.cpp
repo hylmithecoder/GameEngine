@@ -51,6 +51,10 @@ int main(int argc, char **argv) {
   CHECK(!ilmeee::ValidateScriptName("Player.cpp").empty());
   CHECK(!ilmeee::ValidateScriptName("NUL").empty());
   CHECK(!ilmeee::ValidateScriptName("Component").empty());
+  CHECK(!ilmeee::ValidateScriptName("TextGameObject").empty());
+  CHECK(!ilmeee::ValidateScriptName("UiTextGameObject").empty());
+  CHECK(!ilmeee::ValidateScriptName("UiImageGameObject").empty());
+  CHECK(!ilmeee::ValidateScriptName("UiButtonGameObject").empty());
   CHECK(!ilmeee::ValidateScriptName("Player__Impl").empty());
   CHECK(ilmeee::CreateScriptFiles(scripts, "PlayerController", error));
   CHECK(error.empty());
