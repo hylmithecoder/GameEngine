@@ -87,6 +87,10 @@ private:
   void RenderNativeScriptAddMenu(size_t meshIndex);
   void RenderNativeScriptBindings(std::vector<ilmeee::NativeScriptBinding> &bindings);
   void RenderNativeScriptChoices(std::vector<ilmeee::NativeScriptBinding> &bindings);
+  // One Inspector widget per script value; recurses into List items.
+  bool RenderScriptValueField(ilmeee::ScriptValue &value, const char *label,
+                              bool &finished);
+  bool RenderScriptObjectField(uint64_t &object, const char *label);
   // Combo listing the Canvas elements; true when `objectId` changed.
   bool UiElementCombo(const char *label, uint64_t &objectId);
   void RenderDialogInspector(size_t meshIndex);
@@ -276,6 +280,15 @@ public:
   // Scene-object operations shared by the Hierarchy panel and the viewport.
   // Selection is by name (objectName), as everywhere else in the editor.
   int SelectedMeshIndex() const;
+  // Hierarchy rename (F2, double-click, or right-click > Rename). Names are
+  // kept unique and under 64 bytes because selection is by name.
+  int renamingMesh = -1, renamingUi = -1;
+  bool renameFocus = false;
+  char hierarchyRename[64] = "";
+  void BeginHierarchyRename(int mesh, int ui);
+  void DrawHierarchyRenameField();
+  bool RenameMesh(size_t index, std::string name);
+  bool RenameUiElement(size_t index, std::string name);
   // kind: 0 Cube, 1 Sphere, 2 Plane, 3 Light, 4 Camera. `localPosition` is
   // relative to `parent` (-1 = scene root). Selects and records history.
   // Returns the new mesh index, or -1.

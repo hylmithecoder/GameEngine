@@ -46,6 +46,9 @@
 //      uint32 loop --
 //   -- v1.13 WorldText only: string text, float32 size, vec4 color,
 //      uint32 alignment, uint32 visible (after animation) --
+//   -- v1.14 each script value then carries string text, uint32 elementType,
+//      uint32 itemCount, and per item (List type): float32 number,
+//      uint32 boolean, uint64 object, float32 x, y, z, string text --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -73,7 +76,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 13;
+constexpr uint16_t kSceneFormatMinor = 14;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -232,6 +235,26 @@ inline bool ReadString(std::ifstream &f, std::string &out) {
   return true;
 }
 
+// Payload shared by script values and List items (v1.9+ / v1.10+ / v1.14+).
+inline void WriteScriptScalar(std::ofstream &f, const ScriptValue &value) {
+  WriteF32(f, value.number);
+  WriteU32(f, value.boolean ? 1 : 0);
+  WriteBytes(f, &value.object, sizeof(value.object));
+  for (float component : value.vec3)
+    WriteF32(f, component);
+  WriteString(f, value.string);
+}
+inline bool ReadScriptScalar(std::ifstream &f, ScriptValue &value) {
+  uint32_t boolean = 0;
+  if (!ReadF32(f, value.number) || !ReadU32(f, boolean) ||
+      !ReadBytes(f, &value.object, sizeof(value.object)))
+    return false;
+  value.boolean = boolean != 0;
+  for (float &component : value.vec3)
+    if (!ReadF32(f, component)) return false;
+  return ReadString(f, value.string);
+}
+
 } // namespace detail
 
 inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
@@ -329,12 +352,13 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
       for (const auto &value : script.values) {
         detail::WriteString(f, value.name);
         detail::WriteU32(f, static_cast<uint32_t>(value.type));
-        detail::WriteF32(f, value.number);
-        detail::WriteU32(f, value.boolean ? 1 : 0);
-        detail::WriteBytes(f, &value.object, sizeof(value.object));
-        // Version 1.10: Vec3 fields.
-        for (float component : value.vec3)
-          detail::WriteF32(f, component);
+        // Version 1.10: Vec3 fields; 1.14: strings and lists.
+        detail::WriteScriptScalar(f, value);
+        const auto items = std::min(value.items.size(), kMaxScriptListItems);
+        detail::WriteU32(f, static_cast<uint32_t>(value.elementType));
+        detail::WriteU32(f, static_cast<uint32_t>(items));
+        for (size_t i = 0; i < items; ++i)
+          detail::WriteScriptScalar(f, value.items[i]);
       }
     }
     // Version 1.11: UI visibility and the Dialog component.
@@ -523,18 +547,34 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
         script.enabled = enabled != 0;
         for (uint32_t v = 0; v < values; ++v) {
           ScriptValue value;
-          uint32_t type = 0, boolean = 0;
+          uint32_t type = 0;
+          const auto newest = minor >= 14   ? ScriptValueType::List
+                              : minor >= 10 ? ScriptValueType::Vec3
+                                            : ScriptValueType::Object;
           if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
-              type > static_cast<uint32_t>(minor >= 10 ? ScriptValueType::Vec3
-                                                       : ScriptValueType::Object) ||
-              !detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
-              !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
-          if (minor >= 10)
-            for (float &component : value.vec3)
-              if (!detail::ReadF32(f, component)) return false;
+              type > static_cast<uint32_t>(newest)) return false;
           value.type = static_cast<ScriptValueType>(type);
-          value.boolean = boolean != 0;
-          script.values.push_back(value);
+          if (minor >= 14) {
+            uint32_t element = 0, items = 0;
+            if (!detail::ReadScriptScalar(f, value) || !detail::ReadU32(f, element) ||
+                element >= static_cast<uint32_t>(ScriptValueType::List) ||
+                !detail::ReadU32(f, items) || items > kMaxScriptListItems) return false;
+            value.elementType = static_cast<ScriptValueType>(element);
+            value.items.resize(items);
+            for (auto &item : value.items) {
+              item.type = value.elementType;
+              if (!detail::ReadScriptScalar(f, item)) return false;
+            }
+          } else {
+            uint32_t boolean = 0;
+            if (!detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
+                !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
+            value.boolean = boolean != 0;
+            if (minor >= 10)
+              for (float &component : value.vec3)
+                if (!detail::ReadF32(f, component)) return false;
+          }
+          script.values.push_back(std::move(value));
         }
         e.scripts.push_back(std::move(script));
       }

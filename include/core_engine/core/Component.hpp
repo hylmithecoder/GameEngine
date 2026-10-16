@@ -1,26 +1,90 @@
 #pragma once
 #include "../NativeScriptTypes.hpp"
+#include "../script/Coroutine.hpp"
 #include "../script/SceneObjects.hpp"
+#include <cstddef>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+namespace ilmeee::script {
+// Maps a C++ field type to its Inspector type. Storage is what the host reads
+// and writes (ObjectRef<T> is stored through its GameObjectRef base).
+template <class T, class = void> struct FieldType {};
+template <> struct FieldType<float> {
+  static constexpr auto type = ScriptValueType::Float;
+  using Storage = float;
+};
+template <> struct FieldType<bool> {
+  static constexpr auto type = ScriptValueType::Bool;
+  using Storage = bool;
+};
+template <> struct FieldType<std::string> {
+  static constexpr auto type = ScriptValueType::String;
+  using Storage = std::string;
+};
+template <> struct FieldType<Vec3> {
+  static constexpr auto type = ScriptValueType::Vec3;
+  using Storage = Vec3;
+};
+template <class T>
+struct FieldType<T, std::enable_if_t<std::is_base_of_v<GameObjectRef, T>>> {
+  static constexpr auto type = ScriptValueType::Object;
+  using Storage = GameObjectRef;
+};
+template <class T>
+concept InspectorScalar = requires { FieldType<T>::type; };
+
+// Type-erased std::vector<T>, built inside the script so the host never
+// needs T. Elements travel as FieldType<T>::Storage.
+struct ListAccess {
+  size_t (*size)(const void *list);
+  void (*resize)(void *list, size_t count);
+  void (*get)(const void *list, size_t index, void *out);
+  void (*set)(void *list, size_t index, const void *in);
+};
+template <InspectorScalar T> inline constexpr ListAccess kListAccess{
+    [](const void *list) { return static_cast<const std::vector<T> *>(list)->size(); },
+    [](void *list, size_t count) { static_cast<std::vector<T> *>(list)->resize(count); },
+    [](const void *list, size_t index, void *out) {
+      using Storage = typename FieldType<T>::Storage;
+      *static_cast<Storage *>(out) = (*static_cast<const std::vector<T> *>(list))[index];
+    },
+    [](void *list, size_t index, const void *in) {
+      using Storage = typename FieldType<T>::Storage;
+      auto &&item = (*static_cast<std::vector<T> *>(list))[index];
+      if constexpr (std::is_same_v<T, bool>) // vector<bool> hands out proxies
+        item = *static_cast<const bool *>(in);
+      else
+        static_cast<Storage &>(item) = *static_cast<const Storage *>(in);
+    }};
+} // namespace ilmeee::script
 
 struct ScriptProperty {
   std::string name;
   ilmeee::ScriptValueType type;
   void *value;
+  // List only.
+  ilmeee::ScriptValueType elementType = ilmeee::ScriptValueType::Float;
+  const ilmeee::script::ListAccess *list = nullptr;
 };
+// Field(name, member) exposes a member in the Inspector: float, bool,
+// std::string, Vec3, GameObjectRef, ObjectRef<T>, or a std::vector of any of
+// those.
 class ScriptProperties {
 public:
   std::vector<ScriptProperty> fields;
-  void Field(const char *name, float &value) {
-    fields.push_back({name, ilmeee::ScriptValueType::Float, &value});
+  template <ilmeee::script::InspectorScalar T>
+  void Field(const char *name, T &value) {
+    using Traits = ilmeee::script::FieldType<T>;
+    fields.push_back({name, Traits::type,
+                      static_cast<typename Traits::Storage *>(&value)});
   }
-  void Field(const char *name, bool &value) {
-    fields.push_back({name, ilmeee::ScriptValueType::Bool, &value});
-  }
-  void Field(const char *name, GameObjectRef &value) {
-    fields.push_back({name, ilmeee::ScriptValueType::Object, &value});
-  }
-  void Field(const char *name, ilmeee::script::Vec3 &value) {
-    fields.push_back({name, ilmeee::ScriptValueType::Vec3, &value});
+  template <ilmeee::script::InspectorScalar T>
+  void Field(const char *name, std::vector<T> &list) {
+    fields.push_back({name, ilmeee::ScriptValueType::List, &list,
+                      ilmeee::script::FieldType<T>::type,
+                      &ilmeee::script::kListAccess<T>});
   }
 };
 
@@ -57,8 +121,23 @@ public:
   virtual void OnDisable() {}
   virtual void DescribeProperties(ScriptProperties &) {}
 
+  // Coroutines (see script/Coroutine.hpp): run until the first co_await now,
+  // then advance once per frame after Update.
+  ilmeee::script::CoroutineId StartCoroutine(ilmeee::script::Coroutine coroutine) {
+    return coroutines_.Start(std::move(coroutine));
+  }
+  void StopCoroutine(ilmeee::script::CoroutineId id) { coroutines_.Stop(id); }
+  void StopAllCoroutines() { coroutines_.StopAll(); }
+  bool IsCoroutineRunning(ilmeee::script::CoroutineId id) const {
+    return coroutines_.IsRunning(id);
+  }
+  // Called by the engine after Update; virtual so it runs in the script
+  // module. Do not override.
+  virtual void TickCoroutines(float deltaTime) { coroutines_.Tick(deltaTime); }
+
 private:
   const ilmeee::script::HostApi *host_ = nullptr;
+  ilmeee::script::CoroutineRunner coroutines_;
 };
 
 namespace ilmeee::script {
@@ -75,5 +154,6 @@ inline constexpr uint64_t kComponentAbi =
     (static_cast<uint64_t>(sizeof(Component)) << 32) |
     (static_cast<uint64_t>(sizeof(HostApi)) << 24) |
     (static_cast<uint64_t>(sizeof(std::string)) << 16) |
-    (static_cast<uint64_t>(sizeof(std::vector<ScriptProperty>)) << 8);
+    (static_cast<uint64_t>(sizeof(std::vector<ScriptProperty>)) << 8) |
+    static_cast<uint64_t>(sizeof(ScriptProperty));
 } // namespace ilmeee::script

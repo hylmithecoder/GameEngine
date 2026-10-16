@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.13: round trip, reading
+// .ilmeeescene v1.3–v1.14: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -344,6 +344,32 @@ int main() {
     CHECK(script.values[3].type == ScriptValueType::Vec3 &&
           script.values[3].vec3[0] == 1 && script.values[3].vec3[1] == -2 &&
           script.values[3].vec3[2] == 3);
+    // v1.14: strings and lists.
+    ScriptValue title{"Title", ScriptValueType::String};
+    title.string = "Halo dunia";
+    ScriptValue lines{"Lines", ScriptValueType::List};
+    lines.elementType = ScriptValueType::String;
+    for (const char *text : {"satu", "", "tiga"}) {
+      ScriptValue item{"", ScriptValueType::String};
+      item.string = text;
+      lines.items.push_back(item);
+    }
+    ScriptValue points{"Points", ScriptValueType::List};
+    points.elementType = ScriptValueType::Vec3;
+    points.items.push_back({"", ScriptValueType::Vec3, 0, false, 0, {4, 5, 6}});
+    ScriptValue empty{"Targets", ScriptValueType::List};
+    empty.elementType = ScriptValueType::Object;
+    scene.entities[0].scripts[0].values = {title, lines, points, empty};
+    CHECK(SaveScene(file.string(), scene));
+    CHECK(LoadScene(file.string(), loaded));
+    const auto &extra = loaded.entities[0].scripts[0].values;
+    CHECK(extra.size() == 4 && extra[0].string == "Halo dunia");
+    CHECK(extra[1].type == ScriptValueType::List &&
+          extra[1].elementType == ScriptValueType::String &&
+          extra[1].items.size() == 3 && extra[1].items[0].string == "satu" &&
+          extra[1].items[1].string.empty() && extra[1].items[2].string == "tiga");
+    CHECK(extra[2].items.size() == 1 && extra[2].items[0].vec3[2] == 6);
+    CHECK(extra[3].elementType == ScriptValueType::Object && extra[3].items.empty());
     // Duplicate/legacy identities are repaired during load.
     scene.entities[1].objectId = 42;
     CHECK(SaveScene(file.string(), scene)); CHECK(LoadScene(file.string(), loaded));

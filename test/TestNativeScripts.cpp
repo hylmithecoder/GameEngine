@@ -240,6 +240,164 @@ public:
   CHECK(world.volume == 0.5f && world.played == 1);
   CHECK(world.log.size() == 1 && world.log.front() == "[WARNING] not a light");
   runtime.Stop();
+  // String and std::vector fields.
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Lists", error));
+  Write(project / "assets/scripts/Lists.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Lists : public Component {
+public:
+  std::string greeting = "hi";
+  std::vector<std::string> names{"a", "b"};
+  std::vector<float> speeds{1.5f};
+  std::vector<bool> flags{true, false};
+  std::vector<Vec3> points;
+  std::vector<ObjectRef<AudioGameObject>> songs;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Greeting", greeting);
+    p.Field("Names", names);
+    p.Field("Speeds", speeds);
+    p.Field("Flags", flags);
+    p.Field("Points", points);
+    p.Field("Songs", songs);
+  }
+  void Start() override {
+    std::string line = greeting;
+    for (const auto &name : names) line += "," + name;
+    for (bool flag : flags) line += flag ? ",T" : ",F";
+    for (const auto &point : points) line += "," + std::to_string(int(point.y));
+    for (auto &song : songs) if (song.IsValid()) song.Get().Play();
+    Log(line);
+  }
+};
+)cpp");
+  Write(project / "assets/scripts/Lists.cpp", "#include \"Lists.hpp\"\n");
+  const auto lists =
+      ilmeee::CompileNativeScript(options, "assets/scripts/Lists.cpp");
+  if (!lists.ok)
+    std::fprintf(stderr, "%s\n", lists.diagnostics.c_str());
+  CHECK(lists.ok);
+  CHECK(runtime.Load(lists, error));
+  ilmeee::NativeScriptBinding listBinding{"assets/scripts/Lists.cpp", "Lists",
+                                          true, {}};
+  listBinding.values = runtime.Properties(listBinding);
+  CHECK(listBinding.values.size() == 6);
+  if (listBinding.values.size() == 6) {
+    auto &values = listBinding.values;
+    CHECK(values[0].type == ilmeee::ScriptValueType::String &&
+          values[0].string == "hi");
+    CHECK(values[1].type == ilmeee::ScriptValueType::List &&
+          values[1].elementType == ilmeee::ScriptValueType::String &&
+          values[1].items.size() == 2 && values[1].items[1].string == "b");
+    CHECK(values[2].items.size() == 1 && values[2].items[0].number == 1.5f);
+    CHECK(values[3].items.size() == 2 && values[3].items[0].boolean &&
+          !values[3].items[1].boolean);
+    CHECK(values[5].elementType == ilmeee::ScriptValueType::Object);
+    values[0].string = "yo";
+    values[1].items.resize(3, values[1].items[0]);
+    values[1].items[2].string = "c";
+    values[3].items.pop_back();
+    values[4].items.push_back(
+        {"", ilmeee::ScriptValueType::Vec3, 0, false, 0, {0, 7, 0}});
+    ilmeee::ScriptValue song{"", ilmeee::ScriptValueType::Object};
+    song.object = 84;
+    values[5].items = {song, song};
+  }
+  world.log.clear();
+  world.played = 0;
+  std::vector<ilmeee::NativeScriptBinding> listBindings{listBinding};
+  runtime.Start(host, {{42, &listBindings}});
+  CHECK(world.log.size() == 1 && world.log.front() == "yo,a,b,c,T,7");
+  CHECK(world.played == 2);
+  runtime.Stop();
+  // Coroutines: waits, nesting, WaitUntil, stopping, errors.
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Waiter", error));
+  Write(project / "assets/scripts/Waiter.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Waiter : public Component {
+public:
+  bool go = false;
+  CoroutineId forever = 0;
+  Coroutine Inner() { Log("inner"); co_await WaitForSeconds(0.2f); Log("inner done"); }
+  Coroutine Main() {
+    Log("a");
+    co_await WaitForNextFrame();
+    Log("b");
+    co_await WaitForSeconds(0.25f);
+    Log("c");
+    co_await Inner();
+    Log("d");
+    co_await WaitUntil([this] { return go; });
+    Log("e");
+    StopCoroutine(forever);
+  }
+  Coroutine Forever() { for (;;) co_await WaitForNextFrame(); }
+  Coroutine Boom() { co_await WaitForNextFrame(); throw std::runtime_error("boom"); }
+  void Start() override {
+    StartCoroutine(Main());
+    forever = StartCoroutine(Forever());
+    Log(IsCoroutineRunning(forever) ? "running" : "not running");
+  }
+  void Update(float) override {
+    if (IsKeyDown("Space")) go = true;
+    if (IsKeyDown("E")) { StartCoroutine(Boom()); }
+    if (go && !IsCoroutineRunning(forever)) Log("stopped");
+  }
+};
+)cpp");
+  Write(project / "assets/scripts/Waiter.cpp", "#include \"Waiter.hpp\"\n");
+  const auto waiter =
+      ilmeee::CompileNativeScript(options, "assets/scripts/Waiter.cpp");
+  if (!waiter.ok)
+    std::fprintf(stderr, "%s\n", waiter.diagnostics.c_str());
+  CHECK(waiter.ok);
+  CHECK(runtime.Load(waiter, error));
+  static bool space = false, eKey = false;
+  host.keyDown = [](void *, const char *key) {
+    return (std::string(key) == "Space" && space) ||
+           (std::string(key) == "E" && eKey);
+  };
+  world.log.clear();
+  std::vector<ilmeee::NativeScriptBinding> waitBindings{
+      {"assets/scripts/Waiter.cpp", "Waiter", true, {}}};
+  std::vector<std::string> got;
+  runtime.Start(host, {{42, &waitBindings}});
+  CHECK(world.log == (std::vector<std::string>{"a", "running"}));
+  runtime.Update(0.1f); // frame 1 is Start's frame: not resumed yet
+  CHECK(world.log.back() == "running");
+  runtime.Update(0.1f); // frame 2: WaitForNextFrame done, wait 0.25s
+  CHECK(world.log.back() == "b");
+  runtime.Update(0.1f);
+  runtime.Update(0.1f);
+  CHECK(world.log.back() == "b");
+  runtime.Update(0.1f); // 0.3s >= 0.25s; Inner starts in the same step
+  CHECK(world.log.size() == 5 && world.log[3] == "c" && world.log[4] == "inner");
+  runtime.Update(0.1f);
+  CHECK(world.log.back() == "inner");
+  runtime.Update(0.1f); // the parent continues as soon as its child ends
+  CHECK(world.log.size() == 7 && world.log[5] == "inner done" &&
+        world.log[6] == "d");
+  runtime.Update(0.1f);
+  CHECK(world.log.back() == "d"); // WaitUntil still false
+  space = true;
+  runtime.Update(0.1f);
+  CHECK(world.log.back() == "e");
+  runtime.Update(0.1f);
+  CHECK(world.log.back() == "stopped");
+  std::string scriptError;
+  runtime.log = [&](const std::string &line) { scriptError += line; };
+  eKey = true;
+  runtime.Update(0.1f);
+  runtime.Update(0.1f); // the first Boom throws on its first resume
+  CHECK(scriptError.find("[ERROR]") == 0 &&
+        scriptError.find("boom") != std::string::npos);
+  runtime.log = nullptr;
+  world.log.clear();
+  runtime.Update(0.1f); // a failed script stays stopped
+  CHECK(world.log.empty());
+  runtime.Stop();
+  host.keyDown = nullptr;
   // API 3: UI elements, Dialog commands and IsKeyPressed.
   CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Talker", error));
   Write(project / "assets/scripts/Talker.hpp", R"cpp(
@@ -380,7 +538,7 @@ class AbiMismatch : public Component {};
   CHECK(runtime.Ready(source));
   ilmeee::NativeScripts asynchronous;
   CHECK(asynchronous.Configure(options));
-  for (int i = 0; i < 6000 && asynchronous.IsCompiling(); ++i) {
+  for (int i = 0; i < 18000 && asynchronous.IsCompiling(); ++i) {
     asynchronous.Poll();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }

@@ -108,6 +108,33 @@ void WriteVec4(std::ostream &out, int indent, std::string_view key,
       << FloatText(value.w) << "]\n";
 }
 
+// String and List script values; scalar keys are written by the caller.
+void WriteScriptExtras(std::ostream &out, int indent,
+                       const ilmeee::ScriptValue &value) {
+  using Type = ilmeee::ScriptValueType;
+  if (value.type == Type::String)
+    WriteString(out, indent, "string", value.string);
+  if (value.type != Type::List)
+    return;
+  WriteInt(out, indent, "element_type", static_cast<int>(value.elementType));
+  out << Indent(indent) << "items:" << (value.items.empty() ? " []\n" : "\n");
+  for (const auto &item : value.items) {
+    out << Indent(indent + 2) << "- ";
+    if (item.type == Type::Float)
+      out << FloatText(item.number);
+    else if (item.type == Type::Bool)
+      out << (item.boolean ? "true" : "false");
+    else if (item.type == Type::Object)
+      out << item.object;
+    else if (item.type == Type::Vec3)
+      out << '[' << FloatText(item.vec3[0]) << ", " << FloatText(item.vec3[1])
+          << ", " << FloatText(item.vec3[2]) << ']';
+    else
+      out << YamlQuote(item.string);
+    out << '\n';
+  }
+}
+
 void AppendFloat(std::ostringstream &out, float value) {
   out << std::setprecision(std::numeric_limits<float>::max_digits10) << value
       << ';';
@@ -139,6 +166,20 @@ void AppendBool(std::ostringstream &out, bool value) {
   out << (value ? '1' : '0') << ';';
 }
 
+void AppendScriptValue(std::ostringstream &out, const ilmeee::ScriptValue &value) {
+  AppendString(out, value.name);
+  out << static_cast<uint32_t>(value.type) << ';' << value.object << ';';
+  AppendFloat(out, value.number);
+  AppendBool(out, value.boolean);
+  for (float component : value.vec3)
+    AppendFloat(out, component);
+  AppendString(out, value.string);
+  out << static_cast<uint32_t>(value.elementType) << ';' << value.items.size()
+      << ';';
+  for (const auto &item : value.items)
+    AppendScriptValue(out, item);
+}
+
 void AppendEntitySignature(std::ostringstream &out,
                            const SceneRenderer::EditorEntitySnapshot &entity) {
   out << entity.objectId << ';' << entity.scripts.size() << ';';
@@ -147,14 +188,8 @@ void AppendEntitySignature(std::ostringstream &out,
     AppendString(out, script.className);
     AppendBool(out, script.enabled);
     out << script.values.size() << ';';
-    for (const auto &value : script.values) {
-      AppendString(out, value.name);
-      out << static_cast<uint32_t>(value.type) << ';' << value.object << ';';
-      AppendFloat(out, value.number);
-      AppendBool(out, value.boolean);
-      for (float component : value.vec3)
-        AppendFloat(out, component);
-    }
+    for (const auto &value : script.values)
+      AppendScriptValue(out, value);
   }
   AppendString(out, entity.name);
   AppendString(out, entity.path);
@@ -393,6 +428,7 @@ void WriteEntity(std::ostream &out,
       out << "                  object_id: " << value.object << '\n';
       WriteVec3(out, 18, "vec3",
                 {value.vec3[0], value.vec3[1], value.vec3[2]});
+      WriteScriptExtras(out, 18, value);
     }
   }
   WriteString(out, 10, "path", entity.path);
@@ -520,6 +556,7 @@ void WriteSnapshot(std::ostream &out, std::size_t index,
         WriteBool(out, 18, "boolean", value.boolean);
         out << "                  object: " << value.object << '\n';
         WriteVec3(out, 18, "vec3", {value.vec3[0], value.vec3[1], value.vec3[2]});
+        WriteScriptExtras(out, 18, value);
       }
     }
   }

@@ -3,7 +3,7 @@
 #include <string>
 
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 4;
+inline constexpr uint32_t kApiVersion = 5;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {

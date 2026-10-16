@@ -133,6 +133,120 @@ int MainWindow::SelectedMeshIndex() const {
 
 bool MainWindow::SceneStructureLocked() const { return !builder.IsStopped(); }
 
+namespace {
+std::string TrimName(std::string name) {
+  const auto first = name.find_first_not_of(" \t");
+  if (first == std::string::npos)
+    return {};
+  name = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+  if (name.size() > 63)
+    name.resize(63);
+  return name;
+}
+// "Cube" → "Cube 1", "Cube 2"... until unused.
+template <class Taken> std::string UniqueName(const std::string &base, Taken taken) {
+  std::string name = base;
+  for (int n = 1; taken(name); ++n) {
+    const auto suffix = " " + std::to_string(n);
+    name = base.substr(0, 63 - suffix.size()) + suffix;
+  }
+  return name;
+}
+} // namespace
+
+bool MainWindow::RenameMesh(size_t index, std::string name) {
+  if (!sceneRenderer || index >= sceneRenderer->meshes3d.size() ||
+      SceneStructureLocked())
+    return false;
+  auto &mesh = sceneRenderer->meshes3d[index];
+  name = TrimName(std::move(name));
+  if (name.empty() || name == mesh.displayName)
+    return false;
+  name = UniqueName(name, [&](const std::string &candidate) {
+    for (size_t i = 0; i < sceneRenderer->meshes3d.size(); ++i)
+      if (i != index && sceneRenderer->meshes3d[i].displayName == candidate)
+        return true;
+    return false;
+  });
+  const bool selected = mesh.displayName == objectName;
+  mesh.displayName = name;
+  if (selected)
+    std::snprintf(objectName, sizeof(objectName), "%s", name.c_str());
+  RecordEditorHistory();
+  return true;
+}
+
+bool MainWindow::RenameUiElement(size_t index, std::string name) {
+  if (index >= gameUi.elements.size() || SceneStructureLocked())
+    return false;
+  auto &element = gameUi.elements[index];
+  name = TrimName(std::move(name));
+  if (name.empty() || name == element.id)
+    return false;
+  name = UniqueName(name, [&](const std::string &candidate) {
+    for (size_t i = 0; i < gameUi.elements.size(); ++i)
+      if (i != index && gameUi.elements[i].id == candidate)
+        return true;
+    return false;
+  });
+  // Movable objects link joysticks by name; keep those links.
+  if (sceneRenderer)
+    for (auto &mesh : sceneRenderer->meshes3d) {
+      if (mesh.movementRig.moveJoystick == element.id)
+        mesh.movementRig.moveJoystick = name;
+      if (mesh.movementRig.lookJoystick == element.id)
+        mesh.movementRig.lookJoystick = name;
+    }
+  element.id = name;
+  RecordEditorHistory();
+  return true;
+}
+
+void MainWindow::BeginHierarchyRename(int mesh, int ui) {
+  if (SceneStructureLocked())
+    return;
+  const std::string *current = nullptr;
+  renamingMesh = renamingUi = -1;
+  if (sceneRenderer && mesh >= 0 &&
+      (size_t)mesh < sceneRenderer->meshes3d.size()) {
+    current = &sceneRenderer->meshes3d[mesh].displayName;
+    renamingMesh = mesh;
+  } else if (ui >= 0 && (size_t)ui < gameUi.elements.size()) {
+    current = &gameUi.elements[ui].id;
+    renamingUi = ui;
+  }
+  if (!current)
+    return;
+  std::snprintf(hierarchyRename, sizeof(hierarchyRename), "%s", current->c_str());
+  renameFocus = true;
+}
+
+// Drawn on the same line as the row's (label-less) tree node.
+void MainWindow::DrawHierarchyRenameField() {
+  SameLine();
+  SetNextItemWidth(-FLT_MIN);
+  if (renameFocus) {
+    SetKeyboardFocusHere();
+    renameFocus = false;
+  }
+  const bool enter = InputText("##rename", hierarchyRename,
+                               sizeof(hierarchyRename),
+                               ImGuiInputTextFlags_EnterReturnsTrue |
+                                   ImGuiInputTextFlags_AutoSelectAll);
+  if (IsItemActive() && IsKeyPressed(ImGuiKey_Escape)) {
+    renamingMesh = renamingUi = -1;
+    return;
+  }
+  // Commit on Enter or when focus leaves the field (click elsewhere, Tab).
+  if (enter || IsItemDeactivated()) {
+    if (renamingMesh >= 0)
+      RenameMesh((size_t)renamingMesh, hierarchyRename);
+    else if (renamingUi >= 0)
+      RenameUiElement((size_t)renamingUi, hierarchyRename);
+    renamingMesh = renamingUi = -1;
+  }
+}
+
 bool MainWindow::DeletingRemovesLastCamera(size_t index) const {
   if (!sceneRenderer)
     return false;
@@ -313,15 +427,20 @@ void MainWindow::RenderHierarchyWindow() {
 
       PushID((int)i);
       std::string label = prefix + meshName;
+      const bool renaming = renamingMesh == (int)i;
       // New children should be visible without hunting for the arrow.
       SetNextItemOpen(true, ImGuiCond_Once);
-      bool open = TreeNodeEx(label.c_str(), flags);
+      bool open = renaming ? TreeNodeEx("##node", flags, "%s", prefix.c_str())
+                           : TreeNodeEx(label.c_str(), flags);
       DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
       if (IsItemClicked(ImGuiMouseButton_Left) ||
           IsItemClicked(ImGuiMouseButton_Right)) {
         std::snprintf(objectName, sizeof(objectName), "%s", meshName.c_str());
         selectedUiElement = -1;
       }
+      if (!locked && IsItemHovered() &&
+          IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        BeginHierarchyRename((int)i, -1);
 
       if (!locked && BeginDragDropSource()) {
         int payload = (int)i;
@@ -332,6 +451,8 @@ void MainWindow::RenderHierarchyWindow() {
       dropTarget((int)i);
 
       if (BeginPopupContextItem("HierarchyItemMenu")) {
+        if (MenuItem("Rename", "F2", false, !locked))
+          BeginHierarchyRename((int)i, -1);
         if (BeginMenu("Create Child", !locked)) {
           createMenu((int)i);
           EndMenu();
@@ -354,6 +475,8 @@ void MainWindow::RenderHierarchyWindow() {
           TextDisabled("Stop the game to edit the scene");
         EndPopup();
       }
+      if (renaming)
+        DrawHierarchyRenameField();
 
       if (open) {
         for (size_t c : children[i])
@@ -428,13 +551,20 @@ void MainWindow::RenderHierarchyWindow() {
           const char *kind = element.kind == ilmeee::UiKind::Text ? "Text" :
               element.kind == ilmeee::UiKind::Image ? "Image" :
               element.kind == ilmeee::UiKind::Joystick ? "Joystick" : "Button";
-          TreeNodeEx("ui", uiFlags, "%s (%s)%s", element.id.c_str(), kind,
-                     element.visible ? "" : " [hidden]");
+          const bool renamingThis = renamingUi == i;
+          if (renamingThis)
+            TreeNodeEx("ui", uiFlags, "%s", "");
+          else
+            TreeNodeEx("ui", uiFlags, "%s (%s)%s", element.id.c_str(), kind,
+                       element.visible ? "" : " [hidden]");
           if (IsItemClicked(ImGuiMouseButton_Left) ||
               IsItemClicked(ImGuiMouseButton_Right)) {
             selectedUiElement = i;
             objectName[0] = '\0';
           }
+          if (!locked && IsItemHovered() &&
+              IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            BeginHierarchyRename(-1, i);
           // Drag to reorder. List order is draw order: lower rows are
           // drawn on top (and get clicks first).
           if (!locked && BeginDragDropSource()) {
@@ -467,12 +597,16 @@ void MainWindow::RenderHierarchyWindow() {
             EndDragDropTarget();
           }
           if (BeginPopupContextItem("UiItemMenu")) {
+            if (MenuItem("Rename", "F2", false, !locked))
+              BeginHierarchyRename(-1, i);
             if (MenuItem("Delete", "Del", false, !locked)) {
               op = Op::DeleteUi;
               opIndex = i;
             }
             EndPopup();
           }
+          if (renamingThis)
+            DrawHierarchyRenameField();
           PopID();
         }
         TreePop();
@@ -493,6 +627,13 @@ void MainWindow::RenderHierarchyWindow() {
       EndPopup();
     }
 
+    if (!locked && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_F2, false)) {
+      if (selectedUiElement >= 0)
+        BeginHierarchyRename(-1, selectedUiElement);
+      else
+        BeginHierarchyRename(SelectedMeshIndex(), -1);
+    }
     if (op == Op::None && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
       int sel = SelectedMeshIndex();
@@ -508,6 +649,8 @@ void MainWindow::RenderHierarchyWindow() {
     }
   }
 
+  if (op != Op::None) // indices may shift; drop any rename in progress
+    renamingMesh = renamingUi = -1;
   switch (op) {
   case Op::Spawn:
     SpawnSceneObject(opKind, opParent, glm::vec3(0.0f));
@@ -804,17 +947,23 @@ void MainWindow::RenderInspectorWindow() {
   //         }
   // }
   // else {
-  InputText("Name", objectName, IM_ARRAYSIZE(objectName));
-
   // Find which loaded mesh (if any) corresponds to the selected name.
-  int meshIdx = -1;
-  if (sceneRenderer) {
-    for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
-      if (sceneRenderer->GetMesh3DName(i) == objectName) {
-        meshIdx = (int)i;
-        break;
-      }
-    }
+  int meshIdx = SelectedMeshIndex();
+  if (meshIdx >= 0) {
+    // Edit a copy; renaming on every keystroke would lose the selection.
+    static char nameEdit[64];
+    static bool nameEditing = false;
+    if (!nameEditing)
+      std::snprintf(nameEdit, sizeof(nameEdit), "%s", objectName);
+    BeginDisabled(SceneStructureLocked());
+    InputText("Name", nameEdit, sizeof(nameEdit));
+    nameEditing = IsItemActive();
+    if (IsItemDeactivatedAfterEdit())
+      RenameMesh((size_t)meshIdx, nameEdit); // empty/unchanged: reverts
+    EndDisabled();
+  } else {
+    InputText("Name", objectName, IM_ARRAYSIZE(objectName));
+    meshIdx = SelectedMeshIndex();
   }
   const bool meshSelected = meshIdx >= 0;
 

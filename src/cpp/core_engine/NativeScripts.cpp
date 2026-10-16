@@ -71,21 +71,79 @@ std::string ScriptRevision(const fs::path &project) {
   }
   return revision;
 }
+// One element of each Inspector type, handed to a script's ListAccess.
+struct ScalarSlot {
+  float number = 0;
+  bool boolean = false;
+  std::string text;
+  script::Vec3 vec;
+  GameObjectRef object;
+  void *For(ScriptValueType type) {
+    switch (type) {
+    case ScriptValueType::Float: return &number;
+    case ScriptValueType::Bool: return &boolean;
+    case ScriptValueType::String: return &text;
+    case ScriptValueType::Vec3: return &vec;
+    case ScriptValueType::Object: return &object;
+    default: return nullptr;
+    }
+  }
+};
+void ReadScalar(ScriptValueType type, const void *from, ScriptValue &value) {
+  if (type == ScriptValueType::Float)
+    value.number = *static_cast<const float *>(from);
+  if (type == ScriptValueType::Bool)
+    value.boolean = *static_cast<const bool *>(from);
+  if (type == ScriptValueType::String)
+    value.string = *static_cast<const std::string *>(from);
+  if (type == ScriptValueType::Object)
+    value.object = static_cast<const GameObjectRef *>(from)->id;
+  if (type == ScriptValueType::Vec3) {
+    const auto *vec = static_cast<const script::Vec3 *>(from);
+    value.vec3[0] = vec->x;
+    value.vec3[1] = vec->y;
+    value.vec3[2] = vec->z;
+  }
+}
+void WriteScalar(ScriptValueType type, void *to, const ScriptValue &value,
+                 const script::HostApi *host) {
+  if (type == ScriptValueType::Float)
+    *static_cast<float *>(to) = value.number;
+  if (type == ScriptValueType::Bool)
+    *static_cast<bool *>(to) = value.boolean;
+  if (type == ScriptValueType::String)
+    *static_cast<std::string *>(to) = value.string;
+  if (type == ScriptValueType::Vec3)
+    *static_cast<script::Vec3 *>(to) = {value.vec3[0], value.vec3[1],
+                                        value.vec3[2]};
+  if (type == ScriptValueType::Object) {
+    auto *ref = static_cast<GameObjectRef *>(to);
+    ref->id = value.object;
+    ref->Bind(host);
+  }
+}
+bool ValidField(const ScriptProperty &field) {
+  if (field.type == ScriptValueType::List)
+    return field.list && field.elementType < ScriptValueType::List;
+  return field.type < ScriptValueType::List;
+}
 ScriptValue ReadProperty(const ScriptProperty &field) {
   ScriptValue value;
   value.name = field.name;
   value.type = field.type;
-  if (value.type == ScriptValueType::Float)
-    value.number = *static_cast<float *>(field.value);
-  if (value.type == ScriptValueType::Bool)
-    value.boolean = *static_cast<bool *>(field.value);
-  if (value.type == ScriptValueType::Object)
-    value.object = static_cast<GameObjectRef *>(field.value)->id;
-  if (value.type == ScriptValueType::Vec3) {
-    const auto *vec = static_cast<script::Vec3 *>(field.value);
-    value.vec3[0] = vec->x;
-    value.vec3[1] = vec->y;
-    value.vec3[2] = vec->z;
+  if (field.type != ScriptValueType::List) {
+    ReadScalar(field.type, field.value, value);
+    return value;
+  }
+  value.elementType = field.elementType;
+  const size_t count = field.list->size(field.value);
+  for (size_t i = 0; i < count; ++i) {
+    ScalarSlot slot;
+    field.list->get(field.value, i, slot.For(field.elementType));
+    ScriptValue item;
+    item.type = field.elementType;
+    ReadScalar(item.type, slot.For(item.type), item);
+    value.items.push_back(std::move(item));
   }
   return value;
 }
@@ -95,6 +153,10 @@ bool Finite(const ScriptValue &value) {
   if (value.type == ScriptValueType::Vec3)
     return std::isfinite(value.vec3[0]) && std::isfinite(value.vec3[1]) &&
            std::isfinite(value.vec3[2]);
+  if (value.type == ScriptValueType::List)
+    return value.items.size() <= kMaxScriptListItems &&
+           std::all_of(value.items.begin(), value.items.end(),
+                       [](const ScriptValue &item) { return Finite(item); });
   return true;
 }
 void ApplyProperties(Component &component, const NativeScriptBinding &binding,
@@ -102,22 +164,40 @@ void ApplyProperties(Component &component, const NativeScriptBinding &binding,
   ScriptProperties properties;
   component.DescribeProperties(properties);
   for (const auto &field : properties.fields) {
+    if (!ValidField(field))
+      continue;
+    ScriptValue shape;
+    shape.name = field.name;
+    shape.type = field.type;
+    shape.elementType = field.elementType;
     for (const auto &value : binding.values) {
-      if (value.name != field.name || value.type != field.type ||
-          !Finite(value))
+      if (!SameScriptShape(value, shape) || !Finite(value))
         continue;
-      if (field.type == ScriptValueType::Float)
-        *static_cast<float *>(field.value) = value.number;
-      if (field.type == ScriptValueType::Vec3)
-        *static_cast<script::Vec3 *>(field.value) = {
-            value.vec3[0], value.vec3[1], value.vec3[2]};
-      if (field.type == ScriptValueType::Bool)
-        *static_cast<bool *>(field.value) = value.boolean;
-      if (field.type == ScriptValueType::Object)
-        static_cast<GameObjectRef *>(field.value)->id = value.object;
+      if (field.type != ScriptValueType::List) {
+        WriteScalar(field.type, field.value, value, host);
+        continue;
+      }
+      field.list->resize(field.value, value.items.size());
+      for (size_t i = 0; i < value.items.size(); ++i) {
+        ScalarSlot slot;
+        WriteScalar(field.elementType, slot.For(field.elementType),
+                    value.items[i], host);
+        field.list->set(field.value, i, slot.For(field.elementType));
+      }
     }
+    // Defaults the Inspector never touched still need the host.
     if (field.type == ScriptValueType::Object)
       static_cast<GameObjectRef *>(field.value)->Bind(host);
+    if (field.type == ScriptValueType::List &&
+        field.elementType == ScriptValueType::Object) {
+      const size_t count = field.list->size(field.value);
+      for (size_t i = 0; i < count; ++i) {
+        GameObjectRef ref;
+        field.list->get(field.value, i, &ref);
+        ref.Bind(host);
+        field.list->set(field.value, i, &ref);
+      }
+    }
   }
 }
 } // namespace
@@ -557,9 +637,15 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
         error = "Exposed script fields must have unique non-empty names.";
         return false;
       }
+      if (!ValidField(field)) {
+        error = "Field '" + field.name + "' has an unsupported type.";
+        return false;
+      }
       const auto value = ReadProperty(field);
       if (!Finite(value)) {
-        error = "Exposed float and Vec3 defaults must be finite.";
+        error = "Exposed float and Vec3 defaults must be finite, and lists "
+                "may hold at most " +
+                std::to_string(kMaxScriptListItems) + " items.";
         return false;
       }
       module->defaults.push_back(value);
@@ -601,7 +687,7 @@ NativeScripts::Properties(const NativeScriptBinding &binding) const {
   auto values = it->second->defaults;
   for (auto &value : values)
     for (const auto &stored : binding.values)
-      if (value.name == stored.name && value.type == stored.type)
+      if (SameScriptShape(value, stored))
         value = stored;
   return values;
 }
@@ -650,7 +736,9 @@ void NativeScripts::Update(float deltaTime) {
     if (instance->failed)
       continue;
     try {
-      instance->component->Update(std::min(deltaTime, 0.25f));
+      const float step = std::min(deltaTime, 0.25f);
+      instance->component->Update(step);
+      instance->component->TickCoroutines(step);
     } catch (const std::exception &e) {
       instance->failed = true;
       if (log)
