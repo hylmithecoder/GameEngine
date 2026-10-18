@@ -66,6 +66,8 @@ SceneRenderer::~SceneRenderer() {
       vkDestroyPipeline(device, meshPipeline, nullptr);
     if (worldTextPipeline != VK_NULL_HANDLE)
       vkDestroyPipeline(device, worldTextPipeline, nullptr);
+    if (outlinePipeline != VK_NULL_HANDLE)
+      vkDestroyPipeline(device, outlinePipeline, nullptr);
     if (meshPipelineLayout != VK_NULL_HANDLE)
       vkDestroyPipelineLayout(device, meshPipelineLayout, nullptr);
     if (meshTextureSetLayout != VK_NULL_HANDLE)
@@ -1204,7 +1206,9 @@ void SceneRenderer::InitMeshPipeline() {
     uboBinding.binding = 0;
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // The fragment stage reads the camera + NPR settings.
+    uboBinding.stageFlags =
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     dslInfo.bindingCount = 1;
@@ -1310,6 +1314,20 @@ void SceneRenderer::InitMeshPipeline() {
 
   vkDestroyShaderModule(device, vert, nullptr);
   vkDestroyShaderModule(device, frag, nullptr);
+
+  // NPR outline: opaque, depth-tested hull. No culling by winding; the
+  // fragment shader culls by normal (imported models mix windings).
+  cba.blendEnable = VK_FALSE;
+  ds.depthWriteEnable = VK_TRUE;
+  stages[0].module =
+      LoadShader("assets/shaders/vulkan/scene_outline.vert.spv");
+  stages[1].module =
+      LoadShader("assets/shaders/vulkan/scene_outline.frag.spv");
+  if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr,
+                                &outlinePipeline) != VK_SUCCESS)
+    throw std::runtime_error("failed to create NPR outline pipeline");
+  vkDestroyShaderModule(device, stages[0].module, nullptr);
+  vkDestroyShaderModule(device, stages[1].module, nullptr);
 }
 
 void SceneRenderer::InitWhiteTexture() {
@@ -1505,6 +1523,22 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
   su.lightColorType = glm::vec4(lightColor, (float)type);
   su.lightDir = glm::vec4(lightDir, 0.0f);
   su.lightParams = glm::vec4(range, spotAngleRad, gamma, spotCosOuter);
+  // Eye position from the matrix: the camera centre projects to w = 0, so
+  // it is inverse(viewProj) * (0, 0, 1, 0) after the homogeneous divide.
+  const glm::vec4 eye = glm::inverse(viewProj) * glm::vec4(0, 0, 1, 0);
+  const glm::vec3 cameraPos =
+      std::abs(eye.w) > 1e-8f ? glm::vec3(eye) / eye.w : glm::vec3(0.0f);
+  const bool nprOn = npr.enabled;
+  const bool outlineOn =
+      nprOn && npr.outline && npr.outlineWidth > 0.0f &&
+      outlinePipeline != VK_NULL_HANDLE;
+  su.cameraPos = glm::vec4(cameraPos, nprOn ? 1.0f : 0.0f);
+  su.npr = glm::vec4((float)npr.bands, npr.softness,
+                     npr.specular ? npr.specularSize : 0.0f,
+                     npr.specularStrength);
+  su.nprShadow = glm::vec4(npr.shadowColor, npr.rim ? npr.rimWidth : 0.0f);
+  su.nprRim = glm::vec4(npr.rimColor, npr.rimStrength);
+  su.nprOutline = glm::vec4(npr.outlineColor, outlineOn ? npr.outlineWidth : 0);
   std::memcpy(meshSceneUboMapped, &su, sizeof(su));
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           meshPipelineLayout, 1, 1, &meshSceneSet, 0, nullptr);
@@ -1582,6 +1616,17 @@ void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
         drawRange(sm.indexOffset, sm.indexCount, sm.diffuse,
                   sm.hasTexture ? 1.0f : 0.0f, sm.textureDescriptor);
       }
+    }
+
+    // NPR ink outline around ordinary geometry (not editor markers or text).
+    if (outlineOn && !m.isWorldText && !m.isLight && !m.isCamera &&
+        !m.isAudioEmitter) {
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, outlinePipeline);
+      vkCmdPushConstants(cmd, meshPipelineLayout,
+                         VK_SHADER_STAGE_VERTEX_BIT |
+                             VK_SHADER_STAGE_FRAGMENT_BIT,
+                         0, sizeof(MeshPushConstants), &pc);
+      vkCmdDrawIndexed(cmd, m.indexCount, 1, 0, 0, 0);
     }
   }
 }

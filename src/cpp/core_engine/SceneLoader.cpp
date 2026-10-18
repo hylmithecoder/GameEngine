@@ -15,6 +15,7 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
   SceneLoadReport report;
   renderer.SetBackgroundColor(scene.backgroundColor.r, scene.backgroundColor.g,
                               scene.backgroundColor.b, scene.backgroundColor.a);
+  renderer.SetNpr(scene.npr);
 
   // entity index -> mesh index (an entity that fails to load shifts all
   // later meshes, so parents are linked through this at the end)

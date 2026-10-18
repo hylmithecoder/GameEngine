@@ -24,6 +24,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/MainWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/McpTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/LightingPanel.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/RocketInterfaces.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/SimpleRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ApplicationManager.cpp
@@ -62,6 +63,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Check_Environment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Discordrich.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PMXLoader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/ModelThumbnail.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/SvgIconManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorDockSpace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorTheme.cpp

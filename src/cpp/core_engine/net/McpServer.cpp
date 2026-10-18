@@ -1,5 +1,6 @@
 #include "../../../../include/core_engine/net/McpServer.hpp"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <exception>
 #include <ixwebsocket/IXHttpServer.h>
@@ -10,6 +11,9 @@ namespace ilmeee::net {
 namespace {
 constexpr const char *kModern = "2026-07-28";
 constexpr const char *kLegacy = "2025-11-25";
+// Older revisions a client may still negotiate; our tool results fit them all.
+constexpr const char *kLegacyVersions[] = {kLegacy, "2025-06-18",
+                                           "2025-03-26"};
 constexpr const char *kVersionKey = "io.modelcontextprotocol/protocolVersion";
 constexpr const char *kCapabilitiesKey =
     "io.modelcontextprotocol/clientCapabilities";
@@ -19,6 +23,19 @@ constexpr size_t kMaxRequestBytes = 64 * 1024;
 std::string Header(const ix::HttpRequest &request, const char *key) {
   auto it = request.headers.find(key);
   return it == request.headers.end() ? std::string() : it->second;
+}
+
+bool IsLegacyVersion(const std::string &version) {
+  for (const char *known : kLegacyVersions)
+    if (version == known)
+      return true;
+  return false;
+}
+
+std::string Lowercase(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return (char)std::tolower(c); });
+  return text;
 }
 
 bool TokenMatches(const std::string &actual, const std::string &expected) {
@@ -210,12 +227,14 @@ json ToolList() {
 McpServer::McpServer(ToolHandler handler) : handler_(std::move(handler)) {}
 McpServer::~McpServer() { Stop(); }
 
-bool McpServer::Start(int port, std::string token, std::string &error) {
+bool McpServer::Start(int port, std::string token, std::string &error,
+                      std::string publicHost) {
   if (port < 1 || port > 65535 || token.empty()) {
     error = "invalid MCP port or empty token";
     return false;
   }
   token_ = std::move(token);
+  publicHost_ = Lowercase(std::move(publicHost));
   stopping_ = false;
   server_ = std::make_unique<ix::HttpServer>(
       port, "127.0.0.1", 16, 8, AF_INET, 10,
@@ -224,20 +243,35 @@ bool McpServer::Start(int port, std::string token, std::string &error) {
   server_->setOnConnectionCallback([this, port](
                                        ix::HttpRequestPtr request,
                                        std::shared_ptr<ix::ConnectionState>) {
-    if (!request || request->uri != "/mcp")
+    if (!request)
+      return Response(404);
+    // "/" and "/mcp" authenticate with a Bearer header. "/mcp/<token>" carries
+    // the token in the path for clients that cannot send custom headers
+    // (e.g. claude.ai custom connectors through a tunnel).
+    const std::string path = request->uri.substr(0, request->uri.find('?'));
+    const bool pathToken = path.rfind("/mcp/", 0) == 0;
+    if (path != "/" && path != "/mcp" && !pathToken)
       return Response(404);
     const std::string local = "127.0.0.1:" + std::to_string(port);
     const std::string localhost = "localhost:" + std::to_string(port);
-    const std::string host = Header(*request, "Host");
-    const std::string origin = Header(*request, "Origin");
-    if ((host != local && host != localhost) ||
+    const std::string host = Lowercase(Header(*request, "Host"));
+    const std::string origin = Lowercase(Header(*request, "Origin"));
+    const bool publicRequest = !publicHost_.empty() &&
+                               (host == publicHost_ ||
+                                host == publicHost_ + ":443");
+    if ((host != local && host != localhost && !publicRequest) ||
         (!origin.empty() && origin != "http://" + local &&
-         origin != "http://" + localhost))
+         origin != "http://" + localhost &&
+         !(publicRequest && origin == "https://" + publicHost_)))
       return Response(403);
     if (request->method != "POST")
       return Response(405);
-    if (!TokenMatches(Header(*request, "Authorization"), "Bearer " + token_))
-      return Response(401);
+    const bool authorized =
+        pathToken ? TokenMatches(path.substr(5), token_)
+                  : TokenMatches(Header(*request, "Authorization"),
+                                 "Bearer " + token_);
+    if (!authorized)
+      return Response(pathToken ? 404 : 401);
     if (request->body.size() > kMaxRequestBytes)
       return Response(413);
     if (Header(*request, "Content-Type").find("application/json") != 0)
@@ -285,7 +319,7 @@ bool McpServer::Start(int port, std::string token, std::string &error) {
           return Response(
               400, RpcError(id, -32020, "Header or request metadata mismatch")
                        .dump());
-      } else if (!headerVersion.empty() && headerVersion != kLegacy) {
+      } else if (!headerVersion.empty() && !IsLegacyVersion(headerVersion)) {
         return Response(400,
                         RpcError(id, -32022, "Unsupported protocol version",
                                  {{"supported", {kModern, kLegacy}},
@@ -307,8 +341,9 @@ bool McpServer::Start(int port, std::string token, std::string &error) {
                   {"ttlMs", 0},
                   {"cacheScope", "private"}};
       } else if (method == "initialize" && !modern) {
+        const std::string wanted = params.value("protocolVersion", "");
         result = {
-            {"protocolVersion", kLegacy},
+            {"protocolVersion", IsLegacyVersion(wanted) ? wanted : kLegacy},
             {"capabilities", {{"tools", json::object()}}},
             {"serverInfo", {{"name", "ilmeee-editor"}, {"version", "1.0.0"}}}};
         return Response(200, RpcResult(id, std::move(result), false).dump());

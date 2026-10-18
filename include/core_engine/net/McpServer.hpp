@@ -25,7 +25,10 @@ public:
   McpServer(const McpServer &) = delete;
   McpServer &operator=(const McpServer &) = delete;
 
-  bool Start(int port, std::string token, std::string &error);
+  // publicHost (e.g. "mcp.example.com") is the hostname a reverse proxy or
+  // tunnel forwards with; empty keeps the server reachable from loopback only.
+  bool Start(int port, std::string token, std::string &error,
+             std::string publicHost = {});
   void Stop();
   void Poll();
 
@@ -39,6 +42,7 @@ private:
   ToolHandler handler_;
   std::unique_ptr<ix::HttpServer> server_;
   std::string token_;
+  std::string publicHost_;
   std::atomic<bool> stopping_{true};
   std::mutex mutex_;
   std::deque<std::shared_ptr<Pending>> queue_;

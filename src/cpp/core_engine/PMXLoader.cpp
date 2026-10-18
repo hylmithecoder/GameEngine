@@ -461,8 +461,10 @@ bool LoadPMX(const std::string &path, PMXModel &out) {
       b.localAxisZ = r.readVec3();
     }
 
-    // Bit 12: external parent
-    if (b.flags & 0x1000) {
+    // Bit 13: external parent deform. (Bit 12, 0x1000, is "physics after
+    // deform" and carries no data; reading a key for it misaligned every
+    // following bone.)
+    if (b.flags & 0x2000) {
       b.externalParentKey = r.readI32();
     }
 

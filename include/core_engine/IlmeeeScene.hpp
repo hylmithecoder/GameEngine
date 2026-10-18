@@ -49,6 +49,11 @@
 //   -- v1.14 each script value then carries string text, uint32 elementType,
 //      uint32 itemCount, and per item (List type): float32 number,
 //      uint32 boolean, uint64 object, float32 x, y, z, string text --
+//   -- v1.15 after backgroundColor, NPR lighting: uint32 flags (1 enabled,
+//      2 rim, 4 specular, 8 outline), uint32 bands, float32 softness,
+//      vec3 shadowColor, vec3 rimColor, float32 rimWidth, rimStrength,
+//      specularSize, specularStrength, vec3 outlineColor,
+//      float32 outlineWidth --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -63,6 +68,7 @@
 #include "DialogComponent.hpp"
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
+#include "NprSettings.hpp"
 #include "NativeScriptTypes.hpp"
 #include "SkeletalAnimation.hpp"
 #include "WorldText.hpp"
@@ -76,7 +82,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 14;
+constexpr uint16_t kSceneFormatMinor = 15;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -174,6 +180,7 @@ struct IlmeeeScene {
   std::vector<SceneEntity> entities;
   // v1.4. Default matches SceneRenderer's, so older files look unchanged.
   glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
+  NprSettings npr; // v1.15; default off, so older files look unchanged
 };
 
 namespace detail {
@@ -391,6 +398,20 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   // Version 1.4: environment
   for (int c = 0; c < 4; ++c)
     detail::WriteF32(f, scene.backgroundColor[c]);
+
+  // Version 1.15: NPR lighting
+  const NprSettings &npr = scene.npr;
+  detail::WriteU32(f, npr.PackFlags());
+  detail::WriteU32(f, (uint32_t)npr.bands);
+  detail::WriteF32(f, npr.softness);
+  detail::WriteVec3(f, npr.shadowColor);
+  detail::WriteVec3(f, npr.rimColor);
+  detail::WriteF32(f, npr.rimWidth);
+  detail::WriteF32(f, npr.rimStrength);
+  detail::WriteF32(f, npr.specularSize);
+  detail::WriteF32(f, npr.specularStrength);
+  detail::WriteVec3(f, npr.outlineColor);
+  detail::WriteF32(f, npr.outlineWidth);
   return f.good();
 }
 
@@ -633,6 +654,25 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
     for (int c = 0; c < 4; ++c)
       if (!detail::ReadF32(f, out.backgroundColor[c]))
         return false;
+  }
+  out.npr = NprSettings();
+  if (minor >= 15) {
+    NprSettings &npr = out.npr;
+    uint32_t flags = 0, bands = 0;
+    if (!detail::ReadU32(f, flags) || !detail::ReadU32(f, bands) ||
+        !detail::ReadF32(f, npr.softness) ||
+        !detail::ReadVec3(f, npr.shadowColor) ||
+        !detail::ReadVec3(f, npr.rimColor) ||
+        !detail::ReadF32(f, npr.rimWidth) ||
+        !detail::ReadF32(f, npr.rimStrength) ||
+        !detail::ReadF32(f, npr.specularSize) ||
+        !detail::ReadF32(f, npr.specularStrength) ||
+        !detail::ReadVec3(f, npr.outlineColor) ||
+        !detail::ReadF32(f, npr.outlineWidth))
+      return false;
+    npr.UnpackFlags(flags);
+    npr.bands = (int)std::min<uint32_t>(bands, 5);
+    npr.Clamp();
   }
 
   // A link that points outside the file, at itself, or into a loop would

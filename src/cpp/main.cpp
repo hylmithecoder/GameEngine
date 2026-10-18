@@ -211,12 +211,15 @@ int main(int argc, char *argv[]) {
   //       When true, the debug fallback loads a 2D sprite scene
   //       (assets/testimage.png) instead of the default 3D OBJ.
   //   --mcp [--mcp-port 9220]  Enable local MCP in the editor.
+  //   --mcp-public-host <host>  Also accept MCP requests forwarded by a
+  //       tunnel/reverse proxy for this hostname (implies --mcp).
   std::string cliProjectPath;
   bool cliDebug2D = false;
   auto parseBoolFlag = [](const std::string &v) {
     return v == "true" || v == "1" || v == "yes" || v == "on";
   };
   int cliMcpPort = 0;
+  std::string cliMcpPublicHost;
   auto parseMcpPort = [](const std::string &value) -> int {
     size_t used = 0;
     const int port = std::stoi(value, &used);
@@ -246,6 +249,12 @@ int main(int argc, char *argv[]) {
     } else if (a.rfind("--mcp-port=", 0) == 0) {
       try { cliMcpPort = parseMcpPort(a.substr(strlen("--mcp-port="))); }
       catch (...) { Log("Invalid --mcp-port", Debug::LogLevel::ERROR); return 1; }
+    } else if (a == "--mcp-public-host" && i + 1 < argc) {
+      cliMcpPublicHost = argv[++i];
+      if (cliMcpPort == 0) cliMcpPort = 9220;
+    } else if (a.rfind("--mcp-public-host=", 0) == 0) {
+      cliMcpPublicHost = a.substr(strlen("--mcp-public-host="));
+      if (cliMcpPort == 0) cliMcpPort = 9220;
     } else if (a == "--mcp-port") {
       Log("Missing --mcp-port value", Debug::LogLevel::ERROR);
       return 1;
@@ -276,6 +285,7 @@ int main(int argc, char *argv[]) {
     }
     g_app->SetDebug2D(cliDebug2D);
     g_app->SetMcpPort(cliMcpPort);
+    g_app->SetMcpPublicHost(cliMcpPublicHost);
 
     // Launch engine
     Log("Launching engine...");

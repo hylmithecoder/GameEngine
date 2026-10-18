@@ -31,6 +31,8 @@ static constexpr int kMediaBytes = 22 + 18;
 static constexpr int kNativeBytes = 8 + 4; // objectId + zero scripts
 static constexpr int kDialogBytes = 4 + 4 + 32 + 2 + 2 + 16;
 static constexpr int kAnimationBytes = 4 + 2 + 4 + 4;
+// v1.15 scene-level NPR block after the background colour.
+static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4;
 
 static SceneEntity Entity(const char *name, int parent) {
   SceneEntity e;
@@ -218,7 +220,7 @@ int main() {
     s.entities = {Entity("Old", -1)};
     CHECK(SaveScene(file.string(), s));
     std::vector<char> bytes = ReadAll(file);
-    bytes[6] = 7;
+    bytes[6] = 7; bytes.resize(bytes.size() - kNprBytes);
     bytes[7] = 0;
     bytes.erase(bytes.end() - 16 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
@@ -248,7 +250,7 @@ int main() {
     s.entities[0].name = "Only";
     CHECK(SaveScene(file.string(), s));
     std::vector<char> bytes = ReadAll(file);
-    bytes[6] = 2; // minor version (little-endian u16 after the magic + major)
+    bytes[6] = 2; bytes.resize(bytes.size() - kNprBytes); // minor version (little-endian u16 after the magic + major)
     bytes[7] = 0;
     // Drop v1.4 environment, v1.3 parent, v1.6 movement, v1.7 rig and v1.8
     // media.
@@ -268,7 +270,7 @@ int main() {
     s.entities = {Entity("Old", -1)};
     CHECK(SaveScene(file.string(), s));
     std::vector<char> bytes = ReadAll(file);
-    bytes[6] = 5;
+    bytes[6] = 5; bytes.resize(bytes.size() - kNprBytes);
     bytes[7] = 0;
     bytes.erase(bytes.end() - 16 - 10 - 20 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
@@ -287,7 +289,7 @@ int main() {
     s.entities[0].movementScript = "WASD XZ";
     CHECK(SaveScene(file.string(), s));
     std::vector<char> bytes = ReadAll(file);
-    bytes[6] = 6;
+    bytes[6] = 6; bytes.resize(bytes.size() - kNprBytes);
     bytes[7] = 0;
     bytes.erase(bytes.end() - 16 - 20 - kMediaBytes - kNativeBytes - kDialogBytes - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
@@ -411,7 +413,7 @@ int main() {
     old.entities = {Entity("Old", -1)};
     CHECK(SaveScene(file.string(), old));
     std::vector<char> bytes = ReadAll(file);
-    bytes[6] = 10;
+    bytes[6] = 10; bytes.resize(bytes.size() - kNprBytes);
     bytes[7] = 0;
     // uiVisible + dialog with empty strings: 4 + 4 + 32 + 2 + 2 + 4*4.
     constexpr int kV11Bytes = 4 + 4 + 32 + 2 + 2 + 16;
@@ -438,7 +440,7 @@ int main() {
     scene.entities = {Entity("Legacy", -1)};
     CHECK(SaveScene(file.string(), scene));
     auto bytes = ReadAll(file);
-    bytes[6] = 11; bytes[7] = 0;
+    bytes[6] = 11; bytes.resize(bytes.size() - kNprBytes); bytes[7] = 0;
     bytes.erase(bytes.end() - 16 - kAnimationBytes, bytes.end() - 16);
     WriteAll(file, bytes);
     CHECK(LoadScene(file.string(), loaded));
@@ -470,7 +472,7 @@ int main() {
     CHECK(loaded.entities[2].name == "After");
     // Older players must reject, not misread WorldText data as an entity.
     auto bytes = ReadAll(file);
-    bytes[6] = 12;
+    bytes[6] = 12; bytes.resize(bytes.size() - kNprBytes);
     WriteAll(file, bytes);
     CHECK(!LoadScene(file.string(), loaded));
   }
@@ -482,7 +484,7 @@ int main() {
     s.entities = {Entity("Legacy", -1)};
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file);
-    bytes[6] = 12;
+    bytes[6] = 12; bytes.resize(bytes.size() - kNprBytes);
     WriteAll(file, bytes);
     IlmeeeScene loaded;
     CHECK(LoadScene(file.string(), loaded));
@@ -515,6 +517,37 @@ int main() {
     CHECK(Utf8Prefix("héllo", 2) == "hé" && Utf8Prefix("héllo", 0).empty());
     CHECK(Utf8Prefix("héllo", 99) == "héllo");
   }
+  // v1.15 NPR lighting round-trips; out-of-range values are clamped and a
+  // v1.14 file (no NPR block) loads with NPR off.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Toon", -1)};
+    s.npr.enabled = true;
+    s.npr.bands = 3;
+    s.npr.softness = 0.2f;
+    s.npr.shadowColor = {0.5f, 0.4f, 0.6f};
+    s.npr.rim = false;
+    s.npr.specular = true;
+    s.npr.specularSize = 0.9f; // clamped to 0.5
+    s.npr.outlineColor = {0.1f, 0.2f, 0.3f};
+    s.npr.outlineWidth = 2.5f;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.npr.enabled && !in.npr.rim && in.npr.specular && in.npr.outline);
+    CHECK(in.npr.bands == 3 && in.npr.softness == 0.2f);
+    CHECK(in.npr.shadowColor == glm::vec3(0.5f, 0.4f, 0.6f));
+    CHECK(in.npr.specularSize == 0.5f);
+    CHECK(in.npr.outlineColor == glm::vec3(0.1f, 0.2f, 0.3f));
+    CHECK(in.npr.outlineWidth == 2.5f);
+
+    auto bytes = ReadAll(file);
+    bytes[6] = 14; bytes.resize(bytes.size() - kNprBytes);
+    WriteAll(file, bytes);
+    CHECK(LoadScene(file.string(), in));
+    CHECK(!in.npr.enabled && in.npr.bands == NprSettings().bands);
+  }
+
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
   return g_failures == 0 ? 0 : 1;

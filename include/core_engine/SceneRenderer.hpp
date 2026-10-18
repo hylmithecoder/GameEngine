@@ -3,6 +3,7 @@
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include "NativeScriptTypes.hpp"
+#include "NprSettings.hpp"
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "SkeletalAnimation.hpp"
@@ -96,6 +97,7 @@ private:
   float gridSize = 32.0f;
   ImVec4 gridColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
   ImVec4 bgColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
+  ilmeee::NprSettings npr;
 
   // Vulkan Context
   VkDevice device = VK_NULL_HANDLE;
@@ -163,6 +165,8 @@ private:
   // constants, depth-tested, samples one albedo texture per submesh).
   VkPipeline meshPipeline = VK_NULL_HANDLE;
   VkPipeline worldTextPipeline = VK_NULL_HANDLE;
+  // NPR ink outline: inverted hull, same layout/descriptors as meshPipeline.
+  VkPipeline outlinePipeline = VK_NULL_HANDLE;
   int worldTextFontTexture = 0;
   VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
   // set=0 binding=0 = combined image sampler (fragment). Defined identically
@@ -175,6 +179,11 @@ private:
     glm::vec4 lightColorType;
     glm::vec4 lightDir;
     glm::vec4 lightParams;
+    glm::vec4 cameraPos;  // w = NPR on
+    glm::vec4 npr;        // bands, softness, specular size, specular strength
+    glm::vec4 nprShadow;  // shadow colour, rim width
+    glm::vec4 nprRim;     // rim colour, rim strength
+    glm::vec4 nprOutline; // outline colour, width (0 = no outline)
   };
   struct MeshPushConstants { // matches `PC` in scene_mesh.vert
     glm::mat4 model;
@@ -659,6 +668,12 @@ public:
   bool IsGridVisible() const { return gridVisible; }
   glm::vec4 GetGridColor() const {
     return glm::vec4(gridColor.x, gridColor.y, gridColor.z, gridColor.w);
+  }
+  // Scene-wide toon lighting (saved in the scene, applied to every 3D view).
+  const ilmeee::NprSettings &GetNpr() const { return npr; }
+  void SetNpr(const ilmeee::NprSettings &settings) {
+    npr = settings;
+    npr.Clamp();
   }
   glm::vec4 GetBackgroundColor() const {
     return glm::vec4(bgColor.x, bgColor.y, bgColor.z, bgColor.w);

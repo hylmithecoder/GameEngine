@@ -6,6 +6,7 @@
 #include <vector>
 // #include <direct.h>
 #include "../audio/FFmpegWrapper.hpp"
+#include "../core_engine/ModelThumbnail.hpp"
 #include "../core_engine/SceneSerializer.hpp"
 #include "../core_engine/ScriptWorkspace.hpp"
 #include "assets.hpp"
@@ -160,6 +161,7 @@ public:
   IconInfo GenerateVideoThumbnail(const string &videoPath);
   unordered_map<string, IconInfo> iconCacheInfo;
   IconInfo LoadCachedTexture(const string &pathIcon);
+  ilmeee::ModelThumbnailCache modelThumbnails;
 
   IconInfo GetIconForFile(const AssetFile &node) {
     string path = "assets/icons/svg/";
@@ -182,8 +184,11 @@ public:
         IconInfo thumbnail = GenerateVideoThumbnail(node.fullPath);
         iconCacheInfo[node.fullPath] = thumbnail;
         return thumbnail;
-      } else if (ext == ".fbx" || ext == ".obj" || ext == ".pmx")
-        path += "box.svg";
+      } else if (ilmeee::IsPreviewableModel(node.name)) {
+        // Rendered preview once ready; the generic box until then.
+        const string preview = modelThumbnails.Request(node.fullPath);
+        path = preview.empty() ? path + "box.svg" : preview;
+      }
       else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" ||
                ext == ".flac")
         path += "music.svg";

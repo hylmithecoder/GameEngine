@@ -101,5 +101,45 @@ int main() {
   running = false;
   editor.join();
   server.Stop();
+
+  // Tunnel mode: forwarded Host header, token in the URL path, no Bearer.
+  McpServer tunneled([](const std::string &, const json &) {
+    return json{{"ok", true}};
+  });
+  assert(tunneled.Start(port, "path-secret", error, "MCP.Example.com"));
+  running = true;
+  std::thread tunnelEditor([&] {
+    while (running) {
+      tunneled.Poll();
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  auto viaTunnel = [&](const std::string &path, const std::string &host,
+                       const json &body) {
+    ix::HttpClient client;
+    auto args = client.createRequest();
+    args->extraHeaders["Accept"] = "application/json, text/event-stream";
+    args->extraHeaders["Content-Type"] = "application/json";
+    args->extraHeaders["Host"] = host;
+    return client.post("http://127.0.0.1:" + std::to_string(port) + path,
+                       body.dump(), args);
+  };
+  const json legacyInit = {{"jsonrpc", "2.0"},
+                           {"id", 7},
+                           {"method", "initialize"},
+                           {"params", {{"protocolVersion", "2025-06-18"}}}};
+  auto tunnelInit = viaTunnel("/mcp/path-secret", "mcp.example.com", legacyInit);
+  assert(tunnelInit->statusCode == 200);
+  assert(json::parse(tunnelInit->body)["result"]["protocolVersion"] ==
+         "2025-06-18");
+  assert(viaTunnel("/mcp/wrong", "mcp.example.com", legacyInit)->statusCode ==
+         404);
+  assert(viaTunnel("/", "mcp.example.com", legacyInit)->statusCode == 401);
+  assert(viaTunnel("/mcp/path-secret", "evil.example.com", legacyInit)
+             ->statusCode == 403);
+  assert(viaTunnel("/other", "mcp.example.com", legacyInit)->statusCode == 404);
+  running = false;
+  tunnelEditor.join();
+  tunneled.Stop();
   std::cout << "MCP HTTP protocol checks passed\n";
 }

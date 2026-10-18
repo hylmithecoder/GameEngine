@@ -251,8 +251,11 @@ public:
   // Windows > Device Monitor: live FPS/frame time/RAM of the game started
   // with Run (desktop or the phone), plus device and battery state.
   void RenderDeviceMonitorWindow();
+  void RenderLightingMenu();   // LightingPanel.cpp
+  void RenderLightingWindow();
   ilmeee::DeviceMonitor deviceMonitor;
   bool showDeviceMonitor = false;
+  bool showLighting = false;
   std::thread gameBuildThread;
   std::atomic<bool> gameBuildRunning{false};
   std::atomic<bool> gameBuildFinished{false};

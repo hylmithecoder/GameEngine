@@ -35,6 +35,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <signal.h>
 #include <sstream>
 #include <string>
@@ -105,6 +106,13 @@ struct ProjectEntry {
   std::string lastOpened;    // ISO date, e.g. "2026-05-17"
   std::string lastScene;     // optional, last opened scene filename
   bool mcpEnabled = false;   // Hub launch preference, stored in hub.json
+};
+
+// Hub-wide MCP settings (hub.json "mcp"). Shared by every project because
+// only one editor at a time can own port 9220.
+struct McpSettings {
+  std::string token;      // passed as ILMEEE_MCP_TOKEN; empty = per-session
+  std::string publicHost; // tunnel hostname for --mcp-public-host
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +200,7 @@ struct ChildProc {
   bool mcpEnabled = false;
   std::mutex tokenMutex;
   std::string mcpToken;
+  std::string publicHost; // --mcp-public-host given at launch
   int readFd = -1;
   std::thread reader;
   std::atomic<bool> alive{false};
@@ -263,6 +272,57 @@ void WriteProjectMetadata(const ProjectEntry &entry) {
     f << j.dump(2);
 }
 
+// hub.json holds secrets (MCP token), so keep it private to the user.
+json ReadHubJson() {
+  std::ifstream f(HubConfigPath());
+  json j = json::parse(f, nullptr, false);
+  return j.is_object() ? j : json::object();
+}
+
+void WriteHubJson(const json &j) {
+  std::string p = HubConfigPath();
+  if (p.empty())
+    return;
+  EnsureParentDir(p);
+  std::ofstream f(p);
+  if (!f.is_open())
+    return;
+  f << j.dump(2);
+  f.close();
+  std::error_code ec;
+  fs::permissions(p, fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace, ec);
+}
+
+McpSettings LoadMcpSettings() {
+  McpSettings out;
+  const json j = ReadHubJson();
+  if (j.contains("mcp") && j["mcp"].is_object()) {
+    out.token = j["mcp"].value("token", "");
+    out.publicHost = j["mcp"].value("publicHost", "");
+  }
+  return out;
+}
+
+void SaveMcpSettings(const McpSettings &settings) {
+  json j = ReadHubJson();
+  j["mcp"] = {{"token", settings.token}, {"publicHost", settings.publicHost}};
+  WriteHubJson(j);
+}
+
+// 32 random bytes as hex, same strength as the editor's session token.
+std::string GenerateMcpToken() {
+  std::random_device rd;
+  static const char hex[] = "0123456789abcdef";
+  std::string token;
+  for (int i = 0; i < 32; ++i) {
+    const unsigned byte = rd() & 0xFF;
+    token += hex[byte >> 4];
+    token += hex[byte & 0xF];
+  }
+  return token;
+}
+
 std::vector<ProjectEntry> LoadRecentProjects() {
   std::vector<ProjectEntry> out;
   std::ifstream f(HubConfigPath());
@@ -297,11 +357,7 @@ std::vector<ProjectEntry> LoadRecentProjects() {
 }
 
 void SaveRecentProjects(const std::vector<ProjectEntry> &projects) {
-  std::string p = HubConfigPath();
-  if (p.empty())
-    return;
-  EnsureParentDir(p);
-  json j;
+  json j = ReadHubJson(); // keep other keys such as "mcp"
   j["projects"] = json::array();
   for (const auto &e : projects) {
     j["projects"].push_back({{"name", e.name},
@@ -311,9 +367,7 @@ void SaveRecentProjects(const std::vector<ProjectEntry> &projects) {
                              {"lastScene", e.lastScene},
                              {"mcpEnabled", e.mcpEnabled}});
   }
-  std::ofstream f(p);
-  if (f.is_open())
-    f << j.dump(2);
+  WriteHubJson(j);
 }
 
 } // namespace
@@ -326,6 +380,11 @@ class IlmeeeHub {
 public:
   IlmeeeHub() {
     projects = LoadRecentProjects();
+    mcpSettings = LoadMcpSettings();
+    std::snprintf(mcpTokenBuf, sizeof(mcpTokenBuf), "%s",
+                  mcpSettings.token.c_str());
+    std::snprintf(mcpHostBuf, sizeof(mcpHostBuf), "%s",
+                  mcpSettings.publicHost.c_str());
     NFD::Init();
     logStore.Push("Hub", "IlmeeeHub started.");
   }
@@ -401,21 +460,25 @@ public:
       setvbuf(stdout, nullptr, _IOLBF, 0);
       setvbuf(stderr, nullptr, _IOLBF, 0);
       const std::string editorBin = ResolveEditorBinary();
-      if (g_DebugMode && mcpEnabled) {
-        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
-               projectPath.c_str(), "--debug", "--mcp", (char *)nullptr);
-      } else if (g_DebugMode) {
-        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
-               projectPath.c_str(), "--debug", (char *)nullptr);
-      } else if (mcpEnabled) {
-        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
-               projectPath.c_str(), "--mcp", (char *)nullptr);
-      } else {
-        execlp(editorBin.c_str(), "GameEngineSDL", "--project",
-               projectPath.c_str(), (char *)nullptr);
+      std::vector<const char *> args = {"GameEngineSDL", "--project",
+                                        projectPath.c_str()};
+      if (g_DebugMode)
+        args.push_back("--debug");
+      if (mcpEnabled) {
+        args.push_back("--mcp");
+        // Token goes through the environment, not argv, so it stays out
+        // of `ps` output.
+        if (!mcpSettings.token.empty())
+          setenv("ILMEEE_MCP_TOKEN", mcpSettings.token.c_str(), 1);
+        if (!mcpSettings.publicHost.empty()) {
+          args.push_back("--mcp-public-host");
+          args.push_back(mcpSettings.publicHost.c_str());
+        }
       }
+      args.push_back(nullptr);
+      execvp(editorBin.c_str(), const_cast<char *const *>(args.data()));
       // exec failed:
-      std::fprintf(stderr, "execlp(%s) failed: %s\n", editorBin.c_str(),
+      std::fprintf(stderr, "execvp(%s) failed: %s\n", editorBin.c_str(),
                    std::strerror(errno));
       _exit(127);
     }
@@ -428,6 +491,11 @@ public:
     child->label = "Editor:" + std::to_string(pid);
     child->projectPath = projectPath;
     child->mcpEnabled = mcpEnabled;
+    if (mcpEnabled) {
+      // A configured token is never logged by the editor, so remember it.
+      child->mcpToken = mcpSettings.token;
+      child->publicHost = mcpSettings.publicHost;
+    }
     child->readFd = fds[0];
     child->alive.store(true);
 
@@ -633,6 +701,10 @@ private:
   Section currentSection = Section::Projects;
   char searchBuffer[128] = "";
   bool showNewProjectDialog = false;
+  McpSettings mcpSettings;
+  char mcpTokenBuf[128] = "";
+  char mcpHostBuf[256] = "";
+  bool showMcpToken = false;
   char newProjName[128] = "";
   char newProjLocation[512] = "";
   std::string newProjError;
@@ -839,11 +911,12 @@ private:
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Applies the next time this project is opened");
     bool mcpRunning = false;
-    std::string token;
+    std::string token, publicHost;
     for (const auto &child : children) {
       if (!child->alive || !child->mcpEnabled || child->projectPath != p.path)
         continue;
       mcpRunning = true;
+      publicHost = child->publicHost;
       std::lock_guard<std::mutex> lock(child->tokenMutex);
       token = child->mcpToken;
       break;
@@ -859,6 +932,14 @@ private:
         ImGui::SameLine(0, 12);
       if (ImGui::SmallButton("Copy token"))
         ImGui::SetClipboardText(token.c_str());
+      if (!publicHost.empty() && !compact) {
+        ImGui::SameLine(0, 6);
+        if (ImGui::SmallButton("Copy URL"))
+          ImGui::SetClipboardText(
+              ("https://" + publicHost + "/mcp/" + token).c_str());
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Connector URL for claude.ai (contains the token)");
+      }
     }
 
     ImGui::SetCursorPos(compact ? ImVec2(18, 111)
@@ -904,6 +985,83 @@ private:
     if (ImGui::Button("Reload Project List")) {
       projects = LoadRecentProjects();
     }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+    ImGui::TextDisabled("MCP");
+    ImGui::Separator();
+    ImGui::TextWrapped("Used by projects with \"Use MCP\" on, applied the next "
+                       "time the editor is opened. An empty token makes the "
+                       "editor generate a new one every launch.");
+    ImGui::Spacing();
+    bool changed = false;
+    ImGui::SetNextItemWidth(420);
+    changed |= ImGui::InputText("Token", mcpTokenBuf, sizeof(mcpTokenBuf),
+                                showMcpToken ? 0 : ImGuiInputTextFlags_Password);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show", &showMcpToken);
+    if (ImGui::Button("Generate")) {
+      std::snprintf(mcpTokenBuf, sizeof(mcpTokenBuf), "%s",
+                    GenerateMcpToken().c_str());
+      changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Copy token") && mcpTokenBuf[0])
+      ImGui::SetClipboardText(mcpTokenBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) {
+      mcpTokenBuf[0] = '\0';
+      changed = true;
+    }
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(420);
+    changed |= ImGui::InputTextWithHint("Public host", "mcp.example.com",
+                                        mcpHostBuf, sizeof(mcpHostBuf));
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Tunnel / reverse-proxy hostname. Empty = local only.");
+    if (changed) {
+      mcpSettings.token = Trim(mcpTokenBuf);
+      mcpSettings.publicHost = NormalizeHost(mcpHostBuf);
+      SaveMcpSettings(mcpSettings);
+    }
+    if (!mcpSettings.publicHost.empty()) {
+      ImGui::Spacing();
+      if (mcpSettings.token.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                           "Set a token so the connector URL stays the same.");
+      } else {
+        ImGui::TextDisabled("Connector URL: https://%s/mcp/<token>",
+                            mcpSettings.publicHost.c_str());
+        if (ImGui::Button("Copy connector URL"))
+          ImGui::SetClipboardText(ConnectorUrl(mcpSettings.token).c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("Anyone with this URL can edit your scene.");
+      }
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled("Saved to %s", HubConfigPath().c_str());
+  }
+
+  std::string ConnectorUrl(const std::string &token) const {
+    return "https://" + mcpSettings.publicHost + "/mcp/" + token;
+  }
+
+  static std::string Trim(const std::string &text) {
+    const size_t begin = text.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos)
+      return {};
+    return text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
+  }
+
+  // Accept a pasted URL ("https://host/...") and keep only the hostname.
+  static std::string NormalizeHost(const std::string &text) {
+    std::string host = Trim(text);
+    if (const size_t scheme = host.find("://"); scheme != std::string::npos)
+      host.erase(0, scheme + 3);
+    host = host.substr(0, host.find('/'));
+    std::transform(host.begin(), host.end(), host.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return host;
   }
 
   // ---------------- Project actions ----------------

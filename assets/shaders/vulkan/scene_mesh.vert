@@ -13,6 +13,11 @@ layout(set = 1, binding = 0) uniform Scene {
     vec4 lightColorType; // xyz = color, w = type
     vec4 lightDir;       // xyz = spotlight forward vector, w = unused
     vec4 lightParams;    // x = range, y = spotAngleRad, z = gamma, w = spotCosOuter
+    vec4 cameraPos;      // xyz = eye, w = 1 when NPR lighting is on
+    vec4 npr;            // x = bands, y = softness, z = specular size, w = specular strength
+    vec4 nprShadow;      // rgb = shadow colour, w = rim width
+    vec4 nprRim;         // rgb = rim colour, w = rim strength
+    vec4 nprOutline;     // rgb = outline colour, w = outline width (0 = off)
 } scene;
 
 // Per draw: 80 bytes.

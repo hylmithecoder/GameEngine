@@ -14,6 +14,29 @@ layout(location = 7) in vec4 vMaterial;       // xyz = diffuse tint, w = 0 untex
 
 layout(set = 0, binding = 0) uniform sampler2D albedoTex;
 
+// Same block as scene_mesh.vert; the fragment stage reads the camera and the
+// NPR (toon) settings from it.
+layout(set = 1, binding = 0) uniform Scene {
+    mat4 viewProj;
+    vec4 lightPosOrDir;
+    vec4 lightColorType;
+    vec4 lightDir;
+    vec4 lightParams;
+    vec4 cameraPos;      // xyz = eye, w = 1 when NPR lighting is on
+    vec4 npr;            // x = bands, y = softness, z = specular size, w = specular strength
+    vec4 nprShadow;      // rgb = shadow colour, w = rim width
+    vec4 nprRim;         // rgb = rim colour, w = rim strength
+    vec4 nprOutline;
+} scene;
+
+// Quantize 0..1 light into `bands` flat steps with softened edges.
+float ToonStep(float x, float bands, float softness) {
+    float scaled = clamp(x, 0.0, 1.0) * bands;
+    float band = floor(scaled);
+    float edge = smoothstep(0.5 - softness, 0.5 + softness, scaled - band);
+    return clamp((band + edge) / bands, 0.0, 1.0);
+}
+
 layout(location = 0) out vec4 outColor;
 
 void main() {
@@ -78,6 +101,43 @@ void main() {
     }
 
     float key = max(dot(N, L), 0.0) * attenuation * spotEffect;
+    vec3 V = normalize(scene.cameraPos.xyz - vPosWorld);
+
+    vec3 baseColor = vMaterial.xyz;
+    if (vMaterial.w >= 0.5)
+        baseColor *= texture(albedoTex, vUV).rgb;
+
+    if (scene.cameraPos.w > 0.5) {
+        // Non-photorealistic (cel / toon) lighting: flat light bands between
+        // a tinted shadow colour and the light colour, a hard specular spot
+        // and a rim on the silhouette. Ink outlines are a separate pass.
+        //
+        // Two-sided by view direction, not gl_FrontFacing: the offscreen
+        // target is Y-flipped and imported models mix windings, so the
+        // facing bit cannot be trusted here.
+        N = normalize(vNormalWorld);
+        if (dot(N, V) < 0.0) N = -N;
+        key = max(dot(N, L), 0.0) * attenuation * spotEffect;
+        float lit = ToonStep(key, scene.npr.x, scene.npr.y);
+        vec3 shade = mix(scene.nprShadow.rgb, lightCol * max(lightInt, 0.0), lit);
+        vec3 col = baseColor * shade;
+
+        vec3 H = normalize(L + V);
+        float spec = smoothstep(1.0 - scene.npr.z - 0.005, 1.0 - scene.npr.z + 0.005,
+                                max(dot(N, H), 0.0));
+        col += lightCol * spec * scene.npr.w * step(0.001, scene.npr.z) * step(0.5, lit);
+
+        float facing = 1.0 - max(dot(N, V), 0.0);
+        float rimWidth = scene.nprShadow.w;
+        float rim = smoothstep(1.0 - rimWidth, 1.0 - rimWidth + 0.04, facing);
+        // Grazing floors and ceilings are not silhouettes; keep the rim on
+        // side-facing surfaces (character edges, walls).
+        rim *= smoothstep(0.9, 0.6, abs(N.y));
+        col += scene.nprRim.rgb * rim * scene.nprRim.w * step(0.001, rimWidth);
+
+        outColor = vec4(pow(max(col, 0.0), vec3(1.0 / gamma)), 1.0);
+        return;
+    }
 
     // Complementary ambient and fill lights (derived from primary light direction L)
     vec3 fillDir  = normalize(vec3(-L.x, L.y * 0.5, -L.z));
@@ -86,14 +146,6 @@ void main() {
     vec3 fillColor = vec3(0.55, 0.65, 0.85);
     vec3 backColor = vec3(0.30, 0.30, 0.40);
     vec3 ambient   = vec3(0.16, 0.17, 0.20);
-    // Per-surface albedo: diffuse tint, multiplied by the bound texture when
-    // this submesh has one (w >= 0.5). Untextured surfaces fall back to the
-    // diffuse color alone.
-    vec3 baseColor = vMaterial.xyz;
-    if (vMaterial.w >= 0.5) {
-        vec4 tex = texture(albedoTex, vUV);
-        baseColor *= tex.rgb;
-    }
     vec3 rimColor  = vec3(0.85, 0.92, 1.00);
 
     float fill = max(dot(N, fillDir), 0.0);
@@ -112,7 +164,6 @@ void main() {
              + hemi;
 
     // Fresnel rim silhouette accent
-    vec3 V = normalize(-vPosWorld);
     float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     vec3 rim = rimColor * fresnel * 0.45;
 

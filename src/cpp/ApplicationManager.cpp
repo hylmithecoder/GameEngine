@@ -83,8 +83,11 @@ bool ApplicationManager::StartMcpServer() {
   const char *configured = std::getenv("ILMEEE_MCP_TOKEN");
   const std::string token = configured && *configured
       ? configured : ilmeee::net::proto::GenerateToken();
+  if (mcpPublicHost.empty())
+    if (const char *host = std::getenv("ILMEEE_MCP_PUBLIC_HOST"))
+      mcpPublicHost = host;
   std::string error;
-  if (!mcpServer->Start(mcpPort, token, error)) {
+  if (!mcpServer->Start(mcpPort, token, error, mcpPublicHost)) {
     ::Log("[MCP] Failed to listen on 127.0.0.1:" + std::to_string(mcpPort) +
               ": " + error, Debug::LogLevel::ERROR);
     mcpServer.reset();
@@ -95,6 +98,10 @@ bool ApplicationManager::StartMcpServer() {
             std::to_string(mcpPort) + "/mcp", Debug::LogLevel::SUCCESS);
   if (!configured || !*configured)
     ::Log("[MCP] Session token: " + token, Debug::LogLevel::INFO);
+  if (!mcpPublicHost.empty())
+    ::Log("[MCP] Public host: https://" + mcpPublicHost +
+              "/mcp/<token> (connector URL, token in path)",
+          Debug::LogLevel::SUCCESS);
   return true;
 }
 

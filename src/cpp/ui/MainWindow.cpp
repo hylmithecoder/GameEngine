@@ -311,6 +311,8 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
     RenderConsoleWindow();
   if (showDeviceMonitor)
     RenderDeviceMonitorWindow();
+  if (showLighting)
+    RenderLightingWindow();
 
   // Modular panels (e.g. VideoPlayerPanel). Each panel renders into
   // its own ImGui window via PanelManager — dockable like the rest.

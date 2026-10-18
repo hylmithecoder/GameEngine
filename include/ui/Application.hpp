@@ -57,6 +57,7 @@ public:
   bool LaunchEngine();
   bool StartMcpServer();
   void SetMcpPort(int port) { mcpPort = port; }
+  void SetMcpPublicHost(std::string host) { mcpPublicHost = std::move(host); }
   void Shutdown();
 
   // Set the project path before Initialize() so the editor opens
@@ -75,4 +76,5 @@ private:
   std::string projectPath;
   bool debug2D = false;
   int mcpPort = 0;
+  std::string mcpPublicHost;
 };

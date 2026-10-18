@@ -3047,6 +3047,8 @@ void MainWindow::RenderMenuBar() {
       EndMenu();
     }
 
+    RenderLightingMenu();
+
     // Status bar di menu kanan
     if (deviceMonitor.Live(GetTime())) {
       SetCursorPosX(GetWindowWidth() - 420);
@@ -3402,6 +3404,7 @@ bool MainWindow::Save3DScene() {
 
   ilmeee::IlmeeeScene scene;
   scene.backgroundColor = sceneRenderer->GetBackgroundColor();
+  scene.npr = sceneRenderer->GetNpr();
   for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
     ilmeee::SceneEntity e;
     e.name = sceneRenderer->GetMesh3DName(i);
