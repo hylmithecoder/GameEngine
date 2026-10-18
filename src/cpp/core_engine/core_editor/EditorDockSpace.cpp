@@ -78,7 +78,6 @@ void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
   ImGui::DockBuilderDockWindow("Scene", dockMain);
   ImGui::DockBuilderDockWindow("Game", dockMain);
   ImGui::DockBuilderDockWindow("Animation", dockMain);
-  ImGui::DockBuilderDockWindow("Main View", dockMain);
   ImGui::DockBuilderDockWindow("Explorer", dockBottom);
   ImGui::DockBuilderDockWindow("Console", dockBottom);
   ImGui::DockBuilderDockWindow("Video Player", dockBottomRight);

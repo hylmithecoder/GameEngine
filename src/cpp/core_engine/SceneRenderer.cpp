@@ -18,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <ufbx.h>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -3448,7 +3449,40 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
   camera3d = snapshot.camera3d;
   sunLight = snapshot.sunLight;
 
-  ClearMeshes3D();
+  // Undo/redo rebuilds the whole mesh list. Re-parsing every PMX/FBX/OBJ
+  // from disk made each step freeze for seconds with big models, so keep
+  // the uploaded geometry of model files and give it back to the entity
+  // that uses the same file. Everything per-instance is restored below.
+  if (device != VK_NULL_HANDLE)
+    vkDeviceWaitIdle(device);
+  std::unordered_map<std::string, std::vector<Mesh3D>> reusable;
+  for (auto &m : meshes3d) {
+    const bool modelFile = !m.path.empty() && m.path.rfind("<primitive:", 0) != 0 &&
+                           !m.isLight && !m.isCamera && !m.isAudioEmitter &&
+                           !m.isWorldText;
+    if (modelFile && !m.poseActive && m.indexCount > 0) {
+      Mesh3D geometry;
+      geometry.vertexBuffer = std::exchange(m.vertexBuffer, VK_NULL_HANDLE);
+      geometry.vertexMemory = std::exchange(m.vertexMemory, VK_NULL_HANDLE);
+      geometry.indexBuffer = std::exchange(m.indexBuffer, VK_NULL_HANDLE);
+      geometry.indexMemory = std::exchange(m.indexMemory, VK_NULL_HANDLE);
+      geometry.indexCount = m.indexCount;
+      geometry.vertexCount = m.vertexCount;
+      geometry.aabbMin = m.aabbMin;
+      geometry.aabbMax = m.aabbMax;
+      geometry.autoFit = m.autoFit;
+      geometry.path = m.path;
+      geometry.bones = std::move(m.bones);
+      geometry.skinVertices = std::move(m.skinVertices);
+      geometry.skeleton = std::move(m.skeleton);
+      geometry.submeshes = std::move(m.submeshes);
+      geometry.cpuPositions = std::move(m.cpuPositions);
+      geometry.cpuIndices = std::move(m.cpuIndices);
+      reusable[geometry.path].push_back(std::move(geometry));
+    }
+    DestroyMesh(m); // no-op for the buffers handed over above
+  }
+  meshes3d.clear();
   bool allLoaded = true;
   // snapshot index -> mesh index; an entity that fails to load shifts every
   // later one, so parent links are resolved through this afterwards.
@@ -3477,6 +3511,11 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
         loaded = LoadPlane(entity.name);
       else
         loaded = LoadCube(entity.name);
+    } else if (auto it = reusable.find(entity.path);
+               it != reusable.end() && !it->second.empty()) {
+      meshes3d.push_back(std::move(it->second.back()));
+      it->second.pop_back();
+      loaded = true;
     } else if (!entity.path.empty()) {
       std::string ext = std::filesystem::path(entity.path).extension().string();
       std::transform(ext.begin(), ext.end(), ext.begin(),
@@ -3522,6 +3561,7 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.video = entity.video;
     mesh.dialog = entity.dialog;
     mesh.animation = entity.animation;
+    mesh.locomotion = {};
     mesh.movable = entity.movable;
     mesh.objectId = entity.objectId ? entity.objectId : ilmeee::NewObjectId();
     mesh.scripts = entity.scripts;
@@ -3557,6 +3597,10 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     }
   }
 
+  // Geometry of models that no longer exist after this step.
+  for (auto &[path, meshes] : reusable)
+    for (auto &m : meshes)
+      DestroyMesh(m);
   return allLoaded;
 }
 

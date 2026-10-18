@@ -110,7 +110,11 @@ public:
         : name(n), fullPath(p), isDirectory(isDir) {}
   };
   AssetFile rootAsset;
+  // Bumped by every BuildAssetTree, so views can cache what they derive from
+  // the tree (or the disk) and refresh only after a rescan.
+  uint64_t assetTreeVersion = 0;
   AssetFile BuildAssetTree(const string &path) {
+    ++assetTreeVersion;
     // Create AssetFile directly instead of using pointer
     AssetFile node(fs::path(path).filename().string(), path,
                    fs::is_directory(path));
@@ -216,6 +220,13 @@ public:
   string currentFilter = "";
   string currentDirectory = "";
   void DrawFolderGridView();
+  // DrawFolderGridView's listing of currentDirectory, sorted (folders
+  // first). Re-read on directory change, rescan, or after kGridRefreshSec.
+  vector<AssetFile> gridFiles;
+  string gridFilesDirectory;
+  uint64_t gridFilesVersion = 0;
+  double gridFilesTime = -1.0;
+  static constexpr double kGridRefreshSec = 1.0;
   void DrawBreadcrumbs(const string &path);
   void DrawSearchBar(const string &path);
   void DrawNavigationBar();

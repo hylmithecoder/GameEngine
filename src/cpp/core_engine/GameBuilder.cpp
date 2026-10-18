@@ -2,6 +2,7 @@
 #include "../../../include/core_engine/NativeScripts.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/ModelDependencies.hpp"
+#include "../../../include/core_engine/AnimationController.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../vendor/nlohmann/json.hpp"
 #include <algorithm>
@@ -247,6 +248,25 @@ public:
     return dst.generic_string();
   }
 
+  std::string CopyController(const std::string &source) {
+    fs::path original(source);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    AnimationController controller;
+    std::string error;
+    if (!LoadAnimationController(original.string(), controller, error)) throw std::runtime_error(error);
+    const auto relocated = Relocate(original.string(), false, "controllers");
+    for (auto *slot : {&controller.idle, &controller.walk, &controller.run}) {
+      if (slot->empty()) continue;
+      fs::path clip(*slot);
+      if (clip.is_relative()) clip = original.parent_path() / clip;
+      const auto destination = Relocate(clip.string(), false, "animations");
+      *slot = fs::path(destination).lexically_relative(fs::path(relocated).parent_path()).generic_string();
+    }
+    if (!SaveAnimationController((gameDir_ / relocated).string(), controller, error)) throw std::runtime_error(error);
+    return relocated;
+  }
+
   void CopyScenes() {
     fs::path src = root_ / "scenes";
     for (auto it = fs::recursive_directory_iterator(
@@ -282,6 +302,7 @@ public:
           e.dialog.file = Relocate(e.dialog.file, false, "dialog");
         if (!e.animation.clip.empty())
           e.animation.clip = Relocate(e.animation.clip, false, "animations");
+        if (!e.animation.controller.empty()) e.animation.controller = CopyController(e.animation.controller);
         if (!e.video.clip.empty()) {
           const fs::path original = Canonical(
               fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)

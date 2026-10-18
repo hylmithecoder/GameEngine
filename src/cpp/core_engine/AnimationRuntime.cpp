@@ -65,6 +65,9 @@ void SceneRenderer::ResetAnimations() {
     mesh.animationTime = 0;
     mesh.loadedAnimationPath.clear();
     mesh.animationError.clear();
+    mesh.locomotion = {};
+    mesh.locomotion.previousPosition = glm::vec3(GetMesh3DWorldTRS(i)[3]);
+    mesh.locomotion.hasPosition = true;
   }
 }
 
@@ -73,10 +76,52 @@ void SceneRenderer::UpdateAnimations(float deltaSeconds) {
   for (size_t i = 0; i < meshes3d.size(); ++i) {
     auto &mesh = meshes3d[i];
     if (mesh.skeleton.empty()) continue;
-    if (!mesh.animation.enabled || mesh.animation.clip.empty()) {
+    if (!mesh.animation.enabled || (mesh.animation.clip.empty() && mesh.animation.controller.empty())) {
       ResetMesh3DAnimationPose(i);
+      mesh.locomotion = {};
+      mesh.loadedAnimationPath.clear(); mesh.animationError.clear();
       continue;
     }
+    if (!mesh.animation.controller.empty()) {
+      auto &runtime = mesh.locomotion;
+      const glm::vec3 position(GetMesh3DWorldTRS(i)[3]);
+      if (runtime.loadedPath != mesh.animation.controller) {
+        runtime = {};
+        runtime.loadedPath = mesh.animation.controller;
+        mesh.loadedAnimationPath.clear();
+        mesh.animationError.clear();
+        std::filesystem::path path(runtime.loadedPath);
+        if (path.is_relative()) path = std::filesystem::path(animationProjectRoot) / path;
+        if (!ilmeee::LoadAnimationController(path.string(), runtime.config, mesh.animationError) ||
+            !ilmeee::LoadControllerClips(path.string(), runtime.config, runtime.clips, mesh.animationError)) {
+          ResetMesh3DAnimationPose(i); continue;
+        }
+        // Report rigs that cannot use even the Idle clip, rather than a static rest pose.
+        bool matched = false;
+        for (const auto &track : runtime.clips[0].tracks)
+          for (const auto &bone : mesh.skeleton) if (bone.name == track.bone) matched = true;
+        if (!matched && !runtime.clips[0].tracks.empty()) { mesh.animationError = "Idle clip has no matching PMX bone tracks"; ResetMesh3DAnimationPose(i); continue; }
+      }
+      if (!mesh.animationError.empty()) continue;
+      if (runtime.hasPosition && deltaSeconds > 0) {
+        const glm::vec2 displacement(position.x - runtime.previousPosition.x, position.z - runtime.previousPosition.z);
+        const float distance = glm::length(displacement);
+        if (std::isfinite(distance) && distance < std::max(10.0f, runtime.config.runSpeed * deltaSeconds * 8)) {
+          runtime.sampleDistance += distance; runtime.sampleTime += deltaSeconds;
+          // Average fixed movement steps over a short window to avoid idle flicker at high render FPS.
+          if (runtime.sampleTime >= 0.05f) {
+            runtime.measuredSpeed = runtime.sampleDistance / runtime.sampleTime;
+            runtime.sampleDistance = runtime.sampleTime = 0;
+          }
+        } else { runtime.sampleDistance = runtime.sampleTime = runtime.measuredSpeed = 0; }
+      }
+      runtime.previousPosition = position; runtime.hasPosition = true;
+      const auto pose = runtime.player.Update(mesh.skeleton, runtime.config, runtime.clips,
+          runtime.measuredSpeed, deltaSeconds, mesh.animation.speed);
+      SetMesh3DAnimationPose(i, pose, 0);
+      continue;
+    }
+    mesh.locomotion = {};
     if (mesh.loadedAnimationPath != mesh.animation.clip) {
       mesh.loadedAnimationPath = mesh.animation.clip;
       mesh.animationTime = 0;

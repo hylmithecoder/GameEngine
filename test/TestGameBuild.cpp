@@ -4,6 +4,7 @@
 //   cmake --build build --target TestGameBuild && ./build/bin/TestGameBuild
 
 #include "../include/core_engine/GameBuilder.hpp"
+#include "../include/core_engine/AnimationController.hpp"
 #include "../include/core_engine/IlmeeeScene.hpp"
 #include "../include/core_engine/NativeScripts.hpp"
 #include "../include/core_engine/ScriptWorkspace.hpp"
@@ -486,6 +487,39 @@ int main() {
     Write(scripted / "assets/scripts/ShipComponent.cpp", "this is invalid C++");
     CHECK(!BuildGame(scriptOptions, logger).ok);
     CHECK(fs::exists(library));
+  }
+  // Gather an external controller and its nested clip dependencies, keeping
+  // exported references relative and preserving the original source asset.
+  {
+    const auto p = tmp / "Controller Project";
+    const auto externalController = outside / "controller/hero.ilmeeecontroller";
+    AnimationClip clip; BoneTransform pose; pose.translation.y = 0.1f;
+    SetBoneKey(clip, "センター", {0, pose}); std::string error;
+    CHECK(SaveAnimationClip((p / "assets/idle.ilmeeeanim").string(), clip, error));
+    CHECK(SaveAnimationClip((outside / "motions/walk.ilmeeeanim").string(), clip, error));
+    AnimationController controller;
+    controller.idle = (p / "assets/idle.ilmeeeanim").string(); controller.walk = "../motions/walk.ilmeeeanim";
+    CHECK(SaveAnimationController(externalController.string(), controller, error));
+    IlmeeeScene s; s.entities = {Model("Character", "")};
+    s.entities[0].animation.enabled = true; s.entities[0].animation.controller = externalController.string();
+    fs::create_directories(p / "scenes");
+    CHECK(SaveScene((p / "scenes/main.ilmeeescene").string(), s));
+    auto options = o; options.projectRoot = p;
+    const auto result = BuildGame(options, logger); CHECK(result.ok);
+    IlmeeeScene exported;
+    CHECK(LoadScene((result.outputDir / "scenes/main.ilmeeescene").string(), exported));
+    if (!exported.entities.empty()) {
+      const auto path = result.outputDir / exported.entities[0].animation.controller;
+      CHECK(!fs::path(exported.entities[0].animation.controller).is_absolute());
+      CHECK(LoadAnimationController(path.string(), controller, error));
+      CHECK(!fs::path(controller.idle).is_absolute() && !fs::path(controller.walk).is_absolute());
+      std::array<AnimationClip, 3> clips;
+      CHECK(LoadControllerClips(path.string(), controller, clips, error));
+      CHECK(clips[0].tracks.size() == 1 && clips[1].tracks.size() == 1);
+    }
+    AnimationController source;
+    CHECK(LoadAnimationController(externalController.string(), source, error));
+    CHECK(source.walk == "../motions/walk.ilmeeeanim");
   }
   fs::remove_all(tmp);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

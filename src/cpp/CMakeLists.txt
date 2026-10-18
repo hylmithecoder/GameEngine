@@ -36,6 +36,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/NativeScriptInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/DialogInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/AnimationEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/AnimationControllerEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/GameBuildPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/ViewportGizmo.cpp
@@ -43,6 +44,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SkeletalAnimation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/VideoDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MediaSystem.cpp

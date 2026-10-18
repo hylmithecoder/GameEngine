@@ -36,6 +36,7 @@ add_library(main SHARED
     ${ENGINE_ROOT}/src/cpp/core_engine/WorldTextRuntime.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SkeletalAnimation.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/AnimationRuntime.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AnimationController.cpp
     ${ENGINE_ROOT}/src/cpp/player/PlayerMain.cpp
     ${ENGINE_ROOT}/src/cpp/player/AndroidAssets.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/GameUI.cpp

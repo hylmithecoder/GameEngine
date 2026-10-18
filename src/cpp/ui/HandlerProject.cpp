@@ -549,7 +549,9 @@ void HandlerProject::DrawAssetTree(const AssetFile &node) {
       if (ImGui::Selectable(label.c_str(), false,
                             ImGuiSelectableFlags_AllowDoubleClick)) {
         if (ImGui::IsMouseDoubleClicked(0)) {
-          if (isCpp || isHpp || isShader) {
+          if (ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) {
+            if (onFileClicked) onFileClicked(node);
+          } else if (isCpp || isHpp || isShader) {
             OpenFile(node.fullPath);
           } else if (isVideo) {
 #ifdef _WIN32
@@ -683,6 +685,8 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
 
   ImGui::InvisibleButton("##ItemButton", totalSize);
   const bool itemHovered = ImGui::IsItemHovered();
+  if (itemHovered && (ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)))
+    ImGui::SetTooltip("Motion clip: double-click to preview on a PMX character in Animation");
 
   // Drag source: files can be dragged out (e.g. a model dropped onto the
   // Scene viewport to instantiate it). Payload is the file's full path.
@@ -803,8 +807,13 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
 
       ImGui::Separator();
       if (!node.isDirectory) {
+        if ((ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) &&
+            ImGui::MenuItem("Preview Motion")) {
+          if (onFileClicked) onFileClicked(node);
+        }
         if (ImGui::MenuItem("Open")) {
           HandlerOpenFileWithExtensionName(const_cast<AssetFile &>(node));
+          if ((ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) && onFileClicked) onFileClicked(node);
         }
       }
 
@@ -836,8 +845,24 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
 }
 
 void HandlerProject::DrawFolderGridView() {
-  // Gunakan currentDirectory yang sudah di-update dari double-click
-  std::vector<AssetFile> localFiles = GetFilesInDirectory(currentDirectory);
+  // Gunakan currentDirectory yang sudah di-update dari double-click.
+  // Listing the folder from disk every frame was a big share of the
+  // editor's frame time, so it is cached and refreshed when it can change.
+  const double now = ImGui::GetTime();
+  if (gridFilesDirectory != currentDirectory ||
+      gridFilesVersion != assetTreeVersion ||
+      now - gridFilesTime >= kGridRefreshSec) {
+    gridFiles = GetFilesInDirectory(currentDirectory);
+    std::sort(gridFiles.begin(), gridFiles.end(),
+              [](const AssetFile &a, const AssetFile &b) {
+                if (a.isDirectory != b.isDirectory)
+                  return a.isDirectory;
+                return a.name < b.name;
+              });
+    gridFilesDirectory = currentDirectory;
+    gridFilesVersion = assetTreeVersion;
+    gridFilesTime = now;
+  }
 
   // Use filesystem paths for comparisons so the Explorer behaves the same on
   // Windows and POSIX systems.
@@ -861,28 +886,13 @@ void HandlerProject::DrawFolderGridView() {
     if (itemsPerRow < 1)
       itemsPerRow = 1;
 
-    // Filter files berdasarkan currentFilter
-    std::vector<AssetFile> filteredFiles;
-    for (const auto &file : localFiles) {
-      if (currentFilter.empty() ||
-          file.name.find(currentFilter) != std::string::npos) {
-        filteredFiles.push_back(file);
-      }
-    }
-
-    // Sort: directories first, then alphabetically
-    std::sort(filteredFiles.begin(), filteredFiles.end(),
-              [](const AssetFile &a, const AssetFile &b) {
-                if (a.isDirectory && !b.isDirectory)
-                  return true;
-                if (!a.isDirectory && b.isDirectory)
-                  return false;
-                return a.name < b.name;
-              });
-
-    // Draw each file/folder
-    for (auto &file : filteredFiles) {
-      // ::Log("Drawing file in grid: " + file.name, Debug::LogLevel::SUCCESS);
+    // Filter berdasarkan currentFilter; list sudah urut (folder dulu).
+    // A rename/delete while drawing bumps assetTreeVersion, so gridFiles is
+    // refreshed next frame, never in the middle of this loop.
+    for (auto &file : gridFiles) {
+      if (!currentFilter.empty() &&
+          file.name.find(currentFilter) == std::string::npos)
+        continue;
       DrawFileExplorer(file);
     }
     // Draw the "New Folder" button

@@ -1,5 +1,7 @@
 #include "ui/AnimationEditor.hpp"
 #include "ui/MainWindow.hpp"
+#include "core_engine/UserDataDir.hpp"
+#include <nfd.h>
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cmath>
@@ -19,6 +21,56 @@ void MainWindow::RenderAnimationWindow() {
 void MainWindow::OpenAnimationEditor(size_t mesh) {
   if (!animationEditor) animationEditor = std::make_unique<AnimationEditor>();
   animationEditor->Open(*this, mesh);
+}
+void MainWindow::OpenMotionPreview(const std::string &path) {
+  if (!animationEditor) animationEditor = std::make_unique<AnimationEditor>();
+  animationEditor->OpenMotion(*this, path);
+}
+void MainWindow::RenderMotionLibrary() {
+  if (!animationEditor) animationEditor = std::make_unique<AnimationEditor>();
+  animationEditor->MotionLibrary(*this);
+}
+void AnimationEditor::OpenMotion(MainWindow &app, const std::string &path) {
+  if (IsAnimationControllerPath(path)) { OpenController(app, path); return; }
+  if (!IsAnimationPath(path)) return;
+  app.showAnimation = true; focus_ = true;
+  focusClip_ = true; focusController_ = false;
+  queuedMotion_ = path;
+}
+void AnimationEditor::MotionLibrary(MainWindow &app) {
+  if (!CollapsingHeader("Engine Motions")) return;
+  TextWrapped("Choose a scene PMX character, then preview a motion.");
+  fs::path folder;
+  std::error_code ec;
+  for (const auto &candidate : {ilmeee::ExecutableDir() / "../assets/motions",
+                                ilmeee::ExecutableDir() / "assets/motions",
+                                fs::path(getAssetPath()) / "motions"}) {
+    if (fs::is_directory(candidate, ec)) { folder = candidate; break; }
+    ec.clear();
+  }
+  std::vector<fs::path> paths;
+  if (!folder.empty())
+    for (fs::directory_iterator it(folder, ec), end; it != end && !ec; it.increment(ec))
+      if (it->is_regular_file(ec) && IsAnimationPath(it->path().string())) paths.push_back(it->path());
+  std::sort(paths.begin(), paths.end());
+  for (const auto &path : paths) {
+    PushID(path.string().c_str());
+    if (Selectable(path.stem().string().c_str())) OpenMotion(app, path.string());
+    if (BeginDragDropSource()) {
+      const auto value = fs::absolute(path).string();
+      SetDragDropPayload("ASSET_PATH", value.c_str(), value.size() + 1);
+      TextUnformatted(path.filename().string().c_str()); EndDragDropSource();
+    }
+    PopID();
+  }
+  if (paths.empty()) TextDisabled("No bundled motions found.");
+  if (Button("Browse Motion...")) {
+    nfdchar_t *path = nullptr;
+    nfdfilteritem_t filters[] = {{"PMX motion", "vmd,ilmeeeanim"}};
+    const auto result = NFD_OpenDialog(&path, filters, 1, nullptr);
+    if (result == NFD_OKAY && path) { OpenMotion(app, path); NFD_FreePath(path); }
+    else if (result == NFD_ERROR) message_ = NFD_GetError();
+  }
 }
 
 void AnimationEditor::Remember() {
@@ -67,6 +119,7 @@ void AnimationEditor::BuildPreview(MainWindow &app, size_t index) {
   preview_->SetSunVisible(false);
   preview_->camera3d.fovDeg = 40;
   modelPath_ = source.path;
+  controllerPlayer_.Reset();
   bone_ = 0;
   yaw_ = -90; pitch_ = 0; distance_ = 2.4f;
   poseDirty_ = true;
@@ -74,6 +127,7 @@ void AnimationEditor::BuildPreview(MainWindow &app, size_t index) {
 
 void AnimationEditor::Open(MainWindow &app, size_t mesh) {
   app.showAnimation = true;
+  focusClip_ = true; focusController_ = false;
   focus_ = true;
   if (!app.sceneRenderer || mesh >= app.sceneRenderer->meshes3d.size()) return;
   pendingTarget_ = app.sceneRenderer->meshes3d[mesh].objectId;
@@ -126,7 +180,26 @@ void AnimationEditor::Change(MainWindow &app, Action action) {
     }
     fs::path path(path_);
     if (path.is_relative()) path = fs::path(project_) / path;
-    if (!LoadAnimationClip(path.string(), clip_, message_)) return;
+    AnimationClip loaded;
+    auto restorePath = [&] { std::snprintf(path_, sizeof(path_), "%s", savedPath_.c_str()); };
+    if (!LoadAnimationClip(path.string(), loaded, message_)) { restorePath(); return; }
+    if (preview_) {
+      size_t matched = 0;
+      for (const auto &track : loaded.tracks)
+        if (std::any_of(preview_->meshes3d[0].skeleton.begin(), preview_->meshes3d[0].skeleton.end(),
+            [&](const auto &bone) { return bone.name == track.bone; })) ++matched;
+      message_ = "Matched " + std::to_string(matched) + "/" + std::to_string(loaded.tracks.size()) + " bone tracks.";
+      if (!matched && !loaded.tracks.empty()) { message_ += " Choose a PMX with matching bone names."; restorePath(); return; }
+    }
+    clip_ = std::move(loaded);
+    // Imported files stay intact; save an editable project copy for Game Play.
+    const auto output = "assets/animations/" + path.stem().string() + ".ilmeeeanim";
+    std::snprintf(path_, sizeof(path_), "%s", output.c_str());
+    if (path.extension() == ".ilmeeeanim") {
+      const auto rel = path.lexically_relative(fs::path(project_));
+      if (!rel.empty() && *rel.begin() != "..")
+        std::snprintf(path_, sizeof(path_), "%s", rel.generic_string().c_str());
+    }
   } else if (action == Action::Idle) {
     if (!preview_) return;
     const auto &mesh = preview_->meshes3d[0];
@@ -136,7 +209,7 @@ void AnimationEditor::Change(MainWindow &app, Action action) {
   undo_.clear(); redo_.clear();
   dirty_ = action == Action::Idle || action == Action::New;
   savedPath_ = path_;
-  time_ = 0; playing_ = false; poseDirty_ = true;
+  time_ = 0; playing_ = action == Action::Open; poseDirty_ = true;
 }
 
 void AnimationEditor::BoneControls() {
@@ -229,7 +302,7 @@ void AnimationEditor::Timeline() {
 void AnimationEditor::Viewport() {
   if (!preview_) return;
   const ImVec2 size(std::max(100.0f, GetContentRegionAvail().x),
-                     std::max(100.0f, GetContentRegionAvail().y - 140));
+                     std::max(100.0f, GetContentRegionAvail().y - (controllerMode_ ? 0 : 140)));
   preview_->SetViewportSize(int(size.x), int(size.y));
   const float yaw = glm::radians(yaw_), pitch = glm::radians(pitch_);
   const glm::vec3 forward(std::cos(yaw) * std::cos(pitch), std::sin(pitch),
@@ -237,7 +310,7 @@ void AnimationEditor::Viewport() {
   preview_->camera3d.position = -forward * distance_;
   preview_->camera3d.yaw = yaw_; preview_->camera3d.pitch = pitch_;
   if (poseDirty_) {
-    if (!preview_->SetMesh3DAnimationPose(0, clip_, time_))
+    if (!preview_->SetMesh3DAnimationPose(0, controllerMode_ ? controllerPose_ : clip_, controllerMode_ ? 0 : time_))
       message_ = "Cannot preview this pose: " + preview_->meshes3d[0].animationError;
     poseDirty_ = false;
   }
@@ -289,6 +362,18 @@ void AnimationEditor::Render(MainWindow &app) {
   SetNextWindowSize({1000, 720}, ImGuiCond_FirstUseEver);
   if (focus_) { SetNextWindowFocus(); focus_ = false; }
   if (!Begin("Animation", &app.showAnimation)) { End(); return; }
+  MotionLibrary(app);
+  const bool wasController = controllerMode_;
+  if (BeginTabBar("AnimationTools")) {
+    if (BeginTabItem("Clip Editor", nullptr, focusClip_ ? ImGuiTabItemFlags_SetSelected : 0)) { controllerMode_ = false; EndTabItem(); }
+    if (BeginTabItem("Locomotion Controller", nullptr, focusController_ ? ImGuiTabItemFlags_SetSelected : 0)) {
+      controllerMode_ = true; EndTabItem();
+    }
+    EndTabBar();
+  }
+  focusController_ = false;
+  focusClip_ = false;
+  if (wasController != controllerMode_) poseDirty_ = true;
   if (!app.sceneRenderer) { TextWrapped("Open a scene and select a PMX character to animate."); End(); return; }
   if (project_ != app.projectHandler.projectPath) {
     preview_.reset(); target_ = 0; modelPath_.clear();
@@ -310,6 +395,11 @@ void AnimationEditor::Render(MainWindow &app) {
       Change(app, Action::Target); targetIndex = selected;
     }
   }
+  if (!queuedMotion_.empty() && preview_ && targetIndex >= 0 && pending_ == Action::None) {
+    std::snprintf(path_, sizeof(path_), "%s", queuedMotion_.c_str());
+    queuedMotion_.clear(); Request(app, Action::Open);
+  }
+  if (!queuedMotion_.empty()) TextWrapped("Motion selected. Choose a PMX character to preview it.");
   const char *targetName = targetIndex >= 0 ? app.sceneRenderer->meshes3d[targetIndex].displayName.c_str() : "Select a PMX character";
   SetNextItemWidth(240);
   if (BeginCombo("Character", targetName)) {
@@ -334,14 +424,13 @@ void AnimationEditor::Render(MainWindow &app) {
     SameLine(); if (Button("Cancel")) { pending_ = Action::None; pendingPath_.clear(); CloseCurrentPopup(); }
     EndPopup();
   }
+  if (controllerMode_) { ControllerPanel(app, targetIndex); End(); return; }
   SetNextItemWidth(-180);
   InputText("##clipPath", path_, sizeof(path_));
   if (BeginDragDropTarget()) {
     if (const auto *payload = AcceptDragDropPayload("ASSET_PATH")) {
       const char *value = static_cast<const char *>(payload->Data);
-      if (fs::path(value).extension() == ".ilmeeeanim") {
-        std::snprintf(path_, sizeof(path_), "%s", value); Request(app, Action::Open);
-      }
+      if (IsAnimationPath(value)) OpenMotion(app, value);
     }
     EndDragDropTarget();
   }
@@ -372,6 +461,7 @@ void AnimationEditor::Render(MainWindow &app) {
   }
   EndDisabled();
   if (!message_.empty()) TextWrapped("%s", message_.c_str());
+  TextDisabled("VMD: bone motion + Bezier curves. IK, morphs, camera and physics are not evaluated.");
   if (!preview_ || targetIndex < 0) {
     TextWrapped("Choose a PMX character from the scene. Clips contain editable bone keyframes.");
     End(); return;

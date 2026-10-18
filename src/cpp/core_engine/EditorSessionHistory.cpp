@@ -253,6 +253,7 @@ void AppendEntitySignature(std::ostringstream &out,
   AppendBool(out, entity.dialog.freezePlayer);
   AppendBool(out, entity.animation.enabled);
   AppendString(out, entity.animation.clip);
+  AppendString(out, entity.animation.controller);
   AppendFloat(out, entity.animation.speed);
   AppendBool(out, entity.animation.loop);
   AppendBool(out, entity.isWorldText);
@@ -496,6 +497,7 @@ void WriteEntity(std::ostream &out,
   WriteBool(out, 10, "dialog_freeze_player", entity.dialog.freezePlayer);
   WriteBool(out, 10, "animation_enabled", entity.animation.enabled);
   WriteString(out, 10, "animation_clip", entity.animation.clip);
+  WriteString(out, 10, "animation_controller", entity.animation.controller);
   WriteFloat(out, 10, "animation_speed", entity.animation.speed);
   WriteBool(out, 10, "animation_loop", entity.animation.loop);
   WriteBool(out, 10, "world_text", entity.isWorldText);
@@ -625,7 +627,8 @@ void EditorSessionHistory::Start(const std::string &projectPath,
   std::filesystem::create_directories(sessionDirectory_, ec);
 
   sessionFilePath_ = sessionDirectory_ / (CurrentDate() + ".yml");
-  history_.push_back(initial);
+  history_.push_back({std::make_shared<const Snapshot>(initial),
+                      SnapshotSignature(initial)});
   cursor_ = 0;
   active_ = true;
   Persist();
@@ -635,15 +638,15 @@ void EditorSessionHistory::Push(const Snapshot &snapshot) {
   if (!active_)
     return;
 
-  if (!history_.empty() &&
-      SnapshotSignature(history_[cursor_]) == SnapshotSignature(snapshot)) {
+  std::string signature = SnapshotSignature(snapshot);
+  if (!history_.empty() && history_[cursor_].signature == signature)
     return;
-  }
 
   if (cursor_ + 1 < history_.size())
     history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_ + 1),
                    history_.end());
-  history_.push_back(snapshot);
+  history_.push_back(
+      {std::make_shared<const Snapshot>(snapshot), std::move(signature)});
   cursor_ = history_.size() - 1;
 
   if (history_.size() > kMaximumHistoryEntries) {
@@ -665,7 +668,7 @@ bool EditorSessionHistory::Undo(Snapshot &out) {
   if (!CanUndo())
     return false;
   --cursor_;
-  out = history_[cursor_];
+  out = *history_[cursor_].snapshot;
   Persist();
   return true;
 }
@@ -674,7 +677,7 @@ bool EditorSessionHistory::Redo(Snapshot &out) {
   if (!CanRedo())
     return false;
   ++cursor_;
-  out = history_[cursor_];
+  out = *history_[cursor_].snapshot;
   Persist();
   return true;
 }
@@ -688,26 +691,67 @@ void EditorSessionHistory::Clear() {
   active_ = false;
 }
 
-void EditorSessionHistory::Persist() const {
+void EditorSessionHistory::Persist() {
   if (!active_ || sessionFilePath_.empty())
     return;
-
-  std::error_code ec;
-  std::filesystem::create_directories(sessionDirectory_, ec);
-  std::ofstream out(sessionFilePath_, std::ios::trunc);
-  if (!out.is_open())
-    return;
-
-  out << "format: ilmeee-editor-session-v1\n";
-  WriteString(out, 0, "project", projectPath_);
-  WriteString(out, 0, "session_directory", sessionDirectory_.string());
-  WriteSize(out, 0, "cursor", cursor_);
-  WriteSize(out, 0, "history_count", history_.size());
-  if (history_.empty()) {
-    out << "history: []\n";
-  } else {
-    out << "history:\n";
-    for (std::size_t i = 0; i < history_.size(); ++i)
-      WriteSnapshot(out, i, history_[i]);
+  PersistJob job{projectPath_, sessionDirectory_, sessionFilePath_, cursor_, {}};
+  job.history.reserve(history_.size());
+  for (const auto &entry : history_)
+    job.history.push_back(entry.snapshot);
+  {
+    std::lock_guard lock(writerMutex_);
+    pendingJob_ = std::move(job);
+    if (!writer_.joinable())
+      writer_ = std::thread(&EditorSessionHistory::WriterLoop, this);
   }
+  writerWake_.notify_one();
+}
+
+void EditorSessionHistory::WriterLoop() {
+  for (;;) {
+    PersistJob job;
+    {
+      std::unique_lock lock(writerMutex_);
+      writerWake_.wait(lock, [&] { return writerStop_ || pendingJob_; });
+      if (!pendingJob_)
+        return; // stopping and nothing left to write
+      job = std::move(*pendingJob_);
+      pendingJob_.reset();
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(job.sessionDirectory, ec);
+    // Write beside the target and rename, so a crash mid-write never leaves
+    // a truncated session file.
+    std::filesystem::path temp = job.sessionFilePath;
+    temp += ".tmp";
+    {
+      std::ofstream out(temp, std::ios::trunc);
+      if (!out.is_open())
+        continue;
+      out << "format: ilmeee-editor-session-v1\n";
+      WriteString(out, 0, "project", job.projectPath);
+      WriteString(out, 0, "session_directory", job.sessionDirectory.string());
+      WriteSize(out, 0, "cursor", job.cursor);
+      WriteSize(out, 0, "history_count", job.history.size());
+      if (job.history.empty()) {
+        out << "history: []\n";
+      } else {
+        out << "history:\n";
+        for (std::size_t i = 0; i < job.history.size(); ++i)
+          WriteSnapshot(out, i, *job.history[i]);
+      }
+    }
+    std::filesystem::rename(temp, job.sessionFilePath, ec);
+  }
+}
+
+EditorSessionHistory::~EditorSessionHistory() {
+  {
+    std::lock_guard lock(writerMutex_);
+    writerStop_ = true; // the last queued write still happens
+  }
+  writerWake_.notify_one();
+  if (writer_.joinable())
+    writer_.join();
 }

@@ -79,10 +79,11 @@
 
 namespace ilmeee {
 
+// v1.16 adds an animation controller asset string after animation.loop.
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 15;
+constexpr uint16_t kSceneFormatMinor = 16;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -386,6 +387,8 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteString(f, e.animation.clip);
     detail::WriteF32(f, e.animation.speed);
     detail::WriteU32(f, e.animation.loop ? 1u : 0u);
+    // Version 1.16: reusable locomotion controller asset.
+    detail::WriteString(f, e.animation.controller);
     if (e.kind == PrimitiveKind::WorldText) {
       detail::WriteString(f, e.worldText.text);
       detail::WriteF32(f, e.worldText.size);
@@ -631,6 +634,7 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
       if (!std::isfinite(e.animation.speed) || e.animation.speed < 0 ||
           e.animation.speed > 100) e.animation.speed = 1;
     }
+    if (minor >= 16 && !detail::ReadString(f, e.animation.controller)) return false;
     if (e.kind == PrimitiveKind::WorldText) {
       uint32_t alignment = 1, visible = 1;
       if (minor < 13 || !detail::ReadString(f, e.worldText.text) ||

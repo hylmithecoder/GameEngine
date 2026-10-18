@@ -174,10 +174,13 @@ public:
   bool showConsole = true;
   bool focusOutputTab = false;
   bool showHierarchy = true;
-  bool showMainView = true;
   bool showAnimation = true;
   void RenderAnimationWindow();
   void OpenAnimationEditor(size_t meshIndex);
+  void OpenAnimationController(size_t meshIndex);
+  void RenderAnimationInspector(size_t meshIndex);
+  void OpenMotionPreview(const std::string &path);
+  void RenderMotionLibrary();
   string currentFilter = "";
   vector<string> logFromIlmeeeEditor = {
       "Welcome to Ilmeee Editor", "This is a log message",
@@ -219,11 +222,16 @@ public:
   void OnCleanup() override;
   void OnResize(int width, int height) override;
   void log(const char *message);
-  void RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
-                            HandlerProject::AssetFile assetFolder,
+  // Explorer draws from this copy of projectHandler.rootAsset, refreshed only
+  // when the tree is rebuilt (copying the whole tree every frame was the
+  // editor's biggest CPU cost). A copy, not a reference: file actions inside
+  // the tree view may rebuild rootAsset while it is being drawn.
+  HandlerProject::AssetFile explorerTree;
+  uint64_t explorerTreeVersion = ~0ull;
+  void RenderExplorerWindow(const HandlerProject::AssetFile &projectRoot,
+                            const HandlerProject::AssetFile &assetFolder,
                             const std::string &assetPath, bool isOpenProject);
   void RenderInspectorWindow();
-  void RenderMainViewWindow();
   void RenderConsoleWindow();
   void RenderMenuBar();
   void HandleBackground(const ImVec2 &windowPos, const ImVec2 &windowSize);

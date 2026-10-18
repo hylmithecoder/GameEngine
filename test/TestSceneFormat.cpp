@@ -30,7 +30,7 @@ static int g_checks = 0;
 static constexpr int kMediaBytes = 22 + 18;
 static constexpr int kNativeBytes = 8 + 4; // objectId + zero scripts
 static constexpr int kDialogBytes = 4 + 4 + 32 + 2 + 2 + 16;
-static constexpr int kAnimationBytes = 4 + 2 + 4 + 4;
+static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2; // includes v1.16 controller string
 // v1.15 scene-level NPR block after the background colour.
 static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4;
 
@@ -430,12 +430,14 @@ int main() {
     IlmeeeScene scene;
     scene.entities = {Entity("Animated", -1), Entity("Static", -1)};
     scene.entities[0].animation = {true, "assets/animations/idle.ilmeeeanim", 0.75f, false};
+    scene.entities[0].animation.controller = "assets/controllers/Wise.ilmeeecontroller";
     CHECK(SaveScene(file.string(), scene));
     IlmeeeScene loaded;
     CHECK(LoadScene(file.string(), loaded));
     const auto &a = loaded.entities[0].animation;
     CHECK(a.enabled && a.clip == scene.entities[0].animation.clip);
     CHECK(a.speed == 0.75f && !a.loop);
+    CHECK(a.controller == scene.entities[0].animation.controller);
     CHECK(!loaded.entities[1].animation.enabled);
     scene.entities = {Entity("Legacy", -1)};
     CHECK(SaveScene(file.string(), scene));
@@ -445,6 +447,7 @@ int main() {
     WriteAll(file, bytes);
     CHECK(LoadScene(file.string(), loaded));
     CHECK(!loaded.entities[0].animation.enabled && loaded.entities[0].animation.clip.empty());
+    CHECK(loaded.entities[0].animation.controller.empty());
     CHECK(loaded.backgroundColor == scene.backgroundColor);
   }
 
@@ -485,6 +488,7 @@ int main() {
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file);
     bytes[6] = 12; bytes.resize(bytes.size() - kNprBytes);
+    bytes.erase(bytes.end() - 18, bytes.end() - 16); // remove v1.16 controller
     WriteAll(file, bytes);
     IlmeeeScene loaded;
     CHECK(LoadScene(file.string(), loaded));
@@ -543,11 +547,22 @@ int main() {
 
     auto bytes = ReadAll(file);
     bytes[6] = 14; bytes.resize(bytes.size() - kNprBytes);
+    bytes.erase(bytes.end() - 18, bytes.end() - 16); // remove v1.16 controller
     WriteAll(file, bytes);
     CHECK(LoadScene(file.string(), in));
     CHECK(!in.npr.enabled && in.npr.bands == NprSettings().bands);
   }
 
+  // A real v1.15 layout retains NPR and defaults to single-clip playback.
+  {
+    IlmeeeScene s; s.entities = {Entity("Legacy15", -1)}; s.npr.enabled = true;
+    CHECK(SaveScene(file.string(), s));
+    auto bytes = ReadAll(file); bytes[6] = 15;
+    bytes.erase(bytes.end() - kNprBytes - 18, bytes.end() - kNprBytes - 16);
+    WriteAll(file, bytes);
+    IlmeeeScene loaded; CHECK(LoadScene(file.string(), loaded));
+    CHECK(loaded.entities[0].animation.controller.empty() && loaded.npr.enabled);
+  }
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
   return g_failures == 0 ? 0 : 1;

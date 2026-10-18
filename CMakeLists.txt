@@ -221,9 +221,10 @@ target_link_libraries(TestPMXLoader PRIVATE glm::glm)
 add_executable(TestDeviceMonitor test/TestDeviceMonitor.cpp)
 
 add_executable(TestSkeletalAnimation test/TestSkeletalAnimation.cpp
-    src/cpp/core_engine/SkeletalAnimation.cpp)
+    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/AnimationController.cpp)
 target_include_directories(TestSkeletalAnimation PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm)
+target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm PkgConfig::SDL3)
+target_compile_definitions(TestSkeletalAnimation PRIVATE ILMEEE_TEST_MOTION_DIR="${CMAKE_SOURCE_DIR}/assets/motions")
 
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
@@ -269,6 +270,7 @@ target_compile_definitions(TestNativeScripts PRIVATE
     ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
 
 add_executable(TestGameBuild test/TestGameBuild.cpp
+    src/cpp/core_engine/AnimationController.cpp src/cpp/core_engine/SkeletalAnimation.cpp
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/core_engine/GameBuilder.cpp
     src/cpp/core_engine/ModelDependencies.cpp
@@ -276,7 +278,7 @@ add_executable(TestGameBuild test/TestGameBuild.cpp
 target_include_directories(TestGameBuild PRIVATE ${CMAKE_SOURCE_DIR}/include
     ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
 target_link_libraries(TestGameBuild PRIVATE glm::glm ufbx ${GTK3_LIBRARIES}
-    ${LIBNOTIFY_LIBRARIES} pthread ${CMAKE_DL_LIBS})
+    ${LIBNOTIFY_LIBRARIES} pthread ${CMAKE_DL_LIBS} PkgConfig::SDL3)
 target_include_directories(TestGameBuild PRIVATE ${JSON_DIR})
 target_compile_definitions(TestGameBuild PRIVATE ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
 
@@ -289,6 +291,7 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/WorldTextRuntime.cpp
     src/cpp/core_engine/SkeletalAnimation.cpp
     src/cpp/core_engine/AnimationRuntime.cpp
+    src/cpp/core_engine/AnimationController.cpp
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
     src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/player/PlayerMain.cpp

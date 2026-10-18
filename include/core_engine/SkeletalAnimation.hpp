@@ -3,6 +3,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <string>
 #include <vector>
+#include <array>
 
 namespace ilmeee {
 
@@ -11,6 +12,7 @@ struct AnimationComponent {
   std::string clip;
   float speed = 1.0f;
   bool loop = true;
+  std::string controller; // optional locomotion asset; takes precedence over clip
 };
 
 struct BoneTransform {
@@ -21,6 +23,8 @@ struct BoneTransform {
 struct BoneKeyframe {
   float time = 0;
   BoneTransform value;
+  // Incoming VMD Bezier curves: X, Y, Z translation, then rotation.
+  std::array<glm::vec4, 4> curves{{{0,0,1,1}, {0,0,1,1}, {0,0,1,1}, {0,0,1,1}}};
 };
 struct BoneTrack {
   std::string bone;
@@ -41,6 +45,9 @@ struct SkeletonBone {
 bool ValidateAnimation(const AnimationClip &clip, std::string &error);
 bool LoadAnimationClip(const std::string &path, AnimationClip &out,
                        std::string &error);
+bool LoadVmdAnimation(const std::string &path, AnimationClip &out,
+                      std::string &error);
+bool IsAnimationPath(const std::string &path);
 bool SaveAnimationClip(const std::string &path, const AnimationClip &clip,
                        std::string &error);
 BoneTransform SampleBone(const BoneTrack &track, float time);

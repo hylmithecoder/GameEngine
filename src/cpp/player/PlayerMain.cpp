@@ -359,7 +359,6 @@ protected:
     }
     // Input gathered while drawing the previous frame (keyboard + sticks).
     if (renderer_ && !paused_ && error_.empty()) {
-      renderer_->UpdateAnimations(std::max(0.0f, deltaTime));
       movement_.Update(*renderer_,
                        dialog_.FreezesPlayer()
                            ? ilmeee::FrozenMovementInput(input_)
@@ -370,6 +369,7 @@ protected:
     if (!paused_ && error_.empty()) {
       native_.Update(deltaTime);
       ilmeee::ScriptSceneEndFrame(nativeContext_);
+      if (renderer_) renderer_->UpdateAnimations(std::max(0.0f, deltaTime));
     }
     // A game is always playing; sounds and videos start on the first frame.
     const auto mediaStart = FrameStats::Clock::now();

@@ -7,6 +7,7 @@
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "SkeletalAnimation.hpp"
+#include "AnimationController.hpp"
 #include "TextureManager.hpp"
 #include "WorldText.hpp"
 #include <glm/glm.hpp>
@@ -276,6 +277,7 @@ public:
     std::string loadedAnimationPath;
     std::string animationError;
     float animationTime = 0;
+    ilmeee::ControllerRuntime locomotion;
     bool poseActive = false;
 
     // Per-material surface ranges. Always at least one entry after a

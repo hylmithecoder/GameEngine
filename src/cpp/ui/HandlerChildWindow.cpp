@@ -746,11 +746,15 @@ void MainWindow::RenderHierarchyWindow() {
   End();
 }
 
-void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
-                                      HandlerProject::AssetFile assetFolder,
+void MainWindow::RenderExplorerWindow(
+    const HandlerProject::AssetFile &projectRoot,
+    const HandlerProject::AssetFile &assetFolder,
                                       const string &assetPath,
                                       bool firstOpenProject) {
   Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
+  projectHandler.onFileClicked = [this](const HandlerProject::AssetFile &file) {
+    if (ilmeee::IsAnimationPath(file.fullPath) || ilmeee::IsAnimationControllerPath(file.fullPath)) OpenMotionPreview(file.fullPath);
+  };
   DEBUG_TRACE_PANEL("Explorer panel");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
@@ -844,6 +848,7 @@ void MainWindow::RenderExplorerWindow(HandlerProject::AssetFile projectRoot,
 
     // Left panel (Project tree)
     BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
+    RenderMotionLibrary();
     projectHandler.DrawAssetTree(projectRoot);
     EndChild();
 
@@ -1040,15 +1045,7 @@ void MainWindow::RenderInspectorWindow() {
       uint32_t boneCount = sceneRenderer->GetMesh3DBoneCount((size_t)meshIdx);
       if (boneCount > 0) {
         Text("Bones: %u", boneCount);
-        if (Button("Open Animation Editor")) OpenAnimationEditor((size_t)meshIdx);
-        auto &animation = sceneRenderer->meshes3d[(size_t)meshIdx].animation;
-        if (!animation.clip.empty()) TextWrapped("Animation: %s", animation.clip.c_str());
-        if (!animation.clip.empty()) {
-          if (Checkbox("Animation Enabled", &animation.enabled)) RecordEditorHistory();
-          if (Checkbox("Loop Animation", &animation.loop)) RecordEditorHistory();
-          DragFloat("Animation Speed", &animation.speed, 0.05f, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-          if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
-        }
+        RenderAnimationInspector((size_t)meshIdx);
       }
 
       // --- Surfaces (materials) → per-surface texture binding ---
@@ -2661,39 +2658,6 @@ void MainWindow::RenderGameUiEditor() {
   if (Button("Save Scene")) Save3DScene();
 }
 
-void MainWindow::RenderMainViewWindow() {
-  if (!showMainView)
-    return;
-
-  Begin("Main View", &showMainView, ImGuiWindowFlags_NoCollapse);
-  DEBUG_TRACE_PANEL("Main View panel (tabs)");
-
-  if (BeginTabBar("MainTabs")) {
-    if (BeginTabItem("Viewport")) {
-      EndTabItem();
-    }
-
-    if (BeginTabItem("Animation")) {
-      TextWrapped("Edit PMX poses and animation clips in the Animation panel.");
-      if (Button("Open Animation")) {
-        showAnimation = true;
-        const int selected = SelectedMeshIndex();
-        if (selected >= 0) OpenAnimationEditor((size_t)selected);
-      }
-      EndTabItem();
-    }
-
-    if (BeginTabItem("Particle Editor")) {
-      Text("Particle system editor will be displayed here");
-      EndTabItem();
-    }
-
-    EndTabBar();
-  }
-
-  End();
-}
-
 void MainWindow::RenderViewportToolbar() {
   // Style untuk toolbar
   float toolbarHeight = 28.0f;
@@ -3030,8 +2994,6 @@ void MainWindow::RenderMenuBar() {
 
     if (BeginMenu("Windows")) {
       MenuItem("Animation", nullptr, &showAnimation);
-      if (MenuItem("Main View", nullptr, &showMainView)) {
-      }
       if (MenuItem("Explorer", nullptr, &showExplorer)) {
       }
       if (MenuItem("Inspector", nullptr, &showInspector)) {

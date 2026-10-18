@@ -222,7 +222,6 @@ void MainWindow::OnUpdate(float deltaTime) {
   }
   gameWasStopped = builder.IsStopped();
   if (builder.IsPlaying() && sceneRenderer) {
-    sceneRenderer->UpdateAnimations(std::max(0.0f, deltaTime));
     movementSystem.Update(*sceneRenderer,
                           dialogSystem.FreezesPlayer()
                               ? ilmeee::FrozenMovementInput(gameMovementInput)
@@ -233,6 +232,7 @@ void MainWindow::OnUpdate(float deltaTime) {
   if (builder.IsPlaying()) {
     nativeScripts.Update(deltaTime);
     ilmeee::ScriptSceneEndFrame(nativeScriptContext);
+    if (sceneRenderer) sceneRenderer->UpdateAnimations(std::max(0.0f, deltaTime));
   }
   if (sceneRenderer) {
     media.SetProjectRoot(projectHandler.projectPath);
@@ -295,15 +295,16 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 
   Ilmeee::EditorDockSpace::Begin("IlmeeeDockSpace", 32.0f);
 
-  if (showMainView)
-    RenderMainViewWindow();
   RenderSceneWindow(); // Also owns the independent Game tab.
   if (showAnimation) RenderAnimationWindow();
   if (showHierarchy)
     RenderHierarchyWindow();
   if (showExplorer) {
-    RenderExplorerWindow(projectHandler.rootAsset, projectHandler.rootAsset,
-                         "assets", true);
+    if (explorerTreeVersion != projectHandler.assetTreeVersion) {
+      explorerTree = projectHandler.rootAsset;
+      explorerTreeVersion = projectHandler.assetTreeVersion;
+    }
+    RenderExplorerWindow(explorerTree, explorerTree, "assets", true);
   }
   if (showInspector)
     RenderInspectorWindow();
