@@ -90,7 +90,7 @@ json ToolList() {
                      {"items", {{"type", "number"}}},
                      {"minItems", 2},
                      {"maxItems", 2}};
-  return json::array(
+  json tools = json::array(
       {{{"name", "get_project_info"},
         {"description", "Get the open editor project and scene status."},
         {"inputSchema", ObjectSchema()}},
@@ -122,6 +122,62 @@ json ToolList() {
                        {"position", vec3},
                        {"rotation", vec3},
                        {"scale", vec3}},
+                      {"index"})}},
+       {{"name", "get_spring_bones"},
+        {"description", "Get the spring bone (hair / breast / skirt physics) "
+                        "component of a skinned object: chains, colliders and "
+                        "how many bones it simulates."},
+        {"inputSchema",
+         ObjectSchema({{"index", {{"type", "integer"}, {"minimum", 0}}}},
+                      {"index"})}},
+       {{"name", "set_spring_bones"},
+        {"description",
+         "Add or edit spring bones on a skinned (PMX) object in the stopped "
+         "editor; records Undo. auto=true detects hair, breast, skirt, ribbon "
+         "and tail bones by name and adds head/chest/thigh colliders; the "
+         "other fields then override. chains/colliders replace the lists. "
+         "stiffness is 1/s (hair ~6, breast ~25), drag 0..1, gravity and wind "
+         "in bone lengths per second. Simulates in Play mode."},
+        {"inputSchema",
+         ObjectSchema(
+             {{"index", {{"type", "integer"}, {"minimum", 0}}},
+              {"auto", {{"type", "boolean"}}},
+              {"enabled", {{"type", "boolean"}}},
+              {"wind", vec3},
+              {"chains",
+               {{"type", "array"},
+                {"items",
+                 ObjectSchema({{"rootBone", {{"type", "string"}}},
+                               {"stiffness", {{"type", "number"}}},
+                               {"drag", {{"type", "number"}}},
+                               {"gravity", {{"type", "number"}}},
+                               {"hitRadius", {{"type", "number"}}},
+                               {"useColliders", {{"type", "boolean"}}}},
+                              {"rootBone"})}}},
+              {"colliders",
+               {{"type", "array"},
+                {"items",
+                 ObjectSchema({{"bone", {{"type", "string"}}},
+                               {"offset", vec3},
+                               {"tailOffset", vec3},
+                               {"radius", {{"type", "number"}}}},
+                              {"bone", "radius"})}}}},
+             {"index"})}},
+       {{"name", "set_animation"},
+        {"description",
+         "Set the Animation component of a skinned (PMX) object in the "
+         "stopped editor; records Undo. clip is a project-relative "
+         ".ilmeeeanim (or .vmd) path, controller a .ilmeeecontroller path "
+         "that takes precedence (\"\" clears). Setting clip clears the old "
+         "controller unless controller is also provided. Assigning an asset "
+         "enables animation unless enabled is explicitly set. Plays in Play mode; save_scene persists it."},
+        {"inputSchema",
+         ObjectSchema({{"index", {{"type", "integer"}, {"minimum", 0}}},
+                       {"clip", {{"type", "string"}}},
+                       {"controller", {{"type", "string"}}},
+                       {"enabled", {{"type", "boolean"}}},
+                       {"loop", {{"type", "boolean"}}},
+                       {"speed", {{"type", "number"}, {"minimum", 0}, {"maximum", 4}}}},
                       {"index"})}},
        {{"name", "save_scene"},
         {"description",
@@ -220,6 +276,62 @@ json ToolList() {
                         {{"type", "boolean"},
                          {"description",
                           "Only logcat Error/Fatal lines and crash output"}}}})}}});
+
+  const json index = {{"type", "integer"}, {"minimum", 0}};
+  const json path = {{"type", "string"}, {"minLength", 1},
+                     {"description", "Path relative to the active project; outputs must be .ilmeeeanim"}};
+  const json bone = {{"type", "string"}, {"minLength", 1},
+                     {"description", "Exact primary/alternate bone name, or @humanoid_role from get_skeleton"}};
+  const json time = {{"type", "number"}, {"minimum", 0}, {"maximum", 600}};
+  const json duration = {{"type", "number"}, {"exclusiveMinimum", 0}, {"maximum", 600}};
+  const json fps = {{"type", "number"}, {"minimum", 1}, {"maximum", 240}};
+  const json ops = {{"type", "array"}, {"maxItems", 2000},
+    {"items", {{"oneOf", json::array({
+      ObjectSchema({{"op", {{"const", "set_key"}}}, {"bone", bone}, {"time", time},
+                    {"rotation", vec3}, {"translation", vec3}, {"scale", vec3},
+                    {"ease", {{"enum", {"linear", "smooth", "ease_in", "ease_out"}}}}}, {"op", "bone", "time"}),
+      ObjectSchema({{"op", {{"const", "delete_key"}}}, {"bone", bone},
+                    {"time", {{"type", "number"}, {"minimum", 0}, {"maximum", 3600}}}}, {"op", "bone", "time"}),
+      ObjectSchema({{"op", {{"const", "clear_track"}}}, {"bone", bone}}, {"op", "bone"}),
+      ObjectSchema({{"op", {{"const", "add_rotation"}}}, {"bone", bone}, {"rotation", vec3},
+                    {"from", {{"type", "number"}, {"minimum", 0}}},
+                    {"to", {{"type", "number"}, {"minimum", 0}}}}, {"op", "bone", "rotation"}),
+      ObjectSchema({{"op", {{"const", "mirror"}}}, {"bone", bone},
+                    {"from", {{"enum", {"left", "right"}}}}}, {"op"}),
+      ObjectSchema({{"op", {{"const", "scale_time"}}},
+                    {"factor", {{"type", "number"}, {"minimum", 0.01}, {"maximum", 100}}}}, {"op", "factor"}),
+      ObjectSchema({{"op", {{"const", "shift"}}}, {"bone", bone}, {"by", {{"type", "number"}}}}, {"op", "by"}),
+      ObjectSchema({{"op", {{"const", "set_duration"}}}, {"duration", duration}, {"fps", fps}}, {"op", "duration"})
+    })}}}};
+  const auto add = [&](const char *name, const char *description, json schema) {
+    tools.push_back({{"name", name}, {"description", description}, {"inputSchema", std::move(schema)}});
+  };
+  add("get_skeleton", "Inspect a skinned scene object's bones, humanoid roles, groups and available generated motion types. Use @role in authoring. Bind positions are model-space; keys use local Euler degrees. Paginated bones; roles/groups cover the full rig.",
+      ObjectSchema({{"index", index}, {"group", {{"type", "string"}}}, {"contains", {{"type", "string"}}},
+                    {"offset", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100000}}},
+                    {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}}}}, {"index"}));
+  add("get_animation", "Read .ilmeeeanim or .vmd metadata and track counts. includeKeys=true returns paginated keys, optionally filtered by bone; rotation is Euler degrees, curves are incoming Bezier control points. Optional index resolves @roles and reports rig compatibility.",
+      ObjectSchema({{"path", path}, {"index", index}, {"bone", bone}, {"includeKeys", {{"type", "boolean"}}},
+                    {"offset", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100000}}},
+                    {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}}}}, {"path"}));
+  add("sample_animation", "Evaluate clip FK at time in seconds, clamped by default (loop=true wraps). Returns local bone transforms in Euler degrees; optional index adds model-space positions for the full rig, including unkeyed bones. Physics is not simulated. bone optionally selects a name or @role.",
+      ObjectSchema({{"path", path}, {"index", index}, {"bone", bone},
+                    {"time", {{"type", "number"}, {"minimum", 0}, {"maximum", 3600}}},
+                    {"loop", {{"type", "boolean"}}}}, {"path", "time"}));
+  add("create_animation", "Create and save an editable .ilmeeeanim clip (default duration 3 s, FPS 30). Optional ops add keys in the same atomic request; index validates bone names and resolves @roles. Existing outputs require overwrite=true. Stop Play first. File edits are outside scene Undo; assign separately with set_animation.",
+      ObjectSchema({{"path", path}, {"index", index}, {"name", {{"type", "string"}}},
+                    {"duration", duration}, {"fps", fps}, {"ops", ops},
+                    {"overwrite", {{"type", "boolean"}}}}, {"path"}));
+  add("edit_animation", "Atomically apply ops to a saved clip. Rotation is local Euler degrees; mirror reflects across YZ (default left to right), shift clamps negative key times to zero with last key winning. output optionally saves a copy or converts VMD to .ilmeeeanim; VMD input is preserved. Stop Play first; file edits are outside scene Undo.",
+      ObjectSchema({{"path", path}, {"output", path}, {"index", index}, {"name", {{"type", "string"}}},
+                    {"ops", ops}, {"overwrite", {{"type", "boolean"}}}}, {"path", "ops"}));
+  add("generate_animation", "Generate and save a procedural humanoid clip for a skinned scene object using detected roles. duration defaults per type (0.2..60 s when supplied); intensity 0..3 defaults to 1. Optional ops refine the result before saving. Stop Play first. Assign with set_animation, then save_scene.",
+      ObjectSchema({{"path", path}, {"index", index}, {"type", {{"type", "string"},
+                    {"enum", {"idle", "breathe", "wave", "nod", "shake_head", "sway", "bow", "talk", "happy_bounce", "look_around"}}}},
+                    {"duration", {{"type", "number"}, {"minimum", 0.2}, {"maximum", 60}}},
+                    {"intensity", {{"type", "number"}, {"minimum", 0}, {"maximum", 3}}},
+                    {"name", {{"type", "string"}}}, {"ops", ops}, {"overwrite", {{"type", "boolean"}}}}, {"path", "index", "type"}));
+  return tools;
 }
 
 } // namespace

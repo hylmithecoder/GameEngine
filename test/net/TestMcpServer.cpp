@@ -76,7 +76,18 @@ int main() {
   assert(discovery["result"]["supportedVersions"].size() == 2);
   auto list = Post(port, Modern(4, "tools/list"), "test-secret", true);
   assert(list->statusCode == 200);
-  assert(json::parse(list->body)["result"]["tools"].size() == 13);
+  const auto tools = json::parse(list->body)["result"]["tools"];
+  assert(tools.size() == 22);
+  for (const char *name : {"get_skeleton", "get_animation", "create_animation",
+                           "edit_animation", "generate_animation", "sample_animation"}) {
+    bool found = false;
+    for (const auto &tool : tools) if (tool["name"] == name) {
+      found = true;
+      assert(tool["inputSchema"]["additionalProperties"] == false);
+      assert(tool["inputSchema"]["properties"].is_object());
+    }
+    assert(found);
+  }
   auto call =
       Post(port,
            Modern(5, "tools/call",

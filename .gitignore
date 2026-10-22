@@ -70,4 +70,5 @@ build-verify/
 build*/dist/
 
 docs/*
+!docs/ScriptingAPI.md
 .env

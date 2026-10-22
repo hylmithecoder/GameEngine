@@ -1,5 +1,8 @@
 #include "../../../include/ui/MainWindow.hpp"
+#include "core_engine/AnimationTooling.hpp"
+#include "core_engine/AnimationController.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -176,6 +179,35 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
              json::array({gameUi.referenceWidth, gameUi.referenceHeight})},
             {"elements", std::move(elements)}};
   }
+  if (name == "get_skeleton" || name == "get_animation" ||
+      name == "sample_animation" || name == "create_animation" ||
+      name == "edit_animation" || name == "generate_animation") {
+    const bool writing = name == "create_animation" || name == "edit_animation" ||
+                         name == "generate_animation";
+    if (writing && SceneStructureLocked())
+      return Error("Stop play mode before editing animation assets");
+    const std::vector<ilmeee::SkeletonBone> *bones = nullptr;
+    if (args.contains("index") || name == "get_skeleton" || name == "generate_animation") {
+      size_t i;
+      if (!sceneRenderer || !Index(args, "index", sceneRenderer->GetMesh3DCount(), i))
+        return Error("Invalid object index");
+      bones = &sceneRenderer->meshes3d[i].skeleton;
+      if (bones->empty()) return Error("Select a skinned object with bones");
+    }
+    const std::vector<ilmeee::SkeletonBone> empty;
+    json result = ilmeee::HandleAnimationTool(name, args, projectHandler.projectPath,
+                                              bones ? *bones : empty);
+    if (writing && !result.contains("error") && sceneRenderer) {
+      // Controllers may share any edited clip. Reload their cached assets on
+      // the next Play, as well as direct clip bindings.
+      for (auto &mesh : sceneRenderer->meshes3d) {
+        mesh.loadedAnimationPath.clear();
+        mesh.animationError.clear();
+        mesh.locomotion = {};
+      }
+    }
+    return result;
+  }
   if (!sceneRenderer)
     return Error("Scene is not ready");
   const size_t count = sceneRenderer->GetMesh3DCount();
@@ -239,7 +271,33 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"position", Array(sceneRenderer->GetMesh3DPosition(i))},
             {"rotation", Array(sceneRenderer->GetMesh3DRotation(i))},
             {"scale", Array(sceneRenderer->GetMesh3DScale(i))},
-            {"hasDialog", sceneRenderer->meshes3d[i].dialog.enabled}};
+            {"hasDialog", sceneRenderer->meshes3d[i].dialog.enabled},
+            {"bones", sceneRenderer->meshes3d[i].skeleton.size()},
+            {"animation", {{"enabled", sceneRenderer->meshes3d[i].animation.enabled},
+                            {"clip", sceneRenderer->meshes3d[i].animation.clip},
+                            {"controller", sceneRenderer->meshes3d[i].animation.controller},
+                            {"loop", sceneRenderer->meshes3d[i].animation.loop},
+                            {"speed", sceneRenderer->meshes3d[i].animation.speed},
+                            {"time", sceneRenderer->meshes3d[i].animationTime},
+                            {"error", sceneRenderer->meshes3d[i].animationError}}},
+            {"springBones", sceneRenderer->meshes3d[i].springBones.enabled}};
+  };
+  const auto springJson = [&](size_t i) {
+    const auto &mesh = sceneRenderer->meshes3d[i];
+    const auto &spring = mesh.springBones;
+    json chains = json::array(), colliders = json::array();
+    for (const auto &c : spring.chains)
+      chains.push_back({{"rootBone", c.rootBone}, {"stiffness", c.stiffness},
+                        {"drag", c.drag}, {"gravity", c.gravity},
+                        {"hitRadius", c.hitRadius}, {"useColliders", c.useColliders}});
+    for (const auto &c : spring.colliders)
+      colliders.push_back({{"bone", c.bone}, {"offset", Array(c.offset)},
+                           {"tailOffset", Array(c.tailOffset)}, {"radius", c.radius}});
+    return json{{"index", i}, {"name", sceneRenderer->GetMesh3DName(i)},
+                {"bones", mesh.skeleton.size()}, {"enabled", spring.enabled},
+                {"wind", Array(spring.wind)},
+                {"simulatedBones", ilmeee::CountSpringJoints(mesh.skeleton, spring)},
+                {"chains", std::move(chains)}, {"colliders", std::move(colliders)}};
   };
   if (name == "list_scene_objects") {
     json objects = json::array();
@@ -252,6 +310,12 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     if (!Index(args, "index", count, i))
       return Error("Invalid object index");
     return object(i);
+  }
+  if (name == "get_spring_bones") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    return springJson(i);
   }
   if (name == "get_dialog") {
     size_t i;
@@ -420,6 +484,123 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     sceneRenderer->SetMesh3DTransform(i, position, rotation, scale);
     RecordEditorHistory();
     return object(i);
+  }
+  if (name == "set_spring_bones") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    auto &mesh = sceneRenderer->meshes3d[i];
+    if (mesh.skeleton.empty())
+      return Error("Spring bones need a skinned (PMX) model with bones");
+    ilmeee::SpringBoneComponent spring = mesh.springBones;
+    bool autoSetup = false;
+    if (!Optional(args, "auto", autoSetup))
+      return Error("auto must be a boolean");
+    if (autoSetup) {
+      spring = ilmeee::AutoSetupSpringBones(mesh.skeleton);
+      if (spring.chains.empty())
+        return Error("Auto setup found no hair/breast/skirt/ribbon/tail bones");
+    }
+    if (!Optional(args, "enabled", spring.enabled) || !Vec3(args, "wind", spring.wind))
+      return Error("Invalid enabled or wind");
+    const auto hasBone = [&](const std::string &bone) {
+      for (const auto &b : mesh.skeleton) if (b.name == bone) return true;
+      return false;
+    };
+    if (auto it = args.find("chains"); it != args.end()) {
+      if (!it->is_array() || it->size() > 256) return Error("chains must be an array");
+      spring.chains.clear();
+      for (const auto &item : *it) {
+        ilmeee::SpringBoneChain c;
+        if (!item.is_object() || !Optional(item, "rootBone", c.rootBone) ||
+            !Optional(item, "stiffness", c.stiffness) || !Optional(item, "drag", c.drag) ||
+            !Optional(item, "gravity", c.gravity) || !Optional(item, "hitRadius", c.hitRadius) ||
+            !Optional(item, "useColliders", c.useColliders))
+          return Error("Invalid chain entry");
+        if (!hasBone(c.rootBone)) return Error("Unknown chain root bone: " + c.rootBone);
+        c.stiffness = std::clamp(c.stiffness, 0.0f, 100.0f);
+        c.drag = std::clamp(c.drag, 0.0f, 1.0f);
+        c.gravity = std::clamp(c.gravity, -10.0f, 10.0f);
+        c.hitRadius = std::clamp(c.hitRadius, 0.0f, 10.0f);
+        spring.chains.push_back(c);
+      }
+    }
+    if (auto it = args.find("colliders"); it != args.end()) {
+      if (!it->is_array() || it->size() > 256) return Error("colliders must be an array");
+      spring.colliders.clear();
+      for (const auto &item : *it) {
+        ilmeee::SpringCollider c;
+        if (!item.is_object() || !Optional(item, "bone", c.bone) ||
+            !Vec3(item, "offset", c.offset) || !Optional(item, "radius", c.radius))
+          return Error("Invalid collider entry");
+        c.tailOffset = c.offset; // sphere unless a tail is given
+        if (!Vec3(item, "tailOffset", c.tailOffset)) return Error("Invalid collider tailOffset");
+        if (!hasBone(c.bone)) return Error("Unknown collider bone: " + c.bone);
+        c.radius = std::clamp(c.radius, 0.0f, 100.0f);
+        spring.colliders.push_back(c);
+      }
+    }
+    mesh.springBones = std::move(spring);
+    mesh.springRuntime.Reset();
+    RecordEditorHistory();
+    json result = springJson(i);
+    result["saved"] = false;
+    result["note"] = "Runs in Play mode; call save_scene to keep it";
+    return result;
+  }
+  if (name == "set_animation") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    auto &mesh = sceneRenderer->meshes3d[i];
+    if (mesh.skeleton.empty())
+      return Error("Animation needs a skinned (PMX) model with bones");
+    ilmeee::AnimationComponent animation = mesh.animation;
+    if (!Optional(args, "clip", animation.clip) ||
+        !Optional(args, "controller", animation.controller) ||
+        !Optional(args, "enabled", animation.enabled) ||
+        !Optional(args, "loop", animation.loop) ||
+        !Optional(args, "speed", animation.speed))
+      return Error("Invalid animation field");
+    if (!std::isfinite(animation.speed) || animation.speed < 0 || animation.speed > 4)
+      return Error("speed must be 0..4");
+    // Supplying a clip selects direct playback unless the caller explicitly
+    // also supplies a controller, which continues to take precedence.
+    if (args.contains("clip") && !args.contains("controller")) animation.controller.clear();
+    if ((args.contains("clip") || args.contains("controller")) && !args.contains("enabled"))
+      animation.enabled = !animation.clip.empty() || !animation.controller.empty();
+    for (std::string *asset : {&animation.clip, &animation.controller}) {
+      if (asset->empty()) continue;
+      std::string path, relative, error;
+      if (!ilmeee::ResolveAnimationAsset(projectHandler.projectPath, *asset, false, path, relative, error))
+        return Error(error);
+      if (asset == &animation.clip) {
+        ilmeee::AnimationClip clip;
+        if (!ilmeee::IsAnimationPath(path) || !ilmeee::LoadAnimationClip(path, clip, error))
+          return Error(error.empty() ? "Expected .ilmeeeanim or .vmd" : error);
+        bool matched = clip.tracks.empty();
+        for (const auto &t : clip.tracks)
+          for (const auto &b : mesh.skeleton) if (t.bone == b.name) matched = true;
+        if (!matched) return Error("Clip has no matching bone tracks on this object");
+      } else {
+        ilmeee::AnimationController controller;
+        if (!ilmeee::IsAnimationControllerPath(path) || !ilmeee::LoadAnimationController(path, controller, error))
+          return Error(error.empty() ? "Expected .ilmeeecontroller" : error);
+      }
+      *asset = relative;
+    }
+    mesh.animation = animation;
+    mesh.loadedAnimationPath.clear();
+    mesh.animationError.clear();
+    mesh.animationTime = 0;
+    mesh.springRuntime.Reset();
+    mesh.locomotion = {};
+    RecordEditorHistory();
+    return {{"index", i}, {"name", sceneRenderer->GetMesh3DName(i)},
+            {"enabled", animation.enabled}, {"clip", animation.clip},
+            {"controller", animation.controller}, {"loop", animation.loop},
+            {"speed", animation.speed}, {"saved", false},
+            {"note", "Plays in Play mode; call save_scene to keep it"}};
   }
   if (name == "save_scene") {
     if (projectHandler.projectPath.empty())

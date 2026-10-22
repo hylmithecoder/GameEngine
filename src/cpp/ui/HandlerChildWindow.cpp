@@ -1046,6 +1046,7 @@ void MainWindow::RenderInspectorWindow() {
       if (boneCount > 0) {
         Text("Bones: %u", boneCount);
         RenderAnimationInspector((size_t)meshIdx);
+        RenderSpringBoneInspector((size_t)meshIdx);
       }
 
       // --- Surfaces (materials) → per-surface texture binding ---
@@ -3387,6 +3388,7 @@ bool MainWindow::Save3DScene() {
     e.video = mesh.video;
     e.dialog = mesh.dialog;
     e.animation = mesh.animation;
+    e.springBones = mesh.springBones;
     e.worldText = mesh.worldText;
 
     if (mesh.isWorldText) {

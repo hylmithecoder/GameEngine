@@ -40,6 +40,9 @@ struct SkeletonBone {
   std::string name;
   int parent = -1;
   glm::vec3 bindPosition{0}; // model-space, right-handed
+  // Second name (PMX English) used only for name matching, e.g. spring bone
+  // auto setup on rigs whose Japanese names are abbreviations.
+  std::string altName;
 };
 
 bool ValidateAnimation(const AnimationClip &clip, std::string &error);
@@ -55,7 +58,18 @@ void SetBoneKey(AnimationClip &clip, const std::string &bone,
                 const BoneKeyframe &key);
 bool DeleteBoneKey(AnimationClip &clip, const std::string &bone, float time);
 float AnimationTime(float time, float duration, bool loop);
-// Handles parents stored after their children; rejects cycles and bad links.
+// Model-space bone frames for a clip pose. Bind orientation is identity, so
+// a frame's rotation is the accumulated pose rotation. Handles parents
+// stored after their children; rejects cycles and bad links.
+bool EvaluateSkeletonPose(const std::vector<SkeletonBone> &bones,
+                          const AnimationClip &clip, float time,
+                          std::vector<glm::mat4> &world);
+// Turns (possibly physics-modified) frames into skinning matrices.
+void BuildSkinMatrices(const std::vector<SkeletonBone> &bones,
+                       const std::vector<glm::mat4> &world,
+                       std::vector<glm::mat4> &skinMatrices,
+                       std::vector<glm::vec3> &positions);
+// EvaluateSkeletonPose + BuildSkinMatrices.
 bool EvaluateSkeleton(const std::vector<SkeletonBone> &bones,
                       const AnimationClip &clip, float time,
                       std::vector<glm::mat4> &skinMatrices,

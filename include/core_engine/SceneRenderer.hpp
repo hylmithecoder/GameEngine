@@ -7,6 +7,7 @@
 #include "PMXLoader.hpp"
 #include "Scene.hpp"
 #include "SkeletalAnimation.hpp"
+#include "SpringBone.hpp"
 #include "AnimationController.hpp"
 #include "TextureManager.hpp"
 #include "WorldText.hpp"
@@ -279,6 +280,9 @@ public:
     float animationTime = 0;
     ilmeee::ControllerRuntime locomotion;
     bool poseActive = false;
+    // Hair/breast/skirt secondary motion, applied after the animated pose.
+    ilmeee::SpringBoneComponent springBones;
+    ilmeee::SpringBoneRuntime springRuntime;
 
     // Per-material surface ranges. Always at least one entry after a
     // successful load; DrawMeshes issues one draw per submesh so each can
@@ -521,8 +525,10 @@ public:
   uint32_t GetMesh3DVertexCount(size_t i) const;
   uint32_t GetMesh3DTriangleCount(size_t i) const;
   uint32_t GetMesh3DBoneCount(size_t i) const;
+  // physicsDelta >= 0 also steps the mesh's spring bones (play mode); the
+  // default leaves physics out, as the animation editor preview wants.
   bool SetMesh3DAnimationPose(size_t i, const ilmeee::AnimationClip &clip,
-                             float time);
+                             float time, float physicsDelta = -1);
   void ResetMesh3DAnimationPose(size_t i);
   void UpdateAnimations(float deltaSeconds);
   void ResetAnimations();
@@ -747,6 +753,7 @@ public:
     ilmeee::VideoPlayerComponent video;
     ilmeee::DialogComponent dialog;
     ilmeee::AnimationComponent animation;
+    ilmeee::SpringBoneComponent springBones;
     bool isWorldText = false;
     ilmeee::WorldTextComponent worldText;
     bool isAudioEmitter = false;

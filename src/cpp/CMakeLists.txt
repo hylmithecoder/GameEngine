@@ -37,13 +37,17 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/DialogInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/AnimationEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/AnimationControllerEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/SpringBoneInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/HandlerChildWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/GameBuildPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/ViewportGizmo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SceneRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SkeletalAnimation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationAuthoring.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationTooling.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SpringBone.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AnimationController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/VideoDecoder.cpp
@@ -66,6 +70,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/Discordrich.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PMXLoader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/ModelThumbnail.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/SoftwareRaster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/SvgIconManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorDockSpace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/core_editor/EditorTheme.cpp

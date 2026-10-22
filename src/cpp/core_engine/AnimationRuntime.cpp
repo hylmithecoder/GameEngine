@@ -7,16 +7,20 @@
 
 bool SceneRenderer::SetMesh3DAnimationPose(size_t index,
                                          const ilmeee::AnimationClip &clip,
-                                         float time) {
+                                         float time, float physicsDelta) {
   if (index >= meshes3d.size() || device == VK_NULL_HANDLE) return false;
   auto &mesh = meshes3d[index];
   if (mesh.skinVertices.empty() || mesh.vertexMemory == VK_NULL_HANDLE) return false;
-  std::vector<glm::mat4> matrices;
+  std::vector<glm::mat4> world, matrices;
   std::vector<glm::vec3> positions;
-  if (!ilmeee::EvaluateSkeleton(mesh.skeleton, clip, time, matrices, positions)) {
+  if (!ilmeee::EvaluateSkeletonPose(mesh.skeleton, clip, time, world)) {
     mesh.animationError = "Invalid bone hierarchy or pose";
     return false;
   }
+  const bool physics = physicsDelta >= 0 &&
+      ilmeee::ApplySpringBones(mesh.skeleton, mesh.springBones, mesh.springRuntime,
+                               GetMesh3DWorldModel(index), physicsDelta, world);
+  ilmeee::BuildSkinMatrices(mesh.skeleton, world, matrices, positions);
   std::vector<MeshVertex> vertices(mesh.skinVertices.size());
   glm::vec3 minimum(std::numeric_limits<float>::max());
   glm::vec3 maximum(-std::numeric_limits<float>::max());
@@ -49,7 +53,7 @@ bool SceneRenderer::SetMesh3DAnimationPose(size_t index,
   mesh.aabbMin = minimum;
   mesh.aabbMax = maximum;
   mesh.posedBones = std::move(positions);
-  mesh.poseActive = !clip.tracks.empty();
+  mesh.poseActive = !clip.tracks.empty() || physics;
   return true;
 }
 
@@ -63,6 +67,7 @@ void SceneRenderer::ResetAnimations() {
     auto &mesh = meshes3d[i];
     ResetMesh3DAnimationPose(i);
     mesh.animationTime = 0;
+    mesh.springRuntime.Reset();
     mesh.loadedAnimationPath.clear();
     mesh.animationError.clear();
     mesh.locomotion = {};
@@ -77,9 +82,12 @@ void SceneRenderer::UpdateAnimations(float deltaSeconds) {
     auto &mesh = meshes3d[i];
     if (mesh.skeleton.empty()) continue;
     if (!mesh.animation.enabled || (mesh.animation.clip.empty() && mesh.animation.controller.empty())) {
-      ResetMesh3DAnimationPose(i);
       mesh.locomotion = {};
       mesh.loadedAnimationPath.clear(); mesh.animationError.clear();
+      // Spring bones still swing on the rest pose (a static character that
+      // walks or turns).
+      if (mesh.springBones.enabled) SetMesh3DAnimationPose(i, {}, 0, deltaSeconds);
+      else ResetMesh3DAnimationPose(i);
       continue;
     }
     if (!mesh.animation.controller.empty()) {
@@ -118,7 +126,7 @@ void SceneRenderer::UpdateAnimations(float deltaSeconds) {
       runtime.previousPosition = position; runtime.hasPosition = true;
       const auto pose = runtime.player.Update(mesh.skeleton, runtime.config, runtime.clips,
           runtime.measuredSpeed, deltaSeconds, mesh.animation.speed);
-      SetMesh3DAnimationPose(i, pose, 0);
+      SetMesh3DAnimationPose(i, pose, 0, deltaSeconds);
       continue;
     }
     mesh.locomotion = {};
@@ -139,6 +147,6 @@ void SceneRenderer::UpdateAnimations(float deltaSeconds) {
         ? std::clamp(mesh.animation.speed, 0.0f, 100.0f) : 1.0f;
     mesh.animationTime = ilmeee::AnimationTime(mesh.animationTime + deltaSeconds * speed,
                                               mesh.animationClip.duration, mesh.animation.loop);
-    SetMesh3DAnimationPose(i, mesh.animationClip, mesh.animationTime);
+    SetMesh3DAnimationPose(i, mesh.animationClip, mesh.animationTime, deltaSeconds);
   }
 }

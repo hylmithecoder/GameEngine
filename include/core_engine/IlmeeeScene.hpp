@@ -54,6 +54,12 @@
 //      vec3 shadowColor, vec3 rimColor, float32 rimWidth, rimStrength,
 //      specularSize, specularStrength, vec3 outlineColor,
 //      float32 outlineWidth --
+//   -- v1.16 after animation.loop: string animation controller --
+//   -- v1.17 after the controller, spring bones: uint32 enabled, vec3 wind,
+//      uint32 chainCount, per chain: string rootBone, float32 stiffness,
+//      drag, gravity, hitRadius, uint32 useColliders; uint32 colliderCount,
+//      per collider: string bone, vec3 offset, vec3 tailOffset,
+//      float32 radius --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -71,6 +77,7 @@
 #include "NprSettings.hpp"
 #include "NativeScriptTypes.hpp"
 #include "SkeletalAnimation.hpp"
+#include "SpringBone.hpp"
 #include "WorldText.hpp"
 #include <glm/glm.hpp>
 #include <string>
@@ -79,11 +86,12 @@
 
 namespace ilmeee {
 
-// v1.16 adds an animation controller asset string after animation.loop.
+// v1.16 adds an animation controller asset string after animation.loop;
+// v1.17 adds the spring bone component after it.
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 16;
+constexpr uint16_t kSceneFormatMinor = 17;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -161,6 +169,7 @@ struct SceneEntity {
   DialogComponent dialog;
   // v1.12: editable animation clip asset, shared by editor and players.
   AnimationComponent animation;
+  SpringBoneComponent springBones; // v1.17, PMX/skinned meshes only
   WorldTextComponent worldText; // v1.13, used only by WorldText entities
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
@@ -389,6 +398,26 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
     detail::WriteU32(f, e.animation.loop ? 1u : 0u);
     // Version 1.16: reusable locomotion controller asset.
     detail::WriteString(f, e.animation.controller);
+    // Version 1.17: spring bones (hair / breast / skirt secondary motion).
+    const SpringBoneComponent &spring = e.springBones;
+    detail::WriteU32(f, spring.enabled ? 1u : 0u);
+    detail::WriteVec3(f, spring.wind);
+    detail::WriteU32(f, (uint32_t)spring.chains.size());
+    for (const auto &chain : spring.chains) {
+      detail::WriteString(f, chain.rootBone);
+      detail::WriteF32(f, chain.stiffness);
+      detail::WriteF32(f, chain.drag);
+      detail::WriteF32(f, chain.gravity);
+      detail::WriteF32(f, chain.hitRadius);
+      detail::WriteU32(f, chain.useColliders ? 1u : 0u);
+    }
+    detail::WriteU32(f, (uint32_t)spring.colliders.size());
+    for (const auto &collider : spring.colliders) {
+      detail::WriteString(f, collider.bone);
+      detail::WriteVec3(f, collider.offset);
+      detail::WriteVec3(f, collider.tailOffset);
+      detail::WriteF32(f, collider.radius);
+    }
     if (e.kind == PrimitiveKind::WorldText) {
       detail::WriteString(f, e.worldText.text);
       detail::WriteF32(f, e.worldText.size);
@@ -635,6 +664,42 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
           e.animation.speed > 100) e.animation.speed = 1;
     }
     if (minor >= 16 && !detail::ReadString(f, e.animation.controller)) return false;
+    if (minor >= 17) {
+      SpringBoneComponent &spring = e.springBones;
+      uint32_t enabled = 0, chains = 0, colliders = 0;
+      if (!detail::ReadU32(f, enabled) || !detail::ReadVec3(f, spring.wind) ||
+          !detail::ReadU32(f, chains) || chains > 4096)
+        return false;
+      spring.enabled = enabled != 0;
+      if (!std::isfinite(spring.wind.x) || !std::isfinite(spring.wind.y) ||
+          !std::isfinite(spring.wind.z)) spring.wind = glm::vec3(0.0f);
+      spring.chains.resize(chains);
+      for (auto &chain : spring.chains) {
+        uint32_t useColliders = 1;
+        if (!detail::ReadString(f, chain.rootBone) ||
+            !detail::ReadF32(f, chain.stiffness) || !detail::ReadF32(f, chain.drag) ||
+            !detail::ReadF32(f, chain.gravity) || !detail::ReadF32(f, chain.hitRadius) ||
+            !detail::ReadU32(f, useColliders))
+          return false;
+        const SpringBoneChain fallback;
+        if (!std::isfinite(chain.stiffness) || chain.stiffness < 0) chain.stiffness = fallback.stiffness;
+        if (!std::isfinite(chain.drag)) chain.drag = fallback.drag;
+        chain.drag = std::clamp(chain.drag, 0.0f, 1.0f);
+        if (!std::isfinite(chain.gravity)) chain.gravity = fallback.gravity;
+        if (!std::isfinite(chain.hitRadius) || chain.hitRadius < 0) chain.hitRadius = 0;
+        chain.useColliders = useColliders != 0;
+      }
+      if (!detail::ReadU32(f, colliders) || colliders > 4096) return false;
+      spring.colliders.resize(colliders);
+      for (auto &collider : spring.colliders) {
+        if (!detail::ReadString(f, collider.bone) ||
+            !detail::ReadVec3(f, collider.offset) ||
+            !detail::ReadVec3(f, collider.tailOffset) ||
+            !detail::ReadF32(f, collider.radius))
+          return false;
+        if (!std::isfinite(collider.radius) || collider.radius < 0) collider.radius = 0;
+      }
+    }
     if (e.kind == PrimitiveKind::WorldText) {
       uint32_t alignment = 1, visible = 1;
       if (minor < 13 || !detail::ReadString(f, e.worldText.text) ||

@@ -1,5 +1,6 @@
 #include "../../../include/core_engine/ModelThumbnail.hpp"
 #include "../../../include/core_engine/PMXLoader.hpp"
+#include "../../../include/core_engine/SoftwareRaster.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 
 #include <algorithm>
@@ -12,15 +13,8 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
-#include <stb/stb_image.h>
 #include <ufbx.h>
 #include <vector>
-
-// The editor links no other stb_image_write TU (only the player has one), so
-// keep these symbols private to this file.
-#define STB_IMAGE_WRITE_STATIC
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb/stb_image_write.h>
 
 namespace fs = std::filesystem;
 
@@ -31,13 +25,9 @@ namespace {
 constexpr int kThumbnailVersion = 1;
 constexpr int kThumbnailSize = 128;
 constexpr int kSupersample = 2;
-constexpr int kMaxTextureSize = 512;
 
-struct Part {
-  uint32_t first = 0, count = 0;
-  glm::vec4 color{0.8f, 0.8f, 0.8f, 1.0f};
-  std::string texture; // resolved path, "" = untextured
-};
+using raster::Part;
+using raster::ResolveFile;
 
 struct ThumbMesh {
   std::vector<glm::vec3> positions; // one per corner, 3 per triangle
@@ -45,53 +35,10 @@ struct ThumbMesh {
   std::vector<Part> parts;
 };
 
-struct Texture {
-  int width = 0, height = 0;
-  std::vector<unsigned char> rgba;
-};
-
 std::string Lowercase(std::string text) {
   std::transform(text.begin(), text.end(), text.begin(),
                  [](unsigned char c) { return (char)std::tolower(c); });
   return text;
-}
-
-// Model files authored on Windows reference textures with backslashes and
-// arbitrary letter case; resolve them component by component on disk.
-std::string ResolveFile(const fs::path &dir, std::string rel) {
-  std::replace(rel.begin(), rel.end(), '\\', '/');
-  if (rel.empty())
-    return {};
-  std::error_code ec;
-  fs::path direct = fs::path(rel).is_absolute() ? fs::path(rel) : dir / rel;
-  if (fs::is_regular_file(direct, ec))
-    return direct.string();
-  fs::path current = dir;
-  for (const auto &part : fs::path(rel)) {
-    if (part == ".")
-      continue;
-    if (part == "..") {
-      current = current.parent_path();
-      continue;
-    }
-    const std::string wanted = Lowercase(part.string());
-    bool found = false;
-    for (fs::directory_iterator it(current, ec), end; !ec && it != end;
-         it.increment(ec)) {
-      if (Lowercase(it->path().filename().string()) == wanted) {
-        current = it->path();
-        found = true;
-        break;
-      }
-    }
-    if (!found)
-      break;
-    if (fs::is_regular_file(current, ec))
-      return current.string();
-  }
-  // Last resort: the bare file name next to the model.
-  fs::path sibling = dir / fs::path(rel).filename();
-  return fs::is_regular_file(sibling, ec) ? sibling.string() : std::string();
 }
 
 bool LoadPmxThumb(const std::string &path, ThumbMesh &out) {
@@ -307,34 +254,6 @@ bool LoadFbxThumb(const std::string &path, ThumbMesh &out) {
   return !out.positions.empty();
 }
 
-// Loads RGBA8 and shrinks large textures; a thumbnail never needs 4K texels.
-bool LoadTexture(const std::string &path, Texture &out) {
-  int w = 0, h = 0, n = 0;
-  unsigned char *pixels = stbi_load(path.c_str(), &w, &h, &n, 4);
-  if (!pixels)
-    return false;
-  int step = 1;
-  while (w / step > kMaxTextureSize || h / step > kMaxTextureSize)
-    step *= 2;
-  out.width = std::max(1, w / step);
-  out.height = std::max(1, h / step);
-  out.rgba.resize((size_t)out.width * out.height * 4);
-  for (int y = 0; y < out.height; ++y)
-    for (int x = 0; x < out.width; ++x)
-      std::copy_n(pixels + ((size_t)(y * step) * w + x * step) * 4, 4,
-                  out.rgba.data() + ((size_t)y * out.width + x) * 4);
-  stbi_image_free(pixels);
-  return true;
-}
-
-glm::vec4 Sample(const Texture &tex, glm::vec2 uv) {
-  uv -= glm::floor(uv); // repeat
-  const int x = std::min(tex.width - 1, (int)(uv.x * tex.width));
-  const int y = std::min(tex.height - 1, (int)(uv.y * tex.height));
-  const unsigned char *p = &tex.rgba[((size_t)y * tex.width + x) * 4];
-  return glm::vec4(p[0], p[1], p[2], p[3]) / 255.0f;
-}
-
 } // namespace
 
 bool IsPreviewableModel(const std::string &path) {
@@ -357,125 +276,24 @@ bool RenderModelThumbnail(const std::string &modelPath,
   }
 
   // Three-quarter view from the front (+Z), slightly above, orthographic.
-  const float yaw = glm::radians(30.0f), pitch = glm::radians(15.0f);
-  const glm::vec3 toCamera(std::sin(yaw) * std::cos(pitch), std::sin(pitch),
-                           std::cos(yaw) * std::cos(pitch));
-  const glm::vec3 right = glm::normalize(glm::cross(glm::vec3(0, 1, 0), toCamera));
-  const glm::vec3 up = glm::cross(toCamera, right);
-  const glm::vec3 light =
-      glm::normalize(-0.4f * right + 0.7f * up + 0.6f * toCamera);
-
-  std::vector<glm::vec3> view(mesh.positions.size());
+  const raster::View view = raster::MakeView(30.0f, 15.0f);
   glm::vec2 lo(INFINITY), hi(-INFINITY);
-  for (size_t i = 0; i < view.size(); ++i) {
-    const glm::vec3 &p = mesh.positions[i];
-    view[i] = {glm::dot(p, right), glm::dot(p, up), glm::dot(p, toCamera)};
-    lo = glm::min(lo, glm::vec2(view[i]));
-    hi = glm::max(hi, glm::vec2(view[i]));
+  for (const auto &p : mesh.positions) {
+    const glm::vec2 v(glm::dot(p, view.right), glm::dot(p, view.up));
+    lo = glm::min(lo, v);
+    hi = glm::max(hi, v);
   }
-  const int S = size * kSupersample;
   const float extent = std::max(hi.x - lo.x, hi.y - lo.y);
   if (!(extent > 1e-9f) || !std::isfinite(extent)) {
     error = "degenerate bounds";
     return false;
   }
-  const float scale = S * 0.88f / extent;
-  const glm::vec2 mid = (lo + hi) * 0.5f;
-  for (auto &v : view) {
-    v.x = S * 0.5f + (v.x - mid.x) * scale;
-    v.y = S * 0.5f - (v.y - mid.y) * scale;
-  }
-
-  std::vector<float> depth((size_t)S * S, -INFINITY);
-  std::vector<glm::vec4> color((size_t)S * S, glm::vec4(0.0f));
-  std::unordered_map<std::string, Texture> textures;
-  for (const auto &part : mesh.parts) {
-    const Texture *tex = nullptr;
-    if (!part.texture.empty()) {
-      auto it = textures.find(part.texture);
-      if (it == textures.end()) {
-        Texture loadedTex;
-        LoadTexture(part.texture, loadedTex);
-        it = textures.emplace(part.texture, std::move(loadedTex)).first;
-      }
-      if (it->second.width > 0)
-        tex = &it->second;
-    }
-    for (uint32_t t = part.first; t + 2 < part.first + part.count; t += 3) {
-      const glm::vec3 &a = view[t], &b = view[t + 1], &c = view[t + 2];
-      const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-      if (std::abs(area) < 1e-12f)
-        continue;
-      // Two-sided Lambert with a flat face normal.
-      glm::vec3 n = glm::cross(mesh.positions[t + 1] - mesh.positions[t],
-                               mesh.positions[t + 2] - mesh.positions[t]);
-      const float len = glm::length(n);
-      n = len > 0 ? n / len : toCamera;
-      if (glm::dot(n, toCamera) < 0)
-        n = -n;
-      const float shade = 0.45f + 0.55f * std::max(0.0f, glm::dot(n, light));
-
-      const int x0 = std::max(0, (int)std::floor(std::min({a.x, b.x, c.x})));
-      const int x1 = std::min(S - 1, (int)std::ceil(std::max({a.x, b.x, c.x})));
-      const int y0 = std::max(0, (int)std::floor(std::min({a.y, b.y, c.y})));
-      const int y1 = std::min(S - 1, (int)std::ceil(std::max({a.y, b.y, c.y})));
-      for (int y = y0; y <= y1; ++y)
-        for (int x = x0; x <= x1; ++x) {
-          const float px = x + 0.5f, py = y + 0.5f;
-          const float w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
-          const float w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
-          const float w2 = 1.0f - w0 - w1;
-          if (w0 < 0 || w1 < 0 || w2 < 0)
-            continue;
-          const float z = w0 * a.z + w1 * b.z + w2 * c.z;
-          const size_t pixel = (size_t)y * S + x;
-          if (z <= depth[pixel])
-            continue;
-          glm::vec4 base = part.color;
-          if (tex) {
-            const glm::vec2 uv = w0 * mesh.uvs[t] + w1 * mesh.uvs[t + 1] +
-                                 w2 * mesh.uvs[t + 2];
-            const glm::vec4 texel = Sample(*tex, uv);
-            base = glm::vec4(glm::vec3(texel), texel.a * part.color.a);
-          }
-          if (base.a < 0.4f) // cut-out hair, lashes, transparent shells
-            continue;
-          depth[pixel] = z;
-          color[pixel] = glm::vec4(glm::clamp(glm::vec3(base) * shade, 0.0f, 1.0f), 1.0f);
-        }
-    }
-  }
-
-  // Box-filter down to the final size (premultiplied, transparent background).
-  std::vector<unsigned char> png((size_t)size * size * 4);
-  for (int y = 0; y < size; ++y)
-    for (int x = 0; x < size; ++x) {
-      glm::vec4 sum(0.0f);
-      for (int sy = 0; sy < kSupersample; ++sy)
-        for (int sx = 0; sx < kSupersample; ++sx) {
-          const glm::vec4 c = color[(size_t)(y * kSupersample + sy) * S +
-                                    x * kSupersample + sx];
-          sum += glm::vec4(glm::vec3(c) * c.a, c.a);
-        }
-      sum /= float(kSupersample * kSupersample);
-      const glm::vec3 rgb = sum.a > 0 ? glm::vec3(sum) / sum.a : glm::vec3(0);
-      unsigned char *out = &png[((size_t)y * size + x) * 4];
-      out[0] = (unsigned char)std::lround(rgb.r * 255);
-      out[1] = (unsigned char)std::lround(rgb.g * 255);
-      out[2] = (unsigned char)std::lround(rgb.b * 255);
-      out[3] = (unsigned char)std::lround(sum.a * 255);
-    }
-
-  std::error_code ec;
-  fs::create_directories(fs::path(pngPath).parent_path(), ec);
-  const std::string temp = pngPath + ".tmp";
-  if (!stbi_write_png(temp.c_str(), size, size, 4, png.data(), size * 4)) {
-    error = "cannot write " + temp;
-    return false;
-  }
-  fs::rename(temp, pngPath, ec);
-  if (ec) {
-    error = ec.message();
+  raster::Canvas canvas(size, kSupersample);
+  std::unordered_map<std::string, raster::Texture> textures;
+  canvas.Draw(mesh.positions, mesh.uvs, mesh.parts, view, (lo + hi) * 0.5f,
+              size * 0.88f / extent, textures);
+  if (!raster::WritePng(pngPath, canvas.Resolve(glm::vec4(0.0f)), size, size)) {
+    error = "cannot write " + pngPath;
     return false;
   }
   return true;

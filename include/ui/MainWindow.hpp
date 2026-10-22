@@ -179,6 +179,7 @@ public:
   void OpenAnimationEditor(size_t meshIndex);
   void OpenAnimationController(size_t meshIndex);
   void RenderAnimationInspector(size_t meshIndex);
+  void RenderSpringBoneInspector(size_t meshIndex);
   void OpenMotionPreview(const std::string &path);
   void RenderMotionLibrary();
   string currentFilter = "";

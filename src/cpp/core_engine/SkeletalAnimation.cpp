@@ -7,6 +7,9 @@
 #include <functional>
 #include <cstring>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
+#include <unistd.h>
 #include <SDL3/SDL_stdinc.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_map>
@@ -261,6 +264,8 @@ bool LoadVmdAnimation(const std::string &path, AnimationClip &out, std::string &
 bool SaveAnimationClip(const std::string &path, const AnimationClip &clip,
                        std::string &error) {
   if (!ValidateAnimation(clip, error)) return false;
+  std::string temporary;
+  int fd = -1;
   try {
     json tracks = json::array();
     for (const auto &track : clip.tracks) {
@@ -285,17 +290,35 @@ bool SaveAnimationClip(const std::string &path, const AnimationClip &clip,
       std::filesystem::create_directories(target.parent_path());
     // Serialize first and commit through a sibling temporary: a failed save
     // must not truncate a clip the artist can still reopen.
-    const auto temporary = target.string() + ".tmp";
-    {
-      std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-      file << data.dump(2) << '\n';
-      file.close();
-      if (!file) throw std::runtime_error("Cannot write animation file");
+    // Exclusive creation avoids following a pre-existing .tmp symlink and
+    // lets two saves prepare independent complete files.
+    const std::string serialized = data.dump(2) + '\n';
+    const auto pattern = target.string() + ".tmp.XXXXXX";
+    std::vector<char> filename(pattern.begin(), pattern.end());
+    filename.push_back('\0');
+    fd = mkstemp(filename.data());
+    if (fd < 0) throw std::runtime_error("Cannot create animation temporary file");
+    temporary = filename.data();
+    size_t offset = 0;
+    while (offset < serialized.size()) {
+      const auto n = write(fd, serialized.data() + offset, serialized.size() - offset);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) throw std::runtime_error("Cannot write animation file");
+      offset += static_cast<size_t>(n);
     }
+    const int closed = close(fd);
+    fd = -1;
+    if (closed != 0) throw std::runtime_error("Cannot close animation file");
     std::filesystem::rename(temporary, target);
+    temporary.clear();
     error.clear();
     return true;
   } catch (const std::exception &e) {
+    if (fd >= 0) close(fd);
+    if (!temporary.empty()) {
+      std::error_code ignored;
+      std::filesystem::remove(temporary, ignored);
+    }
     error = std::string("Cannot save animation: ") + e.what(); return false;
   }
 }
@@ -354,16 +377,15 @@ bool DeleteBoneKey(AnimationClip &clip, const std::string &bone, float time) {
   return false;
 }
 
-bool EvaluateSkeleton(const std::vector<SkeletonBone> &bones,
-                      const AnimationClip &clip, float time,
-                      std::vector<glm::mat4> &matrices,
-                      std::vector<glm::vec3> &positions) {
+bool EvaluateSkeletonPose(const std::vector<SkeletonBone> &bones,
+                          const AnimationClip &clip, float time,
+                          std::vector<glm::mat4> &world) {
+  world.clear();
   if (bones.size() > 4096) return false;
   std::unordered_map<std::string, const BoneTrack *> tracks;
   for (const auto &track : clip.tracks) tracks[track.bone] = &track;
-  std::vector<glm::mat4> world(bones.size(), glm::mat4(1));
+  world.assign(bones.size(), glm::mat4(1));
   std::vector<uint8_t> visited(bones.size(), 0);
-  matrices.resize(bones.size()); positions.resize(bones.size());
   std::function<bool(size_t)> visit = [&](size_t i) {
     if (visited[i] == 2) return true;
     if (visited[i] == 1) return false;
@@ -385,13 +407,35 @@ bool EvaluateSkeleton(const std::vector<SkeletonBone> &bones,
     world[i] = parent * glm::translate(glm::mat4(1), offset + pose.translation) *
         glm::mat4_cast(glm::normalize(pose.rotation)) *
         glm::scale(glm::mat4(1), pose.scale);
-    matrices[i] = world[i] * glm::translate(glm::mat4(1), -bone.bindPosition);
-    positions[i] = glm::vec3(world[i][3]);
     visited[i] = 2;
     return true;
   };
   for (size_t i = 0; i < bones.size(); ++i)
-    if (!visit(i)) { matrices.clear(); positions.clear(); return false; }
+    if (!visit(i)) { world.clear(); return false; }
+  return true;
+}
+
+void BuildSkinMatrices(const std::vector<SkeletonBone> &bones,
+                       const std::vector<glm::mat4> &world,
+                       std::vector<glm::mat4> &matrices,
+                       std::vector<glm::vec3> &positions) {
+  const size_t count = std::min(bones.size(), world.size());
+  matrices.resize(count); positions.resize(count);
+  for (size_t i = 0; i < count; ++i) {
+    matrices[i] = world[i] * glm::translate(glm::mat4(1), -bones[i].bindPosition);
+    positions[i] = glm::vec3(world[i][3]);
+  }
+}
+
+bool EvaluateSkeleton(const std::vector<SkeletonBone> &bones,
+                      const AnimationClip &clip, float time,
+                      std::vector<glm::mat4> &matrices,
+                      std::vector<glm::vec3> &positions) {
+  std::vector<glm::mat4> world;
+  if (!EvaluateSkeletonPose(bones, clip, time, world)) {
+    matrices.clear(); positions.clear(); return false;
+  }
+  BuildSkinMatrices(bones, world, matrices, positions);
   return true;
 }
 

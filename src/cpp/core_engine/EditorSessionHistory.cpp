@@ -256,6 +256,24 @@ void AppendEntitySignature(std::ostringstream &out,
   AppendString(out, entity.animation.controller);
   AppendFloat(out, entity.animation.speed);
   AppendBool(out, entity.animation.loop);
+  AppendBool(out, entity.springBones.enabled);
+  AppendVec3(out, entity.springBones.wind);
+  for (const auto &chain : entity.springBones.chains) {
+    AppendString(out, chain.rootBone);
+    AppendFloat(out, chain.stiffness);
+    AppendFloat(out, chain.drag);
+    AppendFloat(out, chain.gravity);
+    AppendFloat(out, chain.hitRadius);
+    AppendBool(out, chain.useColliders);
+  }
+  out << '|';
+  for (const auto &collider : entity.springBones.colliders) {
+    AppendString(out, collider.bone);
+    AppendVec3(out, collider.offset);
+    AppendVec3(out, collider.tailOffset);
+    AppendFloat(out, collider.radius);
+  }
+  out << '|';
   AppendBool(out, entity.isWorldText);
   AppendString(out, entity.worldText.text);
   AppendFloat(out, entity.worldText.size);
@@ -500,6 +518,10 @@ void WriteEntity(std::ostream &out,
   WriteString(out, 10, "animation_controller", entity.animation.controller);
   WriteFloat(out, 10, "animation_speed", entity.animation.speed);
   WriteBool(out, 10, "animation_loop", entity.animation.loop);
+  WriteBool(out, 10, "spring_bones", entity.springBones.enabled);
+  WriteVec3(out, 10, "spring_wind", entity.springBones.wind);
+  WriteSize(out, 10, "spring_chains", entity.springBones.chains.size());
+  WriteSize(out, 10, "spring_colliders", entity.springBones.colliders.size());
   WriteBool(out, 10, "world_text", entity.isWorldText);
   WriteString(out, 10, "text", entity.worldText.text);
   WriteFloat(out, 10, "text_size", entity.worldText.size);

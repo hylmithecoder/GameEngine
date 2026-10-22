@@ -99,6 +99,7 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     renderer.meshes3d[idx].video = e.video;
     renderer.meshes3d[idx].dialog = e.dialog;
     renderer.meshes3d[idx].animation = e.animation;
+    renderer.meshes3d[idx].springBones = e.springBones;
     // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
     // so hover-to-source lands users on the deserializer.
     renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);

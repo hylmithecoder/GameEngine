@@ -30,7 +30,10 @@ static int g_checks = 0;
 static constexpr int kMediaBytes = 22 + 18;
 static constexpr int kNativeBytes = 8 + 4; // objectId + zero scripts
 static constexpr int kDialogBytes = 4 + 4 + 32 + 2 + 2 + 16;
-static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2; // includes v1.16 controller string
+// v1.17 empty spring bones: enabled, wind, chain count, collider count.
+static constexpr int kSpringBytes = 4 + 12 + 4 + 4;
+// Includes the v1.16 controller string and the v1.17 spring bones after it.
+static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2 + kSpringBytes;
 // v1.15 scene-level NPR block after the background colour.
 static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4;
 
@@ -488,7 +491,7 @@ int main() {
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file);
     bytes[6] = 12; bytes.resize(bytes.size() - kNprBytes);
-    bytes.erase(bytes.end() - 18, bytes.end() - 16); // remove v1.16 controller
+    bytes.erase(bytes.end() - 18 - kSpringBytes, bytes.end() - 16); // remove v1.16 controller + v1.17
     WriteAll(file, bytes);
     IlmeeeScene loaded;
     CHECK(LoadScene(file.string(), loaded));
@@ -547,7 +550,7 @@ int main() {
 
     auto bytes = ReadAll(file);
     bytes[6] = 14; bytes.resize(bytes.size() - kNprBytes);
-    bytes.erase(bytes.end() - 18, bytes.end() - 16); // remove v1.16 controller
+    bytes.erase(bytes.end() - 18 - kSpringBytes, bytes.end() - 16); // remove v1.16 controller + v1.17
     WriteAll(file, bytes);
     CHECK(LoadScene(file.string(), in));
     CHECK(!in.npr.enabled && in.npr.bands == NprSettings().bands);
@@ -558,10 +561,40 @@ int main() {
     IlmeeeScene s; s.entities = {Entity("Legacy15", -1)}; s.npr.enabled = true;
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file); bytes[6] = 15;
-    bytes.erase(bytes.end() - kNprBytes - 18, bytes.end() - kNprBytes - 16);
+    bytes.erase(bytes.end() - kNprBytes - 18 - kSpringBytes, bytes.end() - kNprBytes - 16);
     WriteAll(file, bytes);
     IlmeeeScene loaded; CHECK(LoadScene(file.string(), loaded));
     CHECK(loaded.entities[0].animation.controller.empty() && loaded.npr.enabled);
+  }
+  // v1.17 spring bones round-trip; a v1.16 file loads them disabled.
+  {
+    IlmeeeScene s; s.entities = {Entity("Hair", -1)};
+    auto &spring = s.entities[0].springBones;
+    spring.enabled = true; spring.wind = {0.5f, 0, 0};
+    SpringBoneChain chain; chain.rootBone = "前髪1"; chain.stiffness = 4;
+    chain.drag = 0.2f; chain.gravity = 2; chain.hitRadius = 0.1f; chain.useColliders = false;
+    spring.chains = {chain};
+    SpringCollider collider; collider.bone = "頭"; collider.offset = {0, 1, 0};
+    collider.tailOffset = {0, 2, 0}; collider.radius = 0.7f;
+    spring.colliders = {collider};
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in; CHECK(LoadScene(file.string(), in));
+    const auto &got = in.entities[0].springBones;
+    CHECK(got.enabled && got.wind == glm::vec3(0.5f, 0, 0));
+    CHECK(got.chains.size() == 1 && got.chains[0].rootBone == "前髪1");
+    CHECK(got.chains[0].stiffness == 4 && got.chains[0].drag == 0.2f);
+    CHECK(got.chains[0].gravity == 2 && got.chains[0].hitRadius == 0.1f);
+    CHECK(!got.chains[0].useColliders);
+    CHECK(got.colliders.size() == 1 && got.colliders[0].bone == "頭");
+    CHECK(got.colliders[0].tailOffset == glm::vec3(0, 2, 0) && got.colliders[0].radius == 0.7f);
+
+    s.entities[0].springBones = {};
+    CHECK(SaveScene(file.string(), s));
+    auto bytes = ReadAll(file); bytes[6] = 16;
+    bytes.erase(bytes.end() - kNprBytes - 16 - kSpringBytes, bytes.end() - kNprBytes - 16);
+    WriteAll(file, bytes);
+    IlmeeeScene legacy; CHECK(LoadScene(file.string(), legacy));
+    CHECK(!legacy.entities[0].springBones.enabled && legacy.entities[0].springBones.chains.empty());
   }
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

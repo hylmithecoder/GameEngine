@@ -221,10 +221,18 @@ target_link_libraries(TestPMXLoader PRIVATE glm::glm)
 add_executable(TestDeviceMonitor test/TestDeviceMonitor.cpp)
 
 add_executable(TestSkeletalAnimation test/TestSkeletalAnimation.cpp
-    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/AnimationController.cpp)
+    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/AnimationController.cpp
+    src/cpp/core_engine/SpringBone.cpp)
 target_include_directories(TestSkeletalAnimation PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm PkgConfig::SDL3)
 target_compile_definitions(TestSkeletalAnimation PRIVATE ILMEEE_TEST_MOTION_DIR="${CMAKE_SOURCE_DIR}/assets/motions")
+
+add_executable(TestAnimationTooling test/TestAnimationTooling.cpp
+    src/cpp/core_engine/AnimationAuthoring.cpp src/cpp/core_engine/AnimationTooling.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/SpringBone.cpp)
+target_include_directories(TestAnimationTooling PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(TestAnimationTooling PRIVATE glm::glm PkgConfig::SDL3 ilmeee_net ixwebsocket)
+target_compile_definitions(TestAnimationTooling PRIVATE ILMEEE_TEST_MOTION_DIR="${CMAKE_SOURCE_DIR}/assets/motions")
 
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
@@ -291,6 +299,7 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/WorldTextRuntime.cpp
     src/cpp/core_engine/SkeletalAnimation.cpp
     src/cpp/core_engine/AnimationRuntime.cpp
+    src/cpp/core_engine/SpringBone.cpp
     src/cpp/core_engine/AnimationController.cpp
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
     src/cpp/core_engine/ScriptWorkspace.cpp

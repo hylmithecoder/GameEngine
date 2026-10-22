@@ -2015,7 +2015,8 @@ bool SceneRenderer::LoadPMXMesh(const std::string &path) {
     std::string name = !bone.nameJP.empty() ? bone.nameJP : bone.nameEN;
     if (name.empty()) name = "Bone " + std::to_string(i);
     mesh.skeleton.push_back({name, bone.parentIndex,
-        glm::vec3(bone.position.x, bone.position.y, -bone.position.z)});
+        glm::vec3(bone.position.x, bone.position.y, -bone.position.z),
+        bone.nameEN != name ? bone.nameEN : std::string()});
     mesh.posedBones.push_back(mesh.skeleton.back().bindPosition);
   }
 
@@ -3414,6 +3415,7 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     entity.video = mesh.video;
     entity.dialog = mesh.dialog;
     entity.animation = mesh.animation;
+    entity.springBones = mesh.springBones;
     entity.isWorldText = mesh.isWorldText;
     entity.worldText = mesh.worldText;
     entity.isAudioEmitter = mesh.isAudioEmitter;
@@ -3561,6 +3563,8 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.video = entity.video;
     mesh.dialog = entity.dialog;
     mesh.animation = entity.animation;
+    mesh.springBones = entity.springBones;
+    mesh.springRuntime.Reset();
     mesh.locomotion = {};
     mesh.movable = entity.movable;
     mesh.objectId = entity.objectId ? entity.objectId : ilmeee::NewObjectId();
