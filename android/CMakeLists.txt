@@ -13,6 +13,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(ENGINE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# The exporter writes the editor's current scene format, even when the input
+# scene is older. Publish the reader version with each successfully built ABI
+# so an old Android player cannot silently be packaged with a newer scene.
+set(SCENE_FORMAT_HEADER "${ENGINE_ROOT}/include/core_engine/IlmeeeScene.hpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SCENE_FORMAT_HEADER}")
+file(STRINGS "${SCENE_FORMAT_HEADER}" SCENE_FORMAT_MINOR_DECL
+    REGEX "^constexpr uint16_t kSceneFormatMinor = [0-9]+;")
+if(NOT SCENE_FORMAT_MINOR_DECL)
+  message(FATAL_ERROR "Cannot determine the player's scene format version")
+endif()
+string(REGEX MATCH "= ([0-9]+)" SCENE_FORMAT_MATCH "${SCENE_FORMAT_MINOR_DECL}")
+set(SCENE_FORMAT_MINOR "${CMAKE_MATCH_1}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/player-runtime.json" CONTENT
+  "{\"schema\":1,\"abi\":\"${ANDROID_ABI}\",\"sceneFormat\":{\"major\":1,\"minor\":${SCENE_FORMAT_MINOR}}}\n")
 set(SDL3_SOURCE_DIR "" CACHE PATH "SDL3 source tree")
 set(GLM_INCLUDE_DIR "" CACHE PATH "Folder containing glm/glm.hpp")
 set(STB_INCLUDE_DIR "" CACHE PATH "Folder containing stb/stb_image.h")

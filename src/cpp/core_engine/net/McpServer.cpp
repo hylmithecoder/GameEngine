@@ -306,6 +306,23 @@ json ToolList() {
   const auto add = [&](const char *name, const char *description, json schema) {
     tools.push_back({{"name", name}, {"description", description}, {"inputSchema", std::move(schema)}});
   };
+  const json componentType = {{"type", "string"},
+                              {"enum", {"movement", "physics", "audio_source", "video_player",
+                                        "dialog", "animation", "spring_bones", "script"}}};
+  add("list_components", "List the components attached to a scene object with their settings (script components include typed exposed fields), plus what can be added: addable types, registered movement scripts and project C++ scripts with compile status.",
+      ObjectSchema({{"index", index}}, {"index"}));
+  add("add_component", "Attach a component to a scene object in the stopped editor, or update it if already attached (only given properties change); records Undo, save_scene persists. properties per type: "
+      "movement {movable, script (movement script name, default \"WASD XZ\"), speed, camera (camera object index, -1 = Game view), cameraStyle (none|third_person|first_person|side_scroller|top_down), distance, height, moveJoystick, lookJoystick (UI joystick names)}; "
+      "physics {useGravity, isKinematic, mass, drag, gravityY}; "
+      "audio_source {clip, volume, loop, playOnStart, spatial, minDistance, maxDistance}; "
+      "video_player {clip, loop, playOnStart, volume, unlit, surface}; "
+      "script {source (.cpp path or class name, required), enabled, values {field: value}; GameObject fields take an object index, a UI element name or null}; "
+      "dialog/animation/spring_bones take the same fields as set_dialog/set_animation/set_spring_bones (animation needs clip or controller; spring_bones defaults to auto setup).",
+      ObjectSchema({{"index", index}, {"type", componentType},
+                    {"properties", {{"type", "object"}}}}, {"index", "type"}));
+  add("remove_component", "Remove a component from a scene object in the stopped editor; records Undo. For type script give script = source path or class name.",
+      ObjectSchema({{"index", index}, {"type", componentType}, {"script", {{"type", "string"}}}},
+                   {"index", "type"}));
   add("get_skeleton", "Inspect a skinned scene object's bones, humanoid roles, groups and available generated motion types. Use @role in authoring. Bind positions are model-space; keys use local Euler degrees. Paginated bones; roles/groups cover the full rig.",
       ObjectSchema({{"index", index}, {"group", {{"type", "string"}}}, {"contains", {{"type", "string"}}},
                     {"offset", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100000}}},

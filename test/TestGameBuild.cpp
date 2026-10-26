@@ -33,6 +33,13 @@ static void Write(const fs::path &p, const std::string &content) {
   std::ofstream(p) << content;
 }
 
+static void RuntimeMetadata(const fs::path &player, const std::string &abi,
+                            int minor = kSceneFormatMinor) {
+  Write(player / ("player-runtime-" + abi + ".json"),
+        nlohmann::json{{"schema", 1}, {"abi", abi},
+                       {"sceneFormat", {{"major", 1}, {"minor", minor}}}}.dump());
+}
+
 static SceneEntity Model(const std::string &name, const std::string &path) {
   SceneEntity e;
   e.name = name;
@@ -272,6 +279,7 @@ int main() {
     Write(player / "jniLibs/arm64-v8a/libmain.so", "elf");
     Write(player / "jniLibs/arm64-v8a/libSDL3.so", "elf");
     Write(player / "sdl-java/org/libsdl/app/SDLActivity.java", "class");
+    RuntimeMetadata(player, "arm64-v8a");
     const fs::path tmpl = tmp / "android-template";
     Write(tmpl / "app/build.gradle",
           "id=@APPLICATION_ID@ v=@VERSION_NAME@ c=@VERSION_CODE@ a='@ABIS@'");
@@ -316,6 +324,45 @@ int main() {
 
     // Rebuilding replaces the previous Android build.
     CHECK(BuildGame(a, logger).ok);
+
+    // Reject stale/missing/malformed reader metadata before staging or
+    // replacing a good build. This applies even without native scripts.
+    const auto metadata = player / "player-runtime-arm64-v8a.json";
+    Write(aout / "keep-on-failure.txt", "previous working APK");
+    const auto rejected = [&] {
+      const auto failed = BuildGame(a, logger);
+      CHECK(!failed.ok && failed.error.find("build-player.sh") != std::string::npos);
+      CHECK(fs::exists(aout / "keep-on-failure.txt"));
+      CHECK(!fs::exists(aout.string() + ".building"));
+      return failed.error;
+    };
+    fs::remove(metadata);
+    CHECK(rejected().find("metadata missing") != std::string::npos);
+    RuntimeMetadata(player, "arm64-v8a", kSceneFormatMinor - 1);
+    CHECK(rejected().find("incompatible") != std::string::npos);
+    for (const auto &invalid : {
+             "not json", "[]", "{}",
+             "{\"schema\":2,\"abi\":\"arm64-v8a\",\"sceneFormat\":{\"major\":1,\"minor\":65535}}",
+             "{\"schema\":1,\"abi\":\"x86_64\",\"sceneFormat\":{\"major\":1,\"minor\":65535}}",
+             "{\"schema\":1,\"abi\":\"arm64-v8a\",\"sceneFormat\":{\"major\":1,\"minor\":\"17\"}}",
+             "{\"schema\":1,\"abi\":\"arm64-v8a\",\"sceneFormat\":{\"major\":2,\"minor\":65535}}"}) {
+      Write(metadata, invalid);
+      rejected();
+    }
+    // A newer backwards-compatible reader can read this export.
+    RuntimeMetadata(player, "arm64-v8a", kSceneFormatMinor + 1);
+    CHECK(BuildGame(a, logger).ok);
+    CHECK(!fs::exists(aout / "keep-on-failure.txt"));
+    RuntimeMetadata(player, "arm64-v8a");
+    // Every packaged ABI must be compatible, not just the first one.
+    Write(player / "jniLibs/x86_64/libmain.so", "elf");
+    Write(player / "jniLibs/x86_64/libSDL3.so", "elf");
+    RuntimeMetadata(player, "x86_64", kSceneFormatMinor - 1);
+    Write(aout / "keep-on-failure.txt", "previous working APK");
+    CHECK(rejected().find("x86_64") != std::string::npos);
+    RuntimeMetadata(player, "x86_64");
+    CHECK(BuildGame(a, logger).ok);
+    CHECK(fs::exists(aout / "app/src/main/jniLibs/x86_64/libmain.so"));
 
     // Phone video: an unreadable clip ships unchanged...
     setenv("HOME", (tmp / "home").c_str(), 1); // isolate ~/.ilmeeeengine
@@ -428,6 +475,7 @@ int main() {
     Write(androidPlayer / "jniLibs/arm64-v8a/libmain.so", "elf");
     Write(androidPlayer / "jniLibs/arm64-v8a/libSDL3.so", "elf");
     Write(androidPlayer / "sdl-java/org/libsdl/app/SDLActivity.java", "class");
+    RuntimeMetadata(androidPlayer, "arm64-v8a");
     const auto androidTemplate = tmp / "android-script-template";
     Write(androidTemplate / "app/build.gradle", "@ABIS@");
     Write(androidTemplate / "app/src/main/res/values/strings.xml", "@APP_NAME@");

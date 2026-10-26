@@ -261,7 +261,12 @@ including the Android native player and its matching script SDK.
    nix-shell shell.nix --run scripts/android/build-player.sh
    ```
    This builds IlmeeePlayer as `build-android/jniLibs/arm64-v8a/libmain.so`
-   (plus SDL3, same version as the desktop one).
+   (plus SDL3, same version as the desktop one). Re-run this after engine
+   scene-format changes (including animation controllers and spring bones).
+   The build also exports `player-runtime-<abi>.json`; Android export checks
+   every ABI against the scene format before replacing a previous build.
+   Missing or outdated metadata means the native player needs rebuilding,
+   not that the project's scene should be deleted or downgraded.
 2. In the editor: **Build → Target: Android (APK)**, then **Build Game**.
    The APK lands in `<project>/build/android/<Game>/<Game>.apk`
    (the first build downloads the Android Gradle plugin).

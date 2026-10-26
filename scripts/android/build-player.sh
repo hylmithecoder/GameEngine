@@ -15,6 +15,7 @@
 #
 # Output: build-android/jniLibs/<abi>/{libmain.so,libSDL3.so}
 #         build-android/sdl-java/   (SDL3's Java glue for the APK)
+#         build-android/player-runtime-<abi>.json (scene compatibility)
 set -euo pipefail
 
 ENGINE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -98,6 +99,8 @@ cp "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$TRIPLE/l
 mkdir -p "$OUT/script-sdk/$ABI"
 cp -r "$BUILD/script-sdk/." "$OUT/script-sdk/$ABI/"
 cp "$BUILD/script-toolchain.json" "$OUT/script-toolchain-$ABI.json"
+# Only publish compatibility metadata after the matching build succeeded.
+cp "$BUILD/player-runtime.json" "$OUT/player-runtime-$ABI.json"
 
 rm -rf "$OUT/sdl-java"
 mkdir -p "$OUT/sdl-java"

@@ -3,6 +3,7 @@
 #include "core_engine/AnimationController.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -99,6 +100,109 @@ const char *TriggerName(ilmeee::DialogTrigger trigger) {
   case ilmeee::DialogTrigger::OnStart: return "on_start";
   case ilmeee::DialogTrigger::ScriptOnly: return "script_only";
   default: return "interact";
+  }
+}
+
+// Component types addressable by list/add/remove_component. Light, camera,
+// text_3d and audio emitters are object kinds, not components.
+constexpr const char *kComponentTypes[] = {
+    "movement", "physics", "audio_source", "video_player",
+    "dialog",   "animation", "spring_bones", "script"};
+
+constexpr const char *kCameraStyles[] = {"none", "third_person", "first_person",
+                                         "side_scroller", "top_down"};
+
+bool HasAnimation(const SceneRenderer::Mesh3D &mesh) {
+  return mesh.animation.enabled || !mesh.animation.clip.empty() ||
+         !mesh.animation.controller.empty();
+}
+
+bool HasMovement(const SceneRenderer::Mesh3D &mesh) {
+  return !mesh.isLight && !mesh.isCamera &&
+         (mesh.movable || !mesh.movementScript.empty());
+}
+
+// Compact "which components are attached" list for get_object.
+json AttachedComponents(const SceneRenderer::Mesh3D &mesh) {
+  json out = json::array();
+  if (HasMovement(mesh)) out.push_back("movement");
+  if (mesh.hasPhysics) out.push_back("physics");
+  if (mesh.audio.enabled) out.push_back("audio_source");
+  if (mesh.video.enabled) out.push_back("video_player");
+  if (mesh.dialog.enabled) out.push_back("dialog");
+  if (HasAnimation(mesh)) out.push_back("animation");
+  if (mesh.springBones.enabled || !mesh.springBones.chains.empty())
+    out.push_back("spring_bones");
+  for (const auto &s : mesh.scripts) out.push_back("script:" + s.className);
+  return out;
+}
+
+// Rejects keys outside `allowed` so typos surface instead of being ignored.
+std::string UnknownKey(const json &props,
+                       std::initializer_list<const char *> allowed) {
+  for (const auto &[key, value] : props.items())
+    if (std::none_of(allowed.begin(), allowed.end(),
+                     [&](const char *k) { return key == k; }))
+      return key;
+  return {};
+}
+
+const char *ScriptTypeName(ilmeee::ScriptValueType type) {
+  switch (type) {
+  case ilmeee::ScriptValueType::Float: return "float";
+  case ilmeee::ScriptValueType::Bool: return "bool";
+  case ilmeee::ScriptValueType::Object: return "GameObject";
+  case ilmeee::ScriptValueType::Vec3: return "Vec3";
+  case ilmeee::ScriptValueType::String: return "string";
+  default: return "List";
+  }
+}
+
+// GameObject fields: scene object index, UI element name, or null.
+using ObjectNamer = std::function<json(uint64_t)>;
+using ObjectResolver = std::function<bool(const json &, uint64_t &)>;
+
+json ScalarJson(ilmeee::ScriptValueType type, const ilmeee::ScriptValue &v,
+                const ObjectNamer &object) {
+  using T = ilmeee::ScriptValueType;
+  switch (type) {
+  case T::Float: return v.number;
+  case T::Bool: return v.boolean;
+  case T::Vec3: return json::array({v.vec3[0], v.vec3[1], v.vec3[2]});
+  case T::String: return v.string;
+  case T::Object: return object(v.object);
+  default: return nullptr;
+  }
+}
+
+std::string ScalarFromJson(ilmeee::ScriptValueType type, const json &in,
+                           ilmeee::ScriptValue &v, const ObjectResolver &object) {
+  using T = ilmeee::ScriptValueType;
+  switch (type) {
+  case T::Float:
+    if (!in.is_number() || !std::isfinite(in.get<double>()))
+      return "expects a number";
+    v.number = in.get<float>();
+    return {};
+  case T::Bool:
+    if (!in.is_boolean()) return "expects a boolean";
+    v.boolean = in.get<bool>();
+    return {};
+  case T::Vec3: {
+    glm::vec3 vec;
+    if (!Vec3(json{{"v", in}}, "v", vec)) return "expects [x, y, z]";
+    v.vec3[0] = vec.x, v.vec3[1] = vec.y, v.vec3[2] = vec.z;
+    return {};
+  }
+  case T::String:
+    if (!in.is_string()) return "expects a string";
+    v.string = in.get<std::string>();
+    return {};
+  case T::Object:
+    if (!object(in, v.object))
+      return "expects a scene object index, a UI element name, or null";
+    return {};
+  default: return "has an unsupported type";
   }
 }
 } // namespace
@@ -280,7 +384,8 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
                             {"speed", sceneRenderer->meshes3d[i].animation.speed},
                             {"time", sceneRenderer->meshes3d[i].animationTime},
                             {"error", sceneRenderer->meshes3d[i].animationError}}},
-            {"springBones", sceneRenderer->meshes3d[i].springBones.enabled}};
+            {"springBones", sceneRenderer->meshes3d[i].springBones.enabled},
+            {"components", AttachedComponents(sceneRenderer->meshes3d[i])}};
   };
   const auto springJson = [&](size_t i) {
     const auto &mesh = sceneRenderer->meshes3d[i];
@@ -299,6 +404,9 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
                 {"simulatedBones", ilmeee::CountSpringJoints(mesh.skeleton, spring)},
                 {"chains", std::move(chains)}, {"colliders", std::move(colliders)}};
   };
+  if (name == "list_components" || name == "add_component" ||
+      name == "remove_component")
+    return HandleMcpComponentTool(name, args);
   if (name == "list_scene_objects") {
     json objects = json::array();
     for (size_t i = 0; i < count; ++i)
@@ -611,4 +719,440 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"path", projectHandler.projectPath + "/scenes/main.ilmeeescene"}};
   }
   return Error("Unknown tool");
+}
+
+ilmeee::net::json MainWindow::McpComponentList(size_t i) {
+  const auto &mesh = sceneRenderer->meshes3d[i];
+  const ObjectNamer objectName = [&](uint64_t id) -> json {
+    if (!id) return nullptr;
+    for (size_t m = 0; m < sceneRenderer->meshes3d.size(); ++m)
+      if (sceneRenderer->meshes3d[m].objectId == id)
+        return {{"index", m}, {"name", sceneRenderer->meshes3d[m].displayName}};
+    if (const auto *e = ilmeee::FindUiElement(gameUi, id))
+      return {{"ui", e->id}};
+    return "(missing)";
+  };
+  json components = json::array();
+  if (HasMovement(mesh)) {
+    const auto &rig = mesh.movementRig;
+    components.push_back(
+        {{"type", "movement"}, {"movable", mesh.movable},
+         {"script", mesh.movementScript}, {"speed", mesh.movementSpeed},
+         {"camera", rig.camera}, {"cameraStyle", kCameraStyles[(int)rig.style]},
+         {"distance", rig.distance}, {"height", rig.height},
+         {"moveJoystick", rig.moveJoystick}, {"lookJoystick", rig.lookJoystick}});
+  }
+  if (mesh.hasPhysics)
+    components.push_back({{"type", "physics"}, {"useGravity", mesh.useGravity},
+                          {"isKinematic", mesh.isKinematic}, {"mass", mesh.mass},
+                          {"drag", mesh.drag}, {"gravityY", mesh.gravityY}});
+  if (mesh.audio.enabled) {
+    const auto &a = mesh.audio;
+    components.push_back({{"type", "audio_source"}, {"clip", a.clip},
+                          {"volume", a.volume}, {"loop", a.loop},
+                          {"playOnStart", a.playOnStart}, {"spatial", a.spatial},
+                          {"minDistance", a.minDistance},
+                          {"maxDistance", a.maxDistance},
+                          {"removable", !mesh.isAudioEmitter}});
+  }
+  if (mesh.video.enabled) {
+    const auto &v = mesh.video;
+    components.push_back({{"type", "video_player"}, {"clip", v.clip},
+                          {"loop", v.loop}, {"playOnStart", v.playOnStart},
+                          {"volume", v.volume}, {"unlit", v.unlit},
+                          {"surface", v.surface}});
+  }
+  if (mesh.dialog.enabled)
+    components.push_back({{"type", "dialog"},
+                          {"trigger", TriggerName(mesh.dialog.trigger)},
+                          {"note", "Details: get_dialog"}});
+  if (HasAnimation(mesh))
+    components.push_back({{"type", "animation"},
+                          {"enabled", mesh.animation.enabled},
+                          {"clip", mesh.animation.clip},
+                          {"controller", mesh.animation.controller},
+                          {"loop", mesh.animation.loop},
+                          {"speed", mesh.animation.speed},
+                          {"error", mesh.animationError}});
+  if (mesh.springBones.enabled || !mesh.springBones.chains.empty())
+    components.push_back({{"type", "spring_bones"},
+                          {"enabled", mesh.springBones.enabled},
+                          {"chains", mesh.springBones.chains.size()},
+                          {"colliders", mesh.springBones.colliders.size()},
+                          {"note", "Details: get_spring_bones"}});
+  for (const auto &binding : mesh.scripts) {
+    json fields = json::object();
+    for (const auto &value : nativeScripts.Properties(binding)) {
+      json field = {{"type", ScriptTypeName(value.type)}};
+      if (value.type == ilmeee::ScriptValueType::List) {
+        field["elementType"] = ScriptTypeName(value.elementType);
+        json items = json::array();
+        for (const auto &item : value.items)
+          items.push_back(ScalarJson(value.elementType, item, objectName));
+        field["value"] = std::move(items);
+      } else {
+        field["value"] = ScalarJson(value.type, value, objectName);
+      }
+      fields[value.name] = std::move(field);
+    }
+    components.push_back({{"type", "script"}, {"source", binding.source},
+                          {"className", binding.className},
+                          {"enabled", binding.enabled},
+                          {"ready", nativeScripts.Ready(binding.source)},
+                          {"fields", std::move(fields)}});
+  }
+
+  // What add_component can attach here.
+  const bool skinned = !mesh.skeleton.empty();
+  json addable = json::array();
+  for (const char *type : kComponentTypes) {
+    const std::string t = type;
+    if (t == "movement" && (mesh.isLight || mesh.isCamera)) continue;
+    if ((t == "animation" || t == "spring_bones") && !skinned) continue;
+    addable.push_back(t);
+  }
+  json scripts = json::array();
+  for (const auto &source : nativeScripts.Sources())
+    scripts.push_back({{"source", source},
+                       {"className", std::filesystem::path(source).stem().string()},
+                       {"ready", nativeScripts.Ready(source)},
+                       {"attached", std::any_of(mesh.scripts.begin(), mesh.scripts.end(),
+                                                [&](const auto &b) { return b.source == source; })}});
+  return {{"index", i},
+          {"name", mesh.displayName},
+          {"components", std::move(components)},
+          {"addable", std::move(addable)},
+          {"movementScripts", ilmeee::MovementScriptNames()},
+          {"projectScripts", std::move(scripts)},
+          {"compiling", nativeScripts.IsCompiling()}};
+}
+
+ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
+                                                     const ilmeee::net::json &args) {
+  const size_t count = sceneRenderer->GetMesh3DCount();
+  size_t i;
+  if (!Index(args, "index", count, i))
+    return Error("Invalid object index");
+  LoadGameUiForProject();
+  if (name == "list_components")
+    return McpComponentList(i);
+  if (SceneStructureLocked())
+    return Error("Stop play mode before editing components");
+
+  std::string type;
+  if (!Optional(args, "type", type) || type.empty())
+    return Error("type is required");
+  if (std::none_of(std::begin(kComponentTypes), std::end(kComponentTypes),
+                   [&](const char *t) { return type == t; }))
+    return Error("Unknown component type: " + type);
+  auto &mesh = sceneRenderer->meshes3d[i];
+
+  // Script components are addressed by project-relative source or class name.
+  const auto matchesScript = [](const ilmeee::NativeScriptBinding &b,
+                                const std::string &key) {
+    return b.source == key || b.className == key;
+  };
+  const auto saved = [&]() {
+    json result = McpComponentList(i);
+    result["saved"] = false;
+    result["note"] = "Call save_scene to keep the change";
+    return result;
+  };
+
+  if (name == "remove_component") {
+    std::string script;
+    if (!Optional(args, "script", script))
+      return Error("script must be a string");
+    if (type == "movement") {
+      if (!HasMovement(mesh)) return Error("No movement component");
+      mesh.movable = false;
+      mesh.movementScript.clear();
+      mesh.movementSpeed = 3.0f;
+      mesh.movementRig = {};
+    } else if (type == "physics") {
+      if (!mesh.hasPhysics) return Error("No physics component");
+      mesh.hasPhysics = false;
+      mesh.velocity = glm::vec3(0.0f);
+    } else if (type == "audio_source") {
+      if (!mesh.audio.enabled) return Error("No audio_source component");
+      if (mesh.isAudioEmitter)
+        return Error("This is an Audio Source object; delete the object instead");
+      mesh.audio.enabled = false;
+    } else if (type == "video_player") {
+      if (!mesh.video.enabled) return Error("No video_player component");
+      mesh.video.enabled = false;
+    } else if (type == "dialog") {
+      if (!mesh.dialog.enabled) return Error("No dialog component");
+      mesh.dialog = {};
+    } else if (type == "animation") {
+      if (!HasAnimation(mesh)) return Error("No animation component");
+      mesh.animation = {};
+      mesh.loadedAnimationPath.clear();
+      mesh.animationError.clear();
+      mesh.animationTime = 0;
+      mesh.locomotion = {};
+    } else if (type == "spring_bones") {
+      if (!mesh.springBones.enabled && mesh.springBones.chains.empty())
+        return Error("No spring_bones component");
+      mesh.springBones = {};
+      mesh.springRuntime.Reset();
+    } else { // script
+      if (script.empty())
+        return Error("script (source path or class name) is required");
+      auto it = std::find_if(mesh.scripts.begin(), mesh.scripts.end(),
+                             [&](const auto &b) { return matchesScript(b, script); });
+      if (it == mesh.scripts.end())
+        return Error("No script " + script + " on this object");
+      mesh.scripts.erase(it);
+    }
+    RecordEditorHistory();
+    return saved();
+  }
+
+  // add_component: attach, or update an attached component (merge).
+  json props = json::object();
+  if (auto it = args.find("properties"); it != args.end()) {
+    if (!it->is_object()) return Error("properties must be an object");
+    props = *it;
+  }
+  const auto badKey = [&](std::initializer_list<const char *> allowed) -> json {
+    const std::string key = UnknownKey(props, allowed);
+    if (key.empty()) return nullptr;
+    std::string list;
+    for (const char *k : allowed) list += (list.empty() ? "" : ", ") + std::string(k);
+    return Error("Unknown " + type + " property '" + key + "' (allowed: " + list + ")");
+  };
+
+  // These already have dedicated tools; forward so validation stays in one place.
+  if (type == "dialog" || type == "animation" || type == "spring_bones") {
+    json forwarded = props;
+    forwarded.erase("index");
+    forwarded["index"] = i;
+    if (type == "dialog") {
+      if (!forwarded.contains("enabled")) forwarded["enabled"] = true;
+      return HandleMcpTool("set_dialog", forwarded);
+    }
+    if (type == "spring_bones") {
+      if (!forwarded.contains("auto") && !forwarded.contains("chains") &&
+          mesh.springBones.chains.empty())
+        forwarded["auto"] = true;
+      if (!forwarded.contains("enabled")) forwarded["enabled"] = true;
+      return HandleMcpTool("set_spring_bones", forwarded);
+    }
+    if (mesh.skeleton.empty())
+      return Error("Animation needs a skinned (PMX) model with bones");
+    if (!HasAnimation(mesh) && !forwarded.contains("clip") &&
+        !forwarded.contains("controller"))
+      return Error("animation needs properties.clip (.ilmeeeanim/.vmd) or "
+                   "properties.controller (.ilmeeecontroller); create one with "
+                   "create_animation or generate_animation");
+    return HandleMcpTool("set_animation", forwarded);
+  }
+
+  if (type == "movement") {
+    if (mesh.isLight || mesh.isCamera)
+      return Error("Lights and cameras cannot take a movement component");
+    if (json e = badKey({"movable", "script", "speed", "camera", "cameraStyle",
+                         "distance", "height", "moveJoystick", "lookJoystick"});
+        !e.is_null())
+      return e;
+    bool movable = true;
+    std::string script = mesh.movementScript.empty() ? "WASD XZ" : mesh.movementScript;
+    float speed = mesh.movementSpeed;
+    ilmeee::MovementRig rig = mesh.movementRig;
+    std::string style = kCameraStyles[(int)rig.style];
+    if (!Optional(props, "movable", movable) || !Optional(props, "script", script) ||
+        !Optional(props, "speed", speed) || !Optional(props, "cameraStyle", style) ||
+        !Optional(props, "distance", rig.distance) ||
+        !Optional(props, "height", rig.height) ||
+        !Optional(props, "moveJoystick", rig.moveJoystick) ||
+        !Optional(props, "lookJoystick", rig.lookJoystick))
+      return Error("Invalid movement property type");
+    const auto names = ilmeee::MovementScriptNames();
+    if (std::find(names.begin(), names.end(), script) == names.end())
+      return Error("Unknown movement script '" + script + "'; see movementScripts in list_components");
+    if (speed < 0 || speed > 100) return Error("speed must be 0..100");
+    if (rig.distance < 0 || rig.distance > 100 || rig.height < -10 || rig.height > 50)
+      return Error("distance must be 0..100 and height -10..50");
+    if (props.contains("camera")) {
+      const json &c = props["camera"];
+      if (c.is_number_integer() && c.get<std::int64_t>() == -1) {
+        rig.camera = -1;
+      } else {
+        size_t cam;
+        if (!Index(props, "camera", count, cam) || !sceneRenderer->IsMesh3DCamera(cam))
+          return Error("camera must be -1 (Game view) or the index of a camera object");
+        rig.camera = static_cast<int>(cam);
+      }
+    }
+    const auto styleIt = std::find_if(std::begin(kCameraStyles), std::end(kCameraStyles),
+                                      [&](const char *s) { return style == s; });
+    if (styleIt == std::end(kCameraStyles))
+      return Error("cameraStyle must be none, third_person, first_person, side_scroller or top_down");
+    rig.style = static_cast<ilmeee::CameraStyle>(styleIt - std::begin(kCameraStyles));
+    // Same pairing as the Inspector's POV Style combo.
+    if (props.contains("cameraStyle") && !props.contains("script")) {
+      if (rig.style == ilmeee::CameraStyle::SideScroller)
+        script = "Platformer";
+      else if (rig.style != ilmeee::CameraStyle::None && script == "WASD XZ")
+        script = "Camera Relative";
+    }
+    for (const std::string *joystick : {&rig.moveJoystick, &rig.lookJoystick})
+      if (!joystick->empty() &&
+          std::none_of(gameUi.elements.begin(), gameUi.elements.end(), [&](const auto &e) {
+            return e.kind == ilmeee::UiKind::Joystick && e.id == *joystick;
+          }))
+        return Error("No UI joystick named " + *joystick);
+    mesh.movable = movable;
+    mesh.movementScript = script;
+    mesh.movementSpeed = speed;
+    mesh.movementRig = rig;
+  } else if (type == "physics") {
+    if (json e = badKey({"useGravity", "isKinematic", "mass", "drag", "gravityY"});
+        !e.is_null())
+      return e;
+    bool gravity = mesh.useGravity, kinematic = mesh.isKinematic;
+    float mass = mesh.mass, drag = mesh.drag, gravityY = mesh.gravityY;
+    if (!Optional(props, "useGravity", gravity) ||
+        !Optional(props, "isKinematic", kinematic) || !Optional(props, "mass", mass) ||
+        !Optional(props, "drag", drag) || !Optional(props, "gravityY", gravityY))
+      return Error("Invalid physics property type");
+    if (mass <= 0 || mass > 100000 || drag < 0 || drag > 1000 || std::abs(gravityY) > 1000)
+      return Error("mass must be > 0, drag >= 0, |gravityY| <= 1000");
+    mesh.hasPhysics = true;
+    mesh.useGravity = gravity;
+    mesh.isKinematic = kinematic;
+    mesh.mass = mass;
+    mesh.drag = drag;
+    mesh.gravityY = gravityY;
+  } else if (type == "audio_source") {
+    if (json e = badKey({"clip", "volume", "loop", "playOnStart", "spatial",
+                         "minDistance", "maxDistance"});
+        !e.is_null())
+      return e;
+    ilmeee::AudioSourceComponent a = mesh.audio;
+    if (!Optional(props, "clip", a.clip) || !Optional(props, "volume", a.volume) ||
+        !Optional(props, "loop", a.loop) || !Optional(props, "playOnStart", a.playOnStart) ||
+        !Optional(props, "spatial", a.spatial) ||
+        !Optional(props, "minDistance", a.minDistance) ||
+        !Optional(props, "maxDistance", a.maxDistance))
+      return Error("Invalid audio_source property type");
+    if (!a.clip.empty() && !ilmeee::IsAudioClipPath(a.clip))
+      return Error("clip must be .wav/.ogg/.mp3/.flac/.m4a/.aac/.opus");
+    if (a.volume < 0 || a.volume > 2 || a.minDistance < 0 || a.maxDistance <= a.minDistance ||
+        a.maxDistance > 1000)
+      return Error("volume must be 0..2 and 0 <= minDistance < maxDistance <= 1000");
+    if (std::filesystem::path(a.clip).is_absolute())
+      a.clip = ProjectMediaPath(projectHandler.projectPath, a.clip);
+    a.enabled = true;
+    mesh.audio = std::move(a);
+  } else if (type == "video_player") {
+    if (json e = badKey({"clip", "loop", "playOnStart", "volume", "unlit", "surface"});
+        !e.is_null())
+      return e;
+    ilmeee::VideoPlayerComponent v = mesh.video;
+    if (!Optional(props, "clip", v.clip) || !Optional(props, "loop", v.loop) ||
+        !Optional(props, "playOnStart", v.playOnStart) ||
+        !Optional(props, "volume", v.volume) || !Optional(props, "unlit", v.unlit))
+      return Error("Invalid video_player property type");
+    if (props.contains("surface")) {
+      const json &s = props["surface"];
+      size_t surface;
+      if (s.is_number_integer() && s.get<std::int64_t>() == -1)
+        v.surface = -1;
+      else if (Index(props, "surface", sceneRenderer->GetMesh3DSubmeshCount(i), surface))
+        v.surface = static_cast<int>(surface);
+      else
+        return Error("surface must be -1 (all) or a submesh index");
+    }
+    if (!v.clip.empty() && !ilmeee::IsVideoClipPath(v.clip))
+      return Error("clip must be .mp4/.mkv/.webm/.mov/.avi");
+    if (v.volume < 0 || v.volume > 2) return Error("volume must be 0..2");
+    if (std::filesystem::path(v.clip).is_absolute())
+      v.clip = ProjectMediaPath(projectHandler.projectPath, v.clip);
+    v.enabled = true;
+    mesh.video = std::move(v);
+  } else { // script
+    if (json e = badKey({"source", "enabled", "values"}); !e.is_null())
+      return e;
+    std::string source;
+    if (!Optional(props, "source", source) || source.empty())
+      return Error("properties.source (project-relative .cpp or class name) is required; "
+                   "see projectScripts in list_components");
+    auto binding = std::find_if(mesh.scripts.begin(), mesh.scripts.end(),
+                                [&](const auto &b) { return matchesScript(b, source); });
+    ilmeee::NativeScriptBinding updated;
+    if (binding != mesh.scripts.end()) {
+      updated = *binding;
+    } else {
+      const auto sources = nativeScripts.Sources();
+      auto it = std::find_if(sources.begin(), sources.end(), [&](const std::string &s) {
+        return s == source || std::filesystem::path(s).stem().string() == source;
+      });
+      if (it == sources.end())
+        return Error(nativeScripts.IsCompiling()
+                         ? "Scripts are compiling; retry shortly"
+                         : "No project script " + source + "; see projectScripts in list_components");
+      if (!nativeScripts.Ready(*it))
+        return Error(nativeScripts.IsCompiling()
+                         ? "Script is compiling; retry shortly"
+                         : "Script failed to compile; see get_game_log or Console > Output");
+      updated.source = *it;
+      updated.className = std::filesystem::path(*it).stem().string();
+      updated.values = nativeScripts.Properties(updated);
+    }
+    if (!Optional(props, "enabled", updated.enabled))
+      return Error("enabled must be a boolean");
+    if (auto it = props.find("values"); it != props.end()) {
+      if (!it->is_object()) return Error("values must be an object {field: value}");
+      const ObjectResolver resolve = [&](const json &in, uint64_t &out) {
+        if (in.is_null()) { out = 0; return true; }
+        if (in.is_string()) {
+          const std::string id = in.get<std::string>();
+          for (const auto &e : gameUi.elements)
+            if (e.id == id) { out = e.objectId; return true; }
+          return false;
+        }
+        size_t target;
+        if (!Index(json{{"i", in}}, "i", count, target)) return false;
+        out = sceneRenderer->meshes3d[target].objectId;
+        return true;
+      };
+      auto fields = nativeScripts.Properties(updated);
+      for (const auto &[field, value] : it->items()) {
+        auto f = std::find_if(fields.begin(), fields.end(),
+                              [&](const auto &v) { return v.name == field; });
+        if (f == fields.end())
+          return Error("Script " + updated.className + " has no field " + field);
+        ilmeee::ScriptValue next = *f;
+        std::string error;
+        if (next.type == ilmeee::ScriptValueType::List) {
+          if (!value.is_array() || value.size() > ilmeee::kMaxScriptListItems)
+            return Error("Field " + field + " expects an array");
+          next.items.clear();
+          for (const auto &item : value) {
+            ilmeee::ScriptValue element;
+            element.type = next.elementType;
+            if (!(error = ScalarFromJson(next.elementType, item, element, resolve)).empty())
+              return Error("Field " + field + " item " + error);
+            next.items.push_back(std::move(element));
+          }
+        } else if (!(error = ScalarFromJson(next.type, value, next, resolve)).empty()) {
+          return Error("Field " + field + " " + error);
+        }
+        auto stored = std::find_if(updated.values.begin(), updated.values.end(),
+                                   [&](const auto &v) { return v.name == field; });
+        if (stored == updated.values.end())
+          updated.values.push_back(std::move(next));
+        else
+          *stored = std::move(next);
+      }
+    }
+    if (binding != mesh.scripts.end())
+      *binding = std::move(updated);
+    else
+      mesh.scripts.push_back(std::move(updated));
+  }
+  RecordEditorHistory();
+  return saved();
 }

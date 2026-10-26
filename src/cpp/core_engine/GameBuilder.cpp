@@ -558,6 +558,33 @@ public:
     return abis;
   }
 
+  std::string AndroidPlayerCompatibility(const std::string &abi) const {
+    const fs::path metadata = o_.androidPlayerDir / ("player-runtime-" + abi + ".json");
+    const std::string rebuild = " — rebuild the Android player with "
+        "nix-shell shell.nix --run 'ILMEEE_ABI=" + abi + " scripts/android/build-player.sh'";
+    std::ifstream in(metadata);
+    if (!in)
+      return "Android player compatibility metadata missing for " + abi + rebuild;
+    try {
+      const auto runtime = nlohmann::json::parse(in);
+      const auto &format = runtime.at("sceneFormat");
+      if (!runtime.at("schema").is_number_integer() || runtime.at("schema") != 1 ||
+          !runtime.at("abi").is_string() || runtime.at("abi") != abi ||
+          !format.at("major").is_number_integer() ||
+          !format.at("minor").is_number_integer())
+        return "Invalid Android player compatibility metadata for " + abi + rebuild;
+      const auto major = format.at("major").get<std::int64_t>();
+      const auto minor = format.at("minor").get<std::int64_t>();
+      if (major != 1 || minor < kSceneFormatMinor || minor > 65535)
+        return "Android player " + abi + " is incompatible: supports scene " +
+            std::to_string(major) + "." + std::to_string(minor) +
+            ", but this export writes 1." + std::to_string(kSceneFormatMinor) + rebuild;
+    } catch (const nlohmann::json::exception &) {
+      return "Invalid Android player compatibility metadata for " + abi + rebuild;
+    }
+    return {};
+  }
+
   fs::path AndroidSdk() const {
     if (!o_.androidSdkDir.empty()) return o_.androidSdkDir;
     for (const char *var : {"ANDROID_HOME", "ANDROID_SDK_ROOT"})
@@ -673,6 +700,9 @@ public:
         return Fail("Android player not built: no jniLibs/<abi>/libmain.so in " +
                     o_.androidPlayerDir.string() +
                     " (run scripts/android/build-player.sh)");
+      for (const auto &abi : abis)
+        if (const auto error = AndroidPlayerCompatibility(abi); !error.empty())
+          return Fail(error);
       if (!fs::is_directory(o_.androidPlayerDir / "sdl-java" / "org", ec))
         return Fail("SDL3 Java files missing in " + o_.androidPlayerDir.string() +
                     "/sdl-java (run scripts/android/build-player.sh)");

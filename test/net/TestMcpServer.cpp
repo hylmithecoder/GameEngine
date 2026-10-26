@@ -77,8 +77,9 @@ int main() {
   auto list = Post(port, Modern(4, "tools/list"), "test-secret", true);
   assert(list->statusCode == 200);
   const auto tools = json::parse(list->body)["result"]["tools"];
-  assert(tools.size() == 22);
-  for (const char *name : {"get_skeleton", "get_animation", "create_animation",
+  assert(tools.size() == 25);
+  for (const char *name : {"list_components", "add_component", "remove_component",
+                           "get_skeleton", "get_animation", "create_animation",
                            "edit_animation", "generate_animation", "sample_animation"}) {
     bool found = false;
     for (const auto &tool : tools) if (tool["name"] == name) {

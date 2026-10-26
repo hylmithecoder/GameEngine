@@ -195,6 +195,10 @@ public:
   ilmeee::net::McpServer *mcpServer = nullptr;
   ilmeee::net::json HandleMcpTool(const std::string &name,
                                   const ilmeee::net::json &arguments);
+  // list_components / add_component / remove_component (McpTools.cpp).
+  ilmeee::net::json HandleMcpComponentTool(const std::string &name,
+                                           const ilmeee::net::json &arguments);
+  ilmeee::net::json McpComponentList(size_t index);
   // Ask the engine process to run its scene picker (File > Load Scene).
   void RequestEngineSceneLoad();
   // list<string> currentName = {"Shiroko", "Shun_Small"};

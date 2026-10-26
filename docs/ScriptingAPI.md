@@ -518,6 +518,29 @@ dan menambah collider kepala/dada/paha; field lain (`enabled`, `wind`,
 `set_animation` memasang clip (`.ilmeeeanim`/`.vmd`) atau controller ke model
 PMX, mis. `{"index": 12, "clip": "assets/animations/PhysicsDemo.ilmeeeanim"}`.
 
+### Komponen lewat MCP
+
+`list_components {"index": 3}` menampilkan komponen yang terpasang (field
+script beserta tipe dan nilainya), tipe yang bisa ditambah, nama movement
+script, dan script C++ project (`ready` = sudah ter-compile).
+`add_component` memasang komponen, atau mengubahnya kalau sudah ada (hanya
+property yang dikirim yang berubah); `remove_component` melepasnya. Tipe:
+`movement`, `physics`, `audio_source`, `video_player`, `dialog`, `animation`,
+`spring_bones`, `script`.
+
+```json
+{"index": 3, "type": "movement",
+ "properties": {"script": "Camera Relative", "speed": 4,
+                "camera": 1, "cameraStyle": "third_person"}}
+{"index": 3, "type": "script",
+ "properties": {"source": "scripts/Door.cpp",
+                "values": {"openAngle": 90, "target": 5}}}
+```
+
+Field GameObject menerima index scene object, nama elemen UI, atau `null`.
+Untuk `remove_component` tipe `script`, kirim `"script": "Door"` (nama class
+atau path source). Semua perubahan butuh Play dihentikan, lalu `save_scene`.
+
 ### Animation authoring lewat MCP
 
 Authoring berjalan di editor native. Urutan umum: `list_scene_objects` →

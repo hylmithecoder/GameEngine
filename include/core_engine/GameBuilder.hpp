@@ -36,7 +36,8 @@ struct GameBuildOptions {
 
   // ---- Android (target == Android) ----------------------------------------
   // What scripts/android/build-player.sh produced: jniLibs/<abi>/*.so and
-  // sdl-java/ (SDL3's Java glue). playerExecutable is not used.
+  // sdl-java/ (SDL3's Java glue), and player-runtime-<abi>.json (the native
+  // reader's scene version). playerExecutable is not used.
   std::filesystem::path androidPlayerDir;
   std::filesystem::path androidTemplateDir; // the engine's android/template
   std::filesystem::path androidSdkDir;      // Empty: $ANDROID_HOME or ~/Android/Sdk
