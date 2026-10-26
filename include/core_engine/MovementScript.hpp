@@ -106,6 +106,9 @@ public:
   // One fixed step; Update calls this.
   void Step(SceneRenderer &renderer, const MovementInput &input,
             float deltaSeconds);
+  // PhysicsSystem reports whether a collider holds the object up and at
+  // which parent-local height; scripts then use it as their ground.
+  void SetGroundSupport(size_t index, bool supported, float localY);
 
 private:
   struct State {
@@ -113,7 +116,9 @@ private:
     float yaw = 0.0f;   // camera rig yaw, degrees
     float pitch = 0.0f; // camera rig pitch, degrees
     glm::vec3 velocity{0.0f};
-    float groundY = 0.0f;
+    float groundY = 0.0f; // height at Play start, the floor without colliders
+    bool supported = false;
+    float supportY = 0.0f;
   };
   std::unordered_map<size_t, State> states_;
   float accumulator_ = 0.0f;

@@ -80,6 +80,7 @@ private:
   bool focusSceneTab = false;
   ilmeee::MovementInput gameMovementInput;
   ilmeee::MovementSystem movementSystem;
+  ilmeee::PhysicsSystem physicsSystem;
   ilmeee::NativeScripts nativeScripts;
   ilmeee::NativeScriptSceneContext nativeScriptContext;
   std::string nativeScriptsProject;

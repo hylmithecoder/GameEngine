@@ -128,6 +128,13 @@ void MovementSystem::Reset() {
   pendingLook_ = glm::vec2(0.0f);
 }
 
+void MovementSystem::SetGroundSupport(size_t index, bool supported,
+                                      float localY) {
+  State &state = states_[index];
+  state.supported = supported && std::isfinite(localY);
+  if (state.supported) state.supportY = localY;
+}
+
 void MovementSystem::Update(SceneRenderer &renderer, const MovementInput &input,
                             float deltaSeconds) {
   if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f) return;
@@ -195,7 +202,7 @@ void MovementSystem::Step(SceneRenderer &renderer, const MovementInput &input,
     ctx.input.left = input.left || ctx.move.x < -0.5f;
     ctx.cameraStyle = rig.style;
     ctx.velocity = state.velocity;
-    ctx.groundY = state.groundY;
+    ctx.groundY = state.supported ? state.supportY : state.groundY;
     ctx.speed = mesh.movementSpeed;
     ctx.deltaSeconds = dt;
 

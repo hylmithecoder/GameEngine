@@ -237,6 +237,9 @@ target_compile_definitions(TestAnimationTooling PRIVATE ILMEEE_TEST_MOTION_DIR="
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)
 target_link_libraries(TestSceneFormat PRIVATE glm::glm)
 
+add_executable(TestPhysics test/TestPhysics.cpp src/cpp/core_engine/PhysicsWorld.cpp)
+target_link_libraries(TestPhysics PRIVATE glm::glm)
+
 add_executable(TestWorldText test/TestWorldText.cpp
     src/cpp/core_engine/WorldText.cpp src/cpp/core_engine/GameUI.cpp
     ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
@@ -311,6 +314,8 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/DialogSystem.cpp
     src/cpp/core_engine/MovementScript.cpp
     src/cpp/core_engine/MovementRuntime.cpp
+    src/cpp/core_engine/PhysicsWorld.cpp
+    src/cpp/core_engine/PhysicsRuntime.cpp
     src/cpp/core_engine/UserMovementScripts.cpp
     src/cpp/core_engine/SceneLoader.cpp
     src/cpp/core_engine/SceneRenderer.cpp

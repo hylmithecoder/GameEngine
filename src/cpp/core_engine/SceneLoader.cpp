@@ -100,6 +100,14 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
     renderer.meshes3d[idx].dialog = e.dialog;
     renderer.meshes3d[idx].animation = e.animation;
     renderer.meshes3d[idx].springBones = e.springBones;
+    auto &loadedMesh = renderer.meshes3d[idx];
+    loadedMesh.hasPhysics = e.rigidBody.enabled;
+    loadedMesh.useGravity = e.rigidBody.useGravity;
+    loadedMesh.isKinematic = e.rigidBody.isKinematic;
+    loadedMesh.mass = e.rigidBody.mass;
+    loadedMesh.drag = e.rigidBody.drag;
+    loadedMesh.gravityY = e.rigidBody.gravityY;
+    loadedMesh.collider = e.collider;
     // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
     // so hover-to-source lands users on the deserializer.
     renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);

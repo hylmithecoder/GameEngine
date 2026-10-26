@@ -106,8 +106,10 @@ const char *TriggerName(ilmeee::DialogTrigger trigger) {
 // Component types addressable by list/add/remove_component. Light, camera,
 // text_3d and audio emitters are object kinds, not components.
 constexpr const char *kComponentTypes[] = {
-    "movement", "physics", "audio_source", "video_player",
+    "movement", "physics", "collider", "audio_source", "video_player",
     "dialog",   "animation", "spring_bones", "script"};
+
+constexpr const char *kColliderShapes[] = {"box", "sphere", "capsule"};
 
 constexpr const char *kCameraStyles[] = {"none", "third_person", "first_person",
                                          "side_scroller", "top_down"};
@@ -127,6 +129,7 @@ json AttachedComponents(const SceneRenderer::Mesh3D &mesh) {
   json out = json::array();
   if (HasMovement(mesh)) out.push_back("movement");
   if (mesh.hasPhysics) out.push_back("physics");
+  if (mesh.collider.enabled) out.push_back("collider");
   if (mesh.audio.enabled) out.push_back("audio_source");
   if (mesh.video.enabled) out.push_back("video_player");
   if (mesh.dialog.enabled) out.push_back("dialog");
@@ -746,6 +749,15 @@ ilmeee::net::json MainWindow::McpComponentList(size_t i) {
     components.push_back({{"type", "physics"}, {"useGravity", mesh.useGravity},
                           {"isKinematic", mesh.isKinematic}, {"mass", mesh.mass},
                           {"drag", mesh.drag}, {"gravityY", mesh.gravityY}});
+  if (mesh.collider.enabled) {
+    const auto &c = mesh.collider;
+    components.push_back({{"type", "collider"},
+                          {"shape", kColliderShapes[static_cast<int>(c.shape)]},
+                          {"center", Array(c.center)}, {"size", Array(c.size)},
+                          {"radius", c.radius}, {"height", c.height},
+                          {"isTrigger", c.isTrigger}, {"friction", c.friction},
+                          {"bounciness", c.bounciness}});
+  }
   if (mesh.audio.enabled) {
     const auto &a = mesh.audio;
     components.push_back({{"type", "audio_source"}, {"clip", a.clip},
@@ -807,7 +819,8 @@ ilmeee::net::json MainWindow::McpComponentList(size_t i) {
   json addable = json::array();
   for (const char *type : kComponentTypes) {
     const std::string t = type;
-    if (t == "movement" && (mesh.isLight || mesh.isCamera)) continue;
+    if ((t == "movement" || t == "physics" || t == "collider") &&
+        (mesh.isLight || mesh.isCamera)) continue;
     if ((t == "animation" || t == "spring_bones") && !skinned) continue;
     addable.push_back(t);
   }
@@ -873,6 +886,9 @@ ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
       if (!mesh.hasPhysics) return Error("No physics component");
       mesh.hasPhysics = false;
       mesh.velocity = glm::vec3(0.0f);
+    } else if (type == "collider") {
+      if (!mesh.collider.enabled) return Error("No collider component");
+      mesh.collider.enabled = false;
     } else if (type == "audio_source") {
       if (!mesh.audio.enabled) return Error("No audio_source component");
       if (mesh.isAudioEmitter)
@@ -921,6 +937,11 @@ ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
     std::string list;
     for (const char *k : allowed) list += (list.empty() ? "" : ", ") + std::string(k);
     return Error("Unknown " + type + " property '" + key + "' (allowed: " + list + ")");
+  };
+  const auto fitCollider = [&](ilmeee::ColliderComponent &collider) {
+    glm::vec3 lo(-0.5f), hi(0.5f);
+    sceneRenderer->GetMesh3DLocalBounds(i, lo, hi);
+    ilmeee::FitColliderToBounds(collider, lo, hi);
   };
 
   // These already have dedicated tools; forward so validation stays in one place.
@@ -1019,12 +1040,59 @@ ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
       return Error("Invalid physics property type");
     if (mass <= 0 || mass > 100000 || drag < 0 || drag > 1000 || std::abs(gravityY) > 1000)
       return Error("mass must be > 0, drag >= 0, |gravityY| <= 1000");
+    if (mesh.isLight || mesh.isCamera)
+      return Error("Lights and cameras cannot have physics");
     mesh.hasPhysics = true;
     mesh.useGravity = gravity;
     mesh.isKinematic = kinematic;
     mesh.mass = mass;
     mesh.drag = drag;
     mesh.gravityY = gravityY;
+    // Same as the Inspector: a body without a collider falls through all.
+    if (!mesh.collider.enabled) {
+      mesh.collider.enabled = true;
+      fitCollider(mesh.collider);
+    }
+  } else if (type == "collider") {
+    if (json e = badKey({"shape", "center", "size", "radius", "height", "isTrigger",
+                         "friction", "bounciness", "fit"});
+        !e.is_null())
+      return e;
+    if (mesh.isLight || mesh.isCamera)
+      return Error("Lights and cameras cannot have a collider");
+    ilmeee::ColliderComponent c = mesh.collider;
+    std::string shape = kColliderShapes[static_cast<int>(c.shape)];
+    bool fit = !c.enabled; // a new collider starts sized to the mesh
+    if (!Optional(props, "shape", shape) || !Optional(props, "fit", fit) ||
+        !Vec3(props, "center", c.center) || !Vec3(props, "size", c.size) ||
+        !Optional(props, "radius", c.radius) || !Optional(props, "height", c.height) ||
+        !Optional(props, "isTrigger", c.isTrigger) ||
+        !Optional(props, "friction", c.friction) ||
+        !Optional(props, "bounciness", c.bounciness))
+      return Error("Invalid collider property type");
+    const auto shapeIt = std::find(std::begin(kColliderShapes), std::end(kColliderShapes), shape);
+    if (shapeIt == std::end(kColliderShapes))
+      return Error("shape must be box, sphere or capsule");
+    if (glm::any(glm::lessThan(c.size, glm::vec3(0.0f))) || c.radius < 0 || c.height < 0 ||
+        c.friction < 0 || c.friction > 1 || c.bounciness < 0 || c.bounciness > 1)
+      return Error("size/radius/height must be >= 0, friction and bounciness 0..1");
+    const auto newShape = static_cast<ilmeee::ColliderShape>(shapeIt - std::begin(kColliderShapes));
+    if (newShape != c.shape && !props.contains("center") && !props.contains("size") &&
+        !props.contains("radius") && !props.contains("height"))
+      fit = true;
+    c.shape = newShape;
+    c.enabled = true;
+    // Explicit dimensions win over the fitted ones.
+    if (fit) {
+      ilmeee::ColliderComponent fitted = c;
+      fitCollider(fitted);
+      if (!props.contains("center")) c.center = fitted.center;
+      if (!props.contains("size")) c.size = fitted.size;
+      if (!props.contains("radius")) c.radius = fitted.radius;
+      if (!props.contains("height")) c.height = fitted.height;
+    }
+    c.Clamp();
+    mesh.collider = c;
   } else if (type == "audio_source") {
     if (json e = badKey({"clip", "volume", "loop", "playOnStart", "spatial",
                          "minDistance", "maxDistance"});

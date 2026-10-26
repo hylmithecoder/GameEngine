@@ -5,6 +5,7 @@
 #include "NativeScriptTypes.hpp"
 #include "NprSettings.hpp"
 #include "PMXLoader.hpp"
+#include "Physics.hpp"
 #include "Scene.hpp"
 #include "SkeletalAnimation.hpp"
 #include "SpringBone.hpp"
@@ -322,6 +323,9 @@ public:
     float drag = 0.0f;
     float gravityY = -9.81f;
     glm::vec3 velocity = glm::vec3(0.0f);
+    // Collider (any mesh; static unless it also has a Physics Body or a
+    // movement script). Run by ilmeee::PhysicsSystem during Play.
+    ilmeee::ColliderComponent collider;
 
     // Audio Source / Video Player components (played by ilmeee::MediaSystem).
     ilmeee::AudioSourceComponent audio;
@@ -550,6 +554,10 @@ public:
   // What mesh `i` is drawn and picked with: world TRS * autoFit.
   glm::mat4 GetMesh3DWorldModel(size_t i) const;
   glm::vec3 GetMesh3DWorldPosition(size_t i) const;
+  // Bounds of mesh `i` as drawn, in its own space (autoFit applied, its
+  // transform not) — the space Collider center/size use. False without
+  // CPU geometry.
+  bool GetMesh3DLocalBounds(size_t i, glm::vec3 &min, glm::vec3 &max) const;
   // Rotates a local-space direction of mesh `i` by its parents' rotation.
   glm::vec3 Mesh3DLocalDirToWorld(size_t i, const glm::vec3 &localDir) const;
 
@@ -748,6 +756,7 @@ public:
     float drag = 0.0f;
     float gravityY = -9.81f;
     glm::vec3 velocity{0.0f};
+    ilmeee::ColliderComponent collider;
 
     ilmeee::AudioSourceComponent audio;
     ilmeee::VideoPlayerComponent video;

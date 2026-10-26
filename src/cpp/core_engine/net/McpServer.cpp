@@ -307,13 +307,14 @@ json ToolList() {
     tools.push_back({{"name", name}, {"description", description}, {"inputSchema", std::move(schema)}});
   };
   const json componentType = {{"type", "string"},
-                              {"enum", {"movement", "physics", "audio_source", "video_player",
+                              {"enum", {"movement", "physics", "collider", "audio_source", "video_player",
                                         "dialog", "animation", "spring_bones", "script"}}};
   add("list_components", "List the components attached to a scene object with their settings (script components include typed exposed fields), plus what can be added: addable types, registered movement scripts and project C++ scripts with compile status.",
       ObjectSchema({{"index", index}}, {"index"}));
   add("add_component", "Attach a component to a scene object in the stopped editor, or update it if already attached (only given properties change); records Undo, save_scene persists. properties per type: "
       "movement {movable, script (movement script name, default \"WASD XZ\"), speed, camera (camera object index, -1 = Game view), cameraStyle (none|third_person|first_person|side_scroller|top_down), distance, height, moveJoystick, lookJoystick (UI joystick names)}; "
-      "physics {useGravity, isKinematic, mass, drag, gravityY}; "
+      "physics {useGravity, isKinematic, mass, drag, gravityY} (auto-adds a fitted collider if none); "
+      "collider {shape (box|sphere|capsule), center [x,y,z], size [x,y,z] (box), radius, height (capsule), isTrigger, friction 0..1, bounciness 0..1, fit (true = size to the mesh; new colliders fit by default)} - collider alone = static, + physics = dynamic/kinematic, + movement = character; "
       "audio_source {clip, volume, loop, playOnStart, spatial, minDistance, maxDistance}; "
       "video_player {clip, loop, playOnStart, volume, unlit, surface}; "
       "script {source (.cpp path or class name, required), enabled, values {field: value}; GameObject fields take an object index, a UI element name or null}; "

@@ -1361,22 +1361,116 @@ void MainWindow::RenderInspectorWindow() {
     }
   }
 
-  // Physics component (if attached)
+  // Sizes a collider to the selected mesh as drawn (unit cube without CPU
+  // geometry, e.g. markers).
+  const auto fitCollider = [&](ilmeee::ColliderComponent &collider) {
+    glm::vec3 lo(-0.5f), hi(0.5f);
+    sceneRenderer->GetMesh3DLocalBounds((size_t)meshIdx, lo, hi);
+    ilmeee::FitColliderToBounds(collider, lo, hi);
+  };
+
+  // Physics Body component (if attached)
   if (meshSelected && sceneRenderer->meshes3d[meshIdx].hasPhysics) {
-    if (CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
-      if (Checkbox("Use Gravity", &sceneRenderer->meshes3d[meshIdx].useGravity))
+    auto &mesh = sceneRenderer->meshes3d[meshIdx];
+    bool keep = true;
+    if (CollapsingHeader("Physics Body", &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+      bool record = Checkbox("Use Gravity", &mesh.useGravity);
+      record |= Checkbox("Is Kinematic", &mesh.isKinematic);
+      DragFloat("Mass", &mesh.mass, 0.05f, 0.001f, 100000.0f, "%.3f kg",
+                ImGuiSliderFlags_AlwaysClamp);
+      record |= IsItemDeactivatedAfterEdit();
+      DragFloat("Drag", &mesh.drag, 0.01f, 0.0f, 1000.0f, "%.2f",
+                ImGuiSliderFlags_AlwaysClamp);
+      record |= IsItemDeactivatedAfterEdit();
+      DragFloat("Gravity Y", &mesh.gravityY, 0.1f, -1000.0f, 1000.0f, "%.2f",
+                ImGuiSliderFlags_AlwaysClamp);
+      record |= IsItemDeactivatedAfterEdit();
+      if (mesh.movable && !mesh.movementScript.empty())
+        TextDisabled("Movement Script drives this object: gravity off.");
+      else if (mesh.isKinematic)
+        TextDisabled("Kinematic: moved by scripts, pushes bodies.");
+      else
+        TextDisabled("Dynamic: falls, bounces and is pushed.");
+      if (!mesh.collider.enabled) {
+        TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                    "No Collider: falls through everything.");
+        if (Button("Add Collider")) {
+          mesh.collider.enabled = true;
+          fitCollider(mesh.collider);
+          record = true;
+        }
+      }
+      if (record)
         RecordEditorHistory();
-      if (Checkbox("Is Kinematic",
-                   &sceneRenderer->meshes3d[meshIdx].isKinematic))
+    }
+    if (!keep) {
+      mesh.hasPhysics = false;
+      mesh.velocity = glm::vec3(0.0f);
+      RecordEditorHistory();
+    }
+  }
+
+  // Collider component (if attached)
+  if (meshSelected && !isLight && !isCamera &&
+      sceneRenderer->meshes3d[meshIdx].collider.enabled) {
+    auto &mesh = sceneRenderer->meshes3d[meshIdx];
+    auto &c = mesh.collider;
+    bool keep = true;
+    if (CollapsingHeader("Collider", &keep, ImGuiTreeNodeFlags_DefaultOpen)) {
+      bool record = false;
+      int shape = static_cast<int>(c.shape);
+      if (Combo("Shape", &shape, ilmeee::kColliderShapeNames)) {
+        c.shape = static_cast<ilmeee::ColliderShape>(shape);
+        fitCollider(c); // a new shape starts sized to the mesh
+        record = true;
+      }
+      DragFloat3("Center", &c.center.x, 0.01f);
+      record |= IsItemDeactivatedAfterEdit();
+      switch (c.shape) {
+      case ilmeee::ColliderShape::Box:
+        DragFloat3("Size", &c.size.x, 0.01f, 0.0f, 10000.0f, "%.3f",
+                   ImGuiSliderFlags_AlwaysClamp);
+        record |= IsItemDeactivatedAfterEdit();
+        break;
+      case ilmeee::ColliderShape::Sphere:
+        DragFloat("Radius", &c.radius, 0.01f, 0.0f, 10000.0f, "%.3f",
+                  ImGuiSliderFlags_AlwaysClamp);
+        record |= IsItemDeactivatedAfterEdit();
+        break;
+      case ilmeee::ColliderShape::Capsule:
+        DragFloat("Radius", &c.radius, 0.01f, 0.0f, 10000.0f, "%.3f",
+                  ImGuiSliderFlags_AlwaysClamp);
+        record |= IsItemDeactivatedAfterEdit();
+        DragFloat("Height", &c.height, 0.01f, 0.0f, 10000.0f, "%.3f",
+                  ImGuiSliderFlags_AlwaysClamp);
+        record |= IsItemDeactivatedAfterEdit();
+        break;
+      }
+      if (Button("Fit to Mesh")) {
+        fitCollider(c);
+        record = true;
+      }
+      record |= Checkbox("Is Trigger", &c.isTrigger);
+      if (!c.isTrigger) {
+        SliderFloat("Friction", &c.friction, 0.0f, 1.0f, "%.2f");
+        record |= IsItemDeactivatedAfterEdit();
+        SliderFloat("Bounciness", &c.bounciness, 0.0f, 1.0f, "%.2f");
+        record |= IsItemDeactivatedAfterEdit();
+      }
+      c.Clamp();
+      if (c.isTrigger)
+        TextDisabled("Trigger: reports overlaps, never blocks.");
+      else if (mesh.movable && !mesh.movementScript.empty())
+        TextDisabled("Character: stopped by colliders, stands on them.");
+      else if (!mesh.hasPhysics)
+        TextDisabled("Static: others collide with it, it never moves.");
+      TextDisabled("Green wireframe in the Scene view; runs in Play.");
+      if (record)
         RecordEditorHistory();
-      InputFloat("Mass", &sceneRenderer->meshes3d[meshIdx].mass, 0.1f);
-      const bool massFinished = IsItemDeactivatedAfterEdit();
-      InputFloat("Drag", &sceneRenderer->meshes3d[meshIdx].drag, 0.01f);
-      const bool dragFinished = IsItemDeactivatedAfterEdit();
-      InputFloat("Gravity Y", &sceneRenderer->meshes3d[meshIdx].gravityY, 0.1f);
-      const bool gravityFinished = IsItemDeactivatedAfterEdit();
-      if (massFinished || dragFinished || gravityFinished)
-        RecordEditorHistory();
+    }
+    if (!keep) {
+      c.enabled = false;
+      RecordEditorHistory();
     }
   }
 
@@ -1544,12 +1638,28 @@ void MainWindow::RenderInspectorWindow() {
       RecordEditorHistory();
     }
     EndDisabled();
+    BeginDisabled(!meshSelected || isLight || isCamera ||
+                  sceneRenderer->meshes3d[meshIdx].hasPhysics);
     if (Selectable("Physics Body")) {
-      if (meshSelected) {
-        sceneRenderer->meshes3d[meshIdx].hasPhysics = true;
-        RecordEditorHistory();
+      auto &mesh = sceneRenderer->meshes3d[meshIdx];
+      mesh.hasPhysics = true;
+      // A body without a collider falls through everything; give it one.
+      if (!mesh.collider.enabled) {
+        mesh.collider.enabled = true;
+        fitCollider(mesh.collider);
       }
+      RecordEditorHistory();
     }
+    EndDisabled();
+    BeginDisabled(!meshSelected || isLight || isCamera ||
+                  sceneRenderer->meshes3d[meshIdx].collider.enabled);
+    if (Selectable("Collider")) {
+      auto &collider = sceneRenderer->meshes3d[meshIdx].collider;
+      collider.enabled = true;
+      fitCollider(collider);
+      RecordEditorHistory();
+    }
+    EndDisabled();
     if (Selectable("Audio Source")) {
       if (meshSelected) {
         sceneRenderer->meshes3d[meshIdx].audio.enabled = true;
@@ -3389,6 +3499,13 @@ bool MainWindow::Save3DScene() {
     e.dialog = mesh.dialog;
     e.animation = mesh.animation;
     e.springBones = mesh.springBones;
+    e.rigidBody.enabled = mesh.hasPhysics;
+    e.rigidBody.useGravity = mesh.useGravity;
+    e.rigidBody.isKinematic = mesh.isKinematic;
+    e.rigidBody.mass = mesh.mass;
+    e.rigidBody.drag = mesh.drag;
+    e.rigidBody.gravityY = mesh.gravityY;
+    e.collider = mesh.collider;
     e.worldText = mesh.worldText;
 
     if (mesh.isWorldText) {

@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.14: round trip, reading
+// .ilmeeescene v1.3–v1.18: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -32,8 +32,12 @@ static constexpr int kNativeBytes = 8 + 4; // objectId + zero scripts
 static constexpr int kDialogBytes = 4 + 4 + 32 + 2 + 2 + 16;
 // v1.17 empty spring bones: enabled, wind, chain count, collider count.
 static constexpr int kSpringBytes = 4 + 12 + 4 + 4;
-// Includes the v1.16 controller string and the v1.17 spring bones after it.
-static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2 + kSpringBytes;
+// v1.18 Physics Body (flags, mass, drag, gravityY) + Collider (flags,
+// shape, center, size, radius, height, friction, bounciness).
+static constexpr int kPhysicsBytes = 16 + 4 + 4 + 12 + 12 + 4 * 4;
+// Includes the v1.16 controller string, the v1.17 spring bones and the
+// v1.18 physics after it.
+static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2 + kSpringBytes + kPhysicsBytes;
 // v1.15 scene-level NPR block after the background colour.
 static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4;
 
@@ -231,6 +235,64 @@ int main() {
     CHECK(LoadScene(file.string(), in));
     CHECK(in.entities.size() == 1);
     CHECK(!in.entities[0].audio.enabled && !in.entities[0].video.enabled);
+  }
+
+  // 1h2. Physics Body + Collider survive (v1.18); bad values are repaired.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Crate", -1), Entity("Floor", -1)};
+    RigidBodyComponent &body = s.entities[0].rigidBody;
+    body.enabled = true;
+    body.useGravity = false;
+    body.isKinematic = true;
+    body.mass = 2.5f;
+    body.drag = 0.25f;
+    body.gravityY = -20.0f;
+    ColliderComponent &c = s.entities[0].collider;
+    c.enabled = true;
+    c.shape = ColliderShape::Capsule;
+    c.center = {0, 1, 0};
+    c.radius = 0.3f;
+    c.height = 1.8f;
+    c.isTrigger = true;
+    c.friction = 0.1f;
+    c.bounciness = 0.7f;
+    s.entities[1].collider.enabled = true;
+    s.entities[1].collider.size = {10, 0.1f, 10};
+    s.entities[1].collider.friction = 5.0f; // clamped on load
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 2);
+    const RigidBodyComponent &b = in.entities[0].rigidBody;
+    CHECK(b.enabled && !b.useGravity && b.isKinematic);
+    CHECK(b.mass == 2.5f && b.drag == 0.25f && b.gravityY == -20.0f);
+    const ColliderComponent &cc = in.entities[0].collider;
+    CHECK(cc.enabled && cc.isTrigger && cc.shape == ColliderShape::Capsule);
+    CHECK(cc.center == glm::vec3(0, 1, 0));
+    CHECK(cc.radius == 0.3f && cc.height == 1.8f);
+    CHECK(cc.friction == 0.1f && cc.bounciness == 0.7f);
+    CHECK(!in.entities[1].rigidBody.enabled);
+    CHECK(in.entities[1].collider.enabled);
+    CHECK(in.entities[1].collider.size == glm::vec3(10, 0.1f, 10));
+    CHECK(in.entities[1].collider.friction == 1.0f);
+  }
+
+  // 1h3. A v1.17 scene (no physics) loads with physics off.
+  {
+    IlmeeeScene s;
+    s.entities = {Entity("Old", -1)};
+    s.entities[0].collider.enabled = true;
+    CHECK(SaveScene(file.string(), s));
+    std::vector<char> bytes = ReadAll(file);
+    bytes[6] = 17;
+    bytes[7] = 0;
+    bytes.erase(bytes.end() - 16 - kNprBytes - kPhysicsBytes, bytes.end() - 16 - kNprBytes);
+    WriteAll(file, bytes);
+    IlmeeeScene in;
+    CHECK(LoadScene(file.string(), in));
+    CHECK(in.entities.size() == 1);
+    CHECK(!in.entities[0].collider.enabled && !in.entities[0].rigidBody.enabled);
   }
 
   // 1i. A newer minor than this code knows is refused, not misread.

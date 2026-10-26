@@ -60,6 +60,11 @@
 //      drag, gravity, hitRadius, uint32 useColliders; uint32 colliderCount,
 //      per collider: string bone, vec3 offset, vec3 tailOffset,
 //      float32 radius --
+//   -- v1.18 after the spring bones, Physics Body: uint32 flags (1 enabled,
+//      2 useGravity, 4 isKinematic), float32 mass, drag, gravityY;
+//      Collider: uint32 flags (1 enabled, 2 isTrigger), uint32 shape
+//      (0 box, 1 sphere, 2 capsule), vec3 center, vec3 size,
+//      float32 radius, height, friction, bounciness --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -76,6 +81,7 @@
 #include "MovementScript.hpp"
 #include "NprSettings.hpp"
 #include "NativeScriptTypes.hpp"
+#include "Physics.hpp"
 #include "SkeletalAnimation.hpp"
 #include "SpringBone.hpp"
 #include "WorldText.hpp"
@@ -87,11 +93,12 @@
 namespace ilmeee {
 
 // v1.16 adds an animation controller asset string after animation.loop;
-// v1.17 adds the spring bone component after it.
+// v1.17 adds the spring bone component after it; v1.18 Physics Body +
+// Collider after that.
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 17;
+constexpr uint16_t kSceneFormatMinor = 18;
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -170,6 +177,8 @@ struct SceneEntity {
   // v1.12: editable animation clip asset, shared by editor and players.
   AnimationComponent animation;
   SpringBoneComponent springBones; // v1.17, PMX/skinned meshes only
+  RigidBodyComponent rigidBody;    // v1.18
+  ColliderComponent collider;      // v1.18
   WorldTextComponent worldText; // v1.13, used only by WorldText entities
 
   // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
@@ -418,6 +427,23 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
       detail::WriteVec3(f, collider.tailOffset);
       detail::WriteF32(f, collider.radius);
     }
+    // Version 1.18: Physics Body + Collider.
+    const RigidBodyComponent &body = e.rigidBody;
+    detail::WriteU32(f, (body.enabled ? 1u : 0u) | (body.useGravity ? 2u : 0u) |
+                            (body.isKinematic ? 4u : 0u));
+    detail::WriteF32(f, body.mass);
+    detail::WriteF32(f, body.drag);
+    detail::WriteF32(f, body.gravityY);
+    const ColliderComponent &collider = e.collider;
+    detail::WriteU32(f, (collider.enabled ? 1u : 0u) |
+                            (collider.isTrigger ? 2u : 0u));
+    detail::WriteU32(f, static_cast<uint32_t>(collider.shape));
+    detail::WriteVec3(f, collider.center);
+    detail::WriteVec3(f, collider.size);
+    detail::WriteF32(f, collider.radius);
+    detail::WriteF32(f, collider.height);
+    detail::WriteF32(f, collider.friction);
+    detail::WriteF32(f, collider.bounciness);
     if (e.kind == PrimitiveKind::WorldText) {
       detail::WriteString(f, e.worldText.text);
       detail::WriteF32(f, e.worldText.size);
@@ -699,6 +725,35 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
           return false;
         if (!std::isfinite(collider.radius) || collider.radius < 0) collider.radius = 0;
       }
+    }
+    if (minor >= 18) {
+      RigidBodyComponent &body = e.rigidBody;
+      ColliderComponent &collider = e.collider;
+      uint32_t bodyFlags = 0, colliderFlags = 0, shape = 0;
+      if (!detail::ReadU32(f, bodyFlags) || !detail::ReadF32(f, body.mass) ||
+          !detail::ReadF32(f, body.drag) || !detail::ReadF32(f, body.gravityY) ||
+          !detail::ReadU32(f, colliderFlags) || !detail::ReadU32(f, shape) ||
+          !detail::ReadVec3(f, collider.center) ||
+          !detail::ReadVec3(f, collider.size) ||
+          !detail::ReadF32(f, collider.radius) ||
+          !detail::ReadF32(f, collider.height) ||
+          !detail::ReadF32(f, collider.friction) ||
+          !detail::ReadF32(f, collider.bounciness))
+        return false;
+      body.enabled = (bodyFlags & 1u) != 0;
+      body.useGravity = (bodyFlags & 2u) != 0;
+      body.isKinematic = (bodyFlags & 4u) != 0;
+      const RigidBodyComponent fallback;
+      if (!std::isfinite(body.mass) || body.mass <= 0 || body.mass > 100000)
+        body.mass = fallback.mass;
+      if (!std::isfinite(body.drag) || body.drag < 0 || body.drag > 1000)
+        body.drag = fallback.drag;
+      if (!std::isfinite(body.gravityY) || std::fabs(body.gravityY) > 1000)
+        body.gravityY = fallback.gravityY;
+      collider.enabled = (colliderFlags & 1u) != 0;
+      collider.isTrigger = (colliderFlags & 2u) != 0;
+      collider.shape = static_cast<ColliderShape>(shape);
+      collider.Clamp();
     }
     if (e.kind == PrimitiveKind::WorldText) {
       uint32_t alignment = 1, visible = 1;

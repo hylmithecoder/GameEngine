@@ -15,6 +15,7 @@
 #include "../../../include/core_engine/TransformMath.hpp"
 #include <imgui_impl_vulkan.h>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <ufbx.h>
@@ -2456,6 +2457,21 @@ glm::vec3 SceneRenderer::GetMesh3DWorldPosition(size_t i) const {
   return glm::vec3(GetMesh3DWorldTRS(i)[3]);
 }
 
+bool SceneRenderer::GetMesh3DLocalBounds(size_t i, glm::vec3 &min,
+                                         glm::vec3 &max) const {
+  if (i >= meshes3d.size() || meshes3d[i].cpuPositions.empty())
+    return false;
+  const glm::mat4 &fit = meshes3d[i].autoFit;
+  min = glm::vec3(std::numeric_limits<float>::max());
+  max = -min;
+  for (const glm::vec3 &p : meshes3d[i].cpuPositions) {
+    const glm::vec3 q(fit * glm::vec4(p, 1.0f));
+    min = glm::min(min, q);
+    max = glm::max(max, q);
+  }
+  return true;
+}
+
 glm::vec3 SceneRenderer::Mesh3DLocalDirToWorld(size_t i,
                                                const glm::vec3 &localDir) const {
   if (i >= meshes3d.size() || meshes3d[i].parent < 0)
@@ -3410,6 +3426,7 @@ SceneRenderer::EditorSnapshot SceneRenderer::CaptureEditorSnapshot() const {
     entity.drag = mesh.drag;
     entity.gravityY = mesh.gravityY;
     entity.velocity = mesh.velocity;
+    entity.collider = mesh.collider;
 
     entity.audio = mesh.audio;
     entity.video = mesh.video;
@@ -3559,6 +3576,7 @@ bool SceneRenderer::RestoreEditorSnapshot(const EditorSnapshot &snapshot) {
     mesh.drag = entity.drag;
     mesh.gravityY = entity.gravityY;
     mesh.velocity = entity.velocity;
+    mesh.collider = entity.collider;
     mesh.audio = entity.audio;
     mesh.video = entity.video;
     mesh.dialog = entity.dialog;
@@ -4121,6 +4139,22 @@ void SceneRenderer::DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj) {
       addDashed(tip, back + up * 0.15f, col);
       addDashed(tip, back - up * 0.15f, col);
     }
+  }
+
+  // Collider wireframes: green solid, yellow trigger (solid lines).
+  std::vector<glm::vec3> colliderLines;
+  for (size_t mi = 0; mi < meshes3d.size(); ++mi) {
+    const Mesh3D &m = meshes3d[mi];
+    if (!m.collider.enabled || m.isLight || m.isCamera)
+      continue;
+    colliderLines.clear();
+    ilmeee::AppendShapeWireframe(
+        ilmeee::MakeWorldShape(m.collider, GetMesh3DWorldTRS(mi)),
+        colliderLines);
+    const glm::vec3 col = m.collider.isTrigger ? glm::vec3(1.0f, 0.85f, 0.25f)
+                                               : glm::vec3(0.35f, 1.0f, 0.45f);
+    for (const glm::vec3 &p : colliderLines)
+      verts.push_back({p, col});
   }
 
   if (verts.empty()) {

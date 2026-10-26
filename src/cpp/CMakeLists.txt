@@ -57,6 +57,8 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/DialogSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementScript.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/MovementRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PhysicsWorld.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/PhysicsRuntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/UserMovementScripts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/ScriptWorkspace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_engine/NativeScripts.cpp

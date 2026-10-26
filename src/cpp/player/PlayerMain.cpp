@@ -364,6 +364,7 @@ protected:
                            ? ilmeee::FrozenMovementInput(input_)
                            : input_,
                        deltaTime);
+      physics_.Update(*renderer_, std::max(0.0f, deltaTime), &movement_);
       dialog_.Update(*renderer_, gameUi_, input_, deltaTime);
     }
     if (!paused_ && error_.empty()) {
@@ -491,6 +492,7 @@ private:
   ilmeee::DialogSystem dialog_;
   bool paused_ = false;
   ilmeee::MovementSystem movement_;
+  ilmeee::PhysicsSystem physics_;
   ilmeee::NativeScripts native_;
   ilmeee::NativeScriptSceneContext nativeContext_;
   ilmeee::MediaSystem media_;

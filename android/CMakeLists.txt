@@ -58,6 +58,8 @@ add_library(main SHARED
     ${ENGINE_ROOT}/src/cpp/core_engine/DialogSystem.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/MovementScript.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/MovementRuntime.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/PhysicsWorld.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/PhysicsRuntime.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/UserMovementScripts.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/NativeScripts.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/NativeScriptScene.cpp

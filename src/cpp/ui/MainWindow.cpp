@@ -198,6 +198,7 @@ void MainWindow::OnUpdate(float deltaTime) {
   // restores the transforms (camera included) on Stop.
   if (gameWasStopped && !builder.IsStopped()) {
     movementSystem.Reset();
+    physicsSystem.Reset();
     if (sceneRenderer) sceneRenderer->ResetAnimations();
     // Scripts and dialogs change the Canvas during Play; Stop restores it.
     gameUiBeforePlay = gameUi;
@@ -227,6 +228,8 @@ void MainWindow::OnUpdate(float deltaTime) {
                               ? ilmeee::FrozenMovementInput(gameMovementInput)
                               : gameMovementInput,
                           std::max(0.0f, deltaTime));
+    physicsSystem.Update(*sceneRenderer, std::max(0.0f, deltaTime),
+                         &movementSystem);
     dialogSystem.Update(*sceneRenderer, gameUi, gameMovementInput, deltaTime);
   }
   if (builder.IsPlaying()) {
