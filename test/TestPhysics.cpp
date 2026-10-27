@@ -153,6 +153,8 @@ int main() {
     CHECK(Near(ball.shape.center.y, 0.5f));
     CHECK(std::fabs(ball.velocity.y) < 0.05f);
     CHECK(ball.grounded);
+    CHECK(world.Collisions().size() == 1);
+    CHECK(world.Collisions()[0].first == 0 && world.Collisions()[0].second == 1);
     CHECK(world.bodies[0].shape.center.y == -0.5f); // static never moves
   }
 
@@ -259,6 +261,7 @@ int main() {
     world.Step(1.0f / 60.0f);
     CHECK(world.Triggers().size() == 1);
     CHECK(world.Triggers()[0].first == 0 && world.Triggers()[0].second == 1);
+    CHECK(world.Collisions().empty());
     CHECK(world.bodies[1].displacement == glm::vec3(0.0f));
   }
 

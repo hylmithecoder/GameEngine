@@ -8,9 +8,9 @@ menjalankannya saat Play. Header SDK:
 |---|---|
 | `core_engine/core/Component.hpp` | `Component`, `ScriptProperties` (include ini saja) |
 | `core_engine/script/GameObject.hpp` | `Vec3`, `Transform`, `GameObject`, `GameObjectRef`, `ObjectRef<T>` |
-| `core_engine/script/SceneObjects.hpp` | `AudioGameObject`, `VideoPlayerGameObject`, `LightGameObject`, `CameraGameObject`, `UiGameObject`, `UiTextGameObject`, `UiImageGameObject`, `UiButtonGameObject`, `TextGameObject`, `DialogGameObject` |
+| `core_engine/script/SceneObjects.hpp` | `AudioGameObject`, `VideoPlayerGameObject`, `LightGameObject`, `CameraGameObject`, `UiGameObject`, `UiTextGameObject`, `UiImageGameObject`, `UiButtonGameObject`, `TextGameObject`, `DialogGameObject`, `PhysicsGameObject`, `ColliderGameObject` |
 
-Versi API: `ilmeee::script::kApiVersion = 5`. Script yang di-compile untuk
+Versi API: `ilmeee::script::kApiVersion = 6`. Script yang di-compile untuk
 versi lain ditolak, cukup tekan **Recompile**.
 
 ## Kerangka script
@@ -63,6 +63,12 @@ void spherecontroller::Update(float deltaTime) {
 | `Awake()`, `Start()` | Dipanggil sekali saat Play dimulai |
 | `Update(float deltaTime)` | Tiap frame selama Play (bukan saat Pause) |
 | `OnEnable()`, `OnDisable()` | Saat script aktif / berhenti |
+| `OnTriggerEnter(GameObject other)` | Saat mulai overlap dengan collider bertipe **Is Trigger** (dipanggil di kedua pihak) |
+| `OnTriggerStay(GameObject other)` | Selama masih overlap dengan trigger |
+| `OnTriggerExit(GameObject other)` | Saat keluar dari trigger |
+| `OnCollisionEnter(GameObject other)` | Saat mulai bersentuhan antar collider solid (non-trigger) |
+| `OnCollisionStay(GameObject other)` | Selama collider solid masih bersentuhan |
+| `OnCollisionExit(GameObject other)` | Saat collider solid berpisah |
 | `DescribeProperties(ScriptProperties&)` | Daftar field yang tampil di Inspector |
 | `Log(msg)` | Console > Output, awalan `[Script]` |
 | `LogWarning(msg)` | Sama, dengan `[WARNING]` |
@@ -357,6 +363,40 @@ Object yang punya komponen **Dialog** (lihat di bawah).
 | `Get/SetRange(float)` | Jarak interaksi |
 | `Get/SetSpeed(float)` | Huruf per detik, 0 = langsung tampil |
 
+### PhysicsGameObject
+
+Object yang punya komponen **Physics Body** (atau karakter dengan **Movement Script** untuk mengecek `IsGrounded()`).
+
+| Fungsi | Keterangan |
+|---|---|
+| `IsEnabled()` / `SetEnabled(bool)` | Aktif/nonaktifkan Physics Body |
+| `Get/SetUseGravity(bool)` | Gravitasi aktif atau tidak |
+| `IsKinematic()` / `SetKinematic(bool)` | Kinematic (digerakkan script, mendorong objek lain) atau Dynamic |
+| `Get/SetMass(float)` | Massa (kg, > 0..100000) |
+| `Get/SetDrag(float)` | Redaman kecepatan (0..1000) |
+| `Get/SetGravityY(float)` | Percepatan gravitasi sumbu Y (-1000..1000) |
+| `Get/SetVelocity(Vec3)` | Kecepatan linear (m/s) |
+| `AddImpulse(Vec3)` | Dorongan instan (`impulse / mass`) pada body Dynamic |
+| `AddForce(Vec3)` | Gaya kontinu (`force / mass * dt`) untuk step physics berikutnya |
+| `IsGrounded()` | `true` bila objek berpijak di atas collider solid |
+
+### ColliderGameObject
+
+Object yang punya komponen **Collider** (Box, Sphere, Capsule, atau Trigger).
+
+| Fungsi | Keterangan |
+|---|---|
+| `IsEnabled()` / `SetEnabled(bool)` | Aktif/nonaktifkan Collider |
+| `IsTrigger()` / `SetTrigger(bool)` | Sensor overlap (`true`) atau penghalang solid (`false`) |
+| `GetShape()` / `SetShape(ColliderGameObject::Shape)` | `Box`, `Sphere`, `Capsule` |
+| `Get/SetCenter(Vec3)` | Offset pusat collider di ruang lokal |
+| `Get/SetSize(Vec3)` | Ukuran penuh Box |
+| `Get/SetRadius(float)` | Jari-jari Sphere / Capsule |
+| `Get/SetHeight(float)` | Tinggi total Capsule |
+| `Get/SetFriction(float)` | Gesekan (0..1) |
+| `Get/SetBounciness(float)` | Pantulan (0..1) |
+| `FitToMesh()` | Sesuaikan ukuran collider dengan batas mesh lokal |
+
 ## Komponen Dialog (bawaan engine)
 
 Tambahkan lewat **Add Component > Dialog** pada karakter (object apa pun).
@@ -498,7 +538,8 @@ void Menu::Update(float) {
 Nama class script tidak boleh berupa keyword C++ atau nama SDK:
 `Component`, `Vec3`, `Transform`, `GameObject`, `GameObjectRef`,
 `ObjectRef`, `AudioGameObject`, `VideoPlayerGameObject`, `LightGameObject`,
-`CameraGameObject`, `UiGameObject`, `DialogGameObject`, `ScriptProperties`.
+`CameraGameObject`, `UiGameObject`, `DialogGameObject`, `PhysicsGameObject`,
+`ColliderGameObject`, `ScriptProperties`.
 
 Alias pendek (`Vec3`, `AudioGameObject`, ...) hanya ada saat compile script
 (`-DILMEEE_SCRIPT_BUILD`). Di kode engine, pakai `ilmeee::script::...`.
@@ -522,24 +563,41 @@ PMX, mis. `{"index": 12, "clip": "assets/animations/PhysicsDemo.ilmeeeanim"}`.
 
 `list_components {"index": 3}` menampilkan komponen yang terpasang (field
 script beserta tipe dan nilainya), tipe yang bisa ditambah, nama movement
-script, dan script C++ project (`ready` = sudah ter-compile).
+script, dan script C++ project (`ready` = sudah ter-compile, `diagnostics` =
+pesan error compiler bila gagal).
 `add_component` memasang komponen, atau mengubahnya kalau sudah ada (hanya
 property yang dikirim yang berubah); `remove_component` melepasnya. Tipe:
-`movement`, `physics`, `audio_source`, `video_player`, `dialog`, `animation`,
-`spring_bones`, `script`.
+`movement`, `physics`, `collider`, `audio_source`, `video_player`, `dialog`,
+`animation`, `spring_bones`, `script`.
 
 ```json
 {"index": 3, "type": "movement",
  "properties": {"script": "Camera Relative", "speed": 4,
                 "camera": 1, "cameraStyle": "third_person"}}
+{"index": 3, "type": "collider",
+ "properties": {"shape": "box", "isTrigger": true, "bounciness": 0.5}}
 {"index": 3, "type": "script",
- "properties": {"source": "scripts/Door.cpp",
+ "properties": {"source": "assets/scripts/Door.cpp",
                 "values": {"openAngle": 90, "target": 5}}}
 ```
 
 Field GameObject menerima index scene object, nama elemen UI, atau `null`.
 Untuk `remove_component` tipe `script`, kirim `"script": "Door"` (nama class
 atau path source). Semua perubahan butuh Play dihentikan, lalu `save_scene`.
+
+### Authoring C++ Script lewat MCP
+
+Agent MCP sekarang bisa membuat, membaca, mengedit, meng-compile, dan langsung
+memasang script C++ tanpa perlu membuka IDE eksternal:
+
+| Tool | Parameter utama | Hasil |
+| --- | --- | --- |
+| `list_scripts` | *(tidak ada)* | Daftar semua script di `assets/scripts/` (`className`, `source`, `header`, `ready`, `diagnostics`, `fields`, `attachedTo`) |
+| `get_script` | `name` (`"Door"` atau `"assets/scripts/Door.cpp"`) | Metadata script + isi `headerContent` (`.hpp`) dan `sourceContent` (`.cpp`) |
+| `create_script` | `name`; opsional `header`, `source`, `attachTo`, `overwrite` | Membuat `.hpp`/`.cpp` (dari template bawaan atau kode custom), compile sinkron, dan opsional langsung attach ke objek `attachTo` |
+| `edit_script` | `name`; minimal salah satu `header` atau `source` | Memperbarui `.hpp`/`.cpp`, compile ulang sinkron, dan mengembalikan `ok`, `ready`, `diagnostics`, serta `fields` terbaru |
+
+Semua nama script divalidasi (`[a-zA-Z][a-zA-Z0-9_]*`, bukan keyword/SDK, maks. 256 KiB per file, menolak symlink). Bila compile gagal, `ok: false` dan `diagnostics` berisi output error compiler sehingga agent MCP bisa langsung memperbaiki kode lewat `edit_script`.
 
 ### Animation authoring lewat MCP
 

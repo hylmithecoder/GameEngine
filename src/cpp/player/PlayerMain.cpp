@@ -167,7 +167,7 @@ protected:
     media_.SetProjectRoot(root_);
     native_.log = [](const std::string &line) { SDL_Log("%s", line.c_str()); };
     nativeContext_ = {renderer_.get(), &input_, &media_, native_.log,
-                      &gameUi_, &dialog_};
+                      &gameUi_, &dialog_, &physics_};
     // The Canvas is loaded before scripts so their Start() can use it.
     gameUi_ = ilmeee::GameUI{};
     if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
@@ -368,6 +368,7 @@ protected:
       dialog_.Update(*renderer_, gameUi_, input_, deltaTime);
     }
     if (!paused_ && error_.empty()) {
+      ilmeee::ScriptSceneDispatchPhysics(nativeContext_, native_);
       native_.Update(deltaTime);
       ilmeee::ScriptSceneEndFrame(nativeContext_);
       if (renderer_) renderer_->UpdateAnimations(std::max(0.0f, deltaTime));

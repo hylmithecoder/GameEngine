@@ -3,7 +3,7 @@
 #include <string>
 
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 5;
+inline constexpr uint32_t kApiVersion = 6;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {
@@ -32,6 +32,8 @@ enum class ObjectKind : uint32_t {
   UiText = 1u << 7,
   UiImage = 1u << 8,
   UiButton = 1u << 9,
+  Physics = 1u << 10,  // Physics Body component (API 6)
+  Collider = 1u << 11, // Collider component (API 6)
 };
 // Component data reached through HostApi::get*/set*. Append only: the
 // values are part of the script ABI.
@@ -91,6 +93,26 @@ enum class Prop : uint32_t {
   TextAlpha,      // float
   TextVisible,    // bool
   TextAlignment,  // float: 0 left, 1 center, 2 right
+  // API 6: Physics Body and Collider components.
+  PhysicsEnabled,     // bool
+  PhysicsUseGravity,  // bool
+  PhysicsKinematic,   // bool
+  PhysicsMass,        // float, > 0..100000
+  PhysicsDrag,        // float, 0..1000
+  PhysicsGravityY,    // float, -1000..1000
+  PhysicsVelocity,    // Vec3
+  PhysicsImpulse,     // Vec3, write-only
+  PhysicsForce,       // Vec3, write-only
+  PhysicsGrounded,    // bool, read-only
+  ColliderEnabled,    // bool
+  ColliderTrigger,    // bool
+  ColliderShape,      // float: 0 box, 1 sphere, 2 capsule
+  ColliderCenter,     // Vec3
+  ColliderSize,       // Vec3
+  ColliderRadius,     // float
+  ColliderHeight,     // float
+  ColliderFriction,   // float, 0..1
+  ColliderBounciness, // float, 0..1
 };
 enum class Command : uint32_t {
   AudioPlay,
@@ -100,6 +122,7 @@ enum class Command : uint32_t {
   DialogStart, // API 3
   DialogNext,
   DialogStop,
+  ColliderFit, // API 6
 };
 // Only the editor/player calls these callbacks, on its scene thread.
 struct HostApi {

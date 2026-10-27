@@ -5,7 +5,9 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <set>
 #include <unordered_map>
+#include <utility>
 
 namespace ilmeee {
 struct ScriptCompileOptions {
@@ -42,6 +44,7 @@ public:
   ~NativeScripts();
   bool Configure(const ScriptCompileOptions &options);
   void CompileAll();
+  CompiledScript CompileAndLoad(const std::string &source);
   void Poll();
   bool IsCompiling() const;
   bool Ready(const std::string &source) const;
@@ -50,6 +53,9 @@ public:
   std::vector<ScriptValue> Properties(const NativeScriptBinding &binding) const;
   bool Load(const CompiledScript &script, std::string &error);
   void Start(script::HostApi host, const std::vector<ScriptOwner> &owners);
+  void DispatchPhysicsEvents(
+      const std::vector<std::pair<uint64_t, uint64_t>> &triggers,
+      const std::vector<std::pair<uint64_t, uint64_t>> &collisions);
   void Update(float deltaTime);
   void Stop();
   std::function<void(const std::string &)> log;
@@ -67,6 +73,8 @@ private:
   std::unordered_map<std::string, std::shared_ptr<Module>> modules_;
   std::unordered_map<std::string, std::string> errors_;
   std::vector<std::unique_ptr<Instance>> instances_;
+  std::set<std::pair<uint64_t, uint64_t>> activeTriggers_;
+  std::set<std::pair<uint64_t, uint64_t>> activeCollisions_;
   script::HostApi host_;
 };
 } // namespace ilmeee

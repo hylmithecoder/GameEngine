@@ -317,13 +317,31 @@ json ToolList() {
       "collider {shape (box|sphere|capsule), center [x,y,z], size [x,y,z] (box), radius, height (capsule), isTrigger, friction 0..1, bounciness 0..1, fit (true = size to the mesh; new colliders fit by default)} - collider alone = static, + physics = dynamic/kinematic, + movement = character; "
       "audio_source {clip, volume, loop, playOnStart, spatial, minDistance, maxDistance}; "
       "video_player {clip, loop, playOnStart, volume, unlit, surface}; "
-      "script {source (.cpp path or class name, required), enabled, values {field: value}; GameObject fields take an object index, a UI element name or null}; "
+      "script {source (.cpp path or class name, required; create/edit with create_script/edit_script), enabled, values {field: value}; GameObject fields take an object index, a UI element name or null}; "
       "dialog/animation/spring_bones take the same fields as set_dialog/set_animation/set_spring_bones (animation needs clip or controller; spring_bones defaults to auto setup).",
       ObjectSchema({{"index", index}, {"type", componentType},
                     {"properties", {{"type", "object"}}}}, {"index", "type"}));
   add("remove_component", "Remove a component from a scene object in the stopped editor; records Undo. For type script give script = source path or class name.",
       ObjectSchema({{"index", index}, {"type", componentType}, {"script", {{"type", "string"}}}},
                    {"index", "type"}));
+  const json scriptName = {{"type", "string"}, {"minLength", 1}, {"maxLength", 128},
+                           {"description", "C++ script class name (e.g. \"Door\") or project-relative path under assets/scripts/"}};
+  add("list_scripts", "List C++ native scripts in assets/scripts/ with compile status (ready), compiler diagnostics, exposed Inspector fields (name, type, default value) and which scene objects attach each script.",
+      ObjectSchema());
+  add("get_script", "Read the .hpp and .cpp source of a project C++ script in assets/scripts/, plus its compile status, diagnostics and exposed Inspector fields.",
+      ObjectSchema({{"name", scriptName}}, {"name"}));
+  add("create_script", "Create a C++ Native Script (assets/scripts/<name>.hpp and .cpp) in the stopped editor, immediately compile and validate it, and optionally attach it to a scene object. Omit header and source to generate the default Component template; when supplying custom code, provide both header and source. Scripts derive from Component (#include <core_engine/core/Component.hpp>) and can override Start, Update(float), OnTriggerEnter/Stay/Exit(GameObject), OnCollisionEnter/Stay/Exit(GameObject), DescribeProperties(ScriptProperties&) and use PhysicsGameObject, ColliderGameObject, AudioGameObject, DialogGameObject, etc. Existing files require overwrite=true.",
+      ObjectSchema({{"name", scriptName},
+                    {"header", {{"type", "string"}, {"description", "Contents for assets/scripts/<name>.hpp"}}},
+                    {"source", {{"type", "string"}, {"description", "Contents for assets/scripts/<name>.cpp"}}},
+                    {"overwrite", {{"type", "boolean"}}},
+                    {"attachTo", {{"type", "integer"}, {"minimum", 0}, {"description", "Optional scene object index to attach the script to when compilation succeeds"}}}},
+                   {"name"}));
+  add("edit_script", "Update the .hpp and/or .cpp source of an existing C++ script in assets/scripts/ (stopped editor), immediately recompile and validate it, and return ready status, compiler diagnostics and exposed Inspector fields.",
+      ObjectSchema({{"name", scriptName},
+                    {"header", {{"type", "string"}, {"description", "New contents for the .hpp file"}}},
+                    {"source", {{"type", "string"}, {"description", "New contents for the .cpp file"}}}},
+                   {"name"}));
   add("get_skeleton", "Inspect a skinned scene object's bones, humanoid roles, groups and available generated motion types. Use @role in authoring. Bind positions are model-space; keys use local Euler degrees. Paginated bones; roles/groups cover the full rig.",
       ObjectSchema({{"index", index}, {"group", {{"type", "string"}}}, {"contains", {{"type", "string"}}},
                     {"offset", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100000}}},

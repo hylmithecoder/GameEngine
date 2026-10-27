@@ -264,6 +264,100 @@ public:
     return SetFloat(Prop::DialogSpeed, charsPerSecond);
   }
 };
+
+// An object with a Physics Body component (gravity, velocity, forces) or a
+// character driven by a Movement Script (IsGrounded).
+class PhysicsGameObject : public GameObject {
+public:
+  PhysicsGameObject() = default;
+  explicit PhysicsGameObject(const GameObject &object) : GameObject(object) {}
+  bool IsValid() const {
+    return GameObject::IsValid() && Is(ObjectKind::Physics);
+  }
+  bool IsEnabled() const { return GetBool(Prop::PhysicsEnabled); }
+  bool SetEnabled(bool value) const {
+    return SetBool(Prop::PhysicsEnabled, value);
+  }
+  bool GetUseGravity() const { return GetBool(Prop::PhysicsUseGravity); }
+  bool SetUseGravity(bool value) const {
+    return SetBool(Prop::PhysicsUseGravity, value);
+  }
+  bool IsKinematic() const { return GetBool(Prop::PhysicsKinematic); }
+  bool SetKinematic(bool value) const {
+    return SetBool(Prop::PhysicsKinematic, value);
+  }
+  float GetMass() const { return GetFloat(Prop::PhysicsMass); }
+  bool SetMass(float value) const {
+    return SetFloat(Prop::PhysicsMass, value);
+  }
+  float GetDrag() const { return GetFloat(Prop::PhysicsDrag); }
+  bool SetDrag(float value) const {
+    return SetFloat(Prop::PhysicsDrag, value);
+  }
+  float GetGravityY() const { return GetFloat(Prop::PhysicsGravityY); }
+  bool SetGravityY(float value) const {
+    return SetFloat(Prop::PhysicsGravityY, value);
+  }
+  Vec3 GetVelocity() const { return GetVec3(Prop::PhysicsVelocity); }
+  bool SetVelocity(Vec3 velocity) const {
+    return SetVec3(Prop::PhysicsVelocity, velocity);
+  }
+  // Instant velocity change (impulse / mass) on a non-kinematic Dynamic body.
+  bool AddImpulse(Vec3 impulse) const {
+    return SetVec3(Prop::PhysicsImpulse, impulse);
+  }
+  // Force integrated on the next physics step (force / mass * dt).
+  bool AddForce(Vec3 force) const { return SetVec3(Prop::PhysicsForce, force); }
+  bool IsGrounded() const { return GetBool(Prop::PhysicsGrounded); }
+};
+
+// An object with a Collider component (Box, Sphere, Capsule, or trigger zone).
+class ColliderGameObject : public GameObject {
+public:
+  enum class Shape { Box = 0, Sphere = 1, Capsule = 2 };
+  ColliderGameObject() = default;
+  explicit ColliderGameObject(const GameObject &object) : GameObject(object) {}
+  bool IsValid() const {
+    return GameObject::IsValid() && Is(ObjectKind::Collider);
+  }
+  bool IsEnabled() const { return GetBool(Prop::ColliderEnabled); }
+  bool SetEnabled(bool value) const {
+    return SetBool(Prop::ColliderEnabled, value);
+  }
+  bool IsTrigger() const { return GetBool(Prop::ColliderTrigger); }
+  bool SetTrigger(bool value) const {
+    return SetBool(Prop::ColliderTrigger, value);
+  }
+  Shape GetShape() const {
+    return static_cast<Shape>(static_cast<int>(GetFloat(Prop::ColliderShape)));
+  }
+  bool SetShape(Shape shape) const {
+    return SetFloat(Prop::ColliderShape, static_cast<float>(shape));
+  }
+  Vec3 GetCenter() const { return GetVec3(Prop::ColliderCenter); }
+  bool SetCenter(Vec3 center) const {
+    return SetVec3(Prop::ColliderCenter, center);
+  }
+  Vec3 GetSize() const { return GetVec3(Prop::ColliderSize); }
+  bool SetSize(Vec3 size) const { return SetVec3(Prop::ColliderSize, size); }
+  float GetRadius() const { return GetFloat(Prop::ColliderRadius); }
+  bool SetRadius(float radius) const {
+    return SetFloat(Prop::ColliderRadius, radius);
+  }
+  float GetHeight() const { return GetFloat(Prop::ColliderHeight); }
+  bool SetHeight(float height) const {
+    return SetFloat(Prop::ColliderHeight, height);
+  }
+  float GetFriction() const { return GetFloat(Prop::ColliderFriction); }
+  bool SetFriction(float value) const {
+    return SetFloat(Prop::ColliderFriction, value);
+  }
+  float GetBounciness() const { return GetFloat(Prop::ColliderBounciness); }
+  bool SetBounciness(float value) const {
+    return SetFloat(Prop::ColliderBounciness, value);
+  }
+  bool FitToMesh() const { return Run(Command::ColliderFit); }
+};
 } // namespace ilmeee::script
 
 // Short names for project scripts only; engine code has its own GameObject.
@@ -281,5 +375,7 @@ using UiImageGameObject = ilmeee::script::UiImageGameObject;
 using UiButtonGameObject = ilmeee::script::UiButtonGameObject;
 using TextGameObject = ilmeee::script::TextGameObject;
 using DialogGameObject = ilmeee::script::DialogGameObject;
+using PhysicsGameObject = ilmeee::script::PhysicsGameObject;
+using ColliderGameObject = ilmeee::script::ColliderGameObject;
 template <class T> using ObjectRef = ilmeee::script::ObjectRef<T>;
 #endif

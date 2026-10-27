@@ -32,7 +32,57 @@ bool DrivenByMovementScript(const SceneRenderer::Mesh3D &mesh) {
 void PhysicsSystem::Reset() {
   world_.bodies.clear();
   velocities_.clear();
+  pendingForces_.clear();
+  grounded_.clear();
   accumulator_ = 0.0f;
+}
+
+glm::vec3 PhysicsSystem::GetVelocity(size_t index) const {
+  const auto it = velocities_.find(index);
+  return it != velocities_.end() ? it->second : glm::vec3(0.0f);
+}
+
+bool PhysicsSystem::SetVelocity(SceneRenderer &renderer, size_t index,
+                                const glm::vec3 &velocity) {
+  if (index >= renderer.GetMesh3DCount() || !Finite(velocity))
+    return false;
+  auto &mesh = renderer.meshes3d[index];
+  if (mesh.isLight || mesh.isCamera || !mesh.hasPhysics)
+    return false;
+  velocities_[index] = velocity;
+  mesh.velocity = velocity;
+  return true;
+}
+
+bool PhysicsSystem::AddImpulse(SceneRenderer &renderer, size_t index,
+                               const glm::vec3 &impulse) {
+  if (index >= renderer.GetMesh3DCount() || !Finite(impulse))
+    return false;
+  auto &mesh = renderer.meshes3d[index];
+  if (mesh.isLight || mesh.isCamera || !mesh.hasPhysics || mesh.isKinematic ||
+      DrivenByMovementScript(mesh))
+    return false;
+  const float invMass = 1.0f / std::max(mesh.mass, 1e-4f);
+  velocities_[index] += impulse * invMass;
+  mesh.velocity = velocities_[index];
+  return true;
+}
+
+bool PhysicsSystem::AddForce(SceneRenderer &renderer, size_t index,
+                             const glm::vec3 &force) {
+  if (index >= renderer.GetMesh3DCount() || !Finite(force))
+    return false;
+  const auto &mesh = renderer.meshes3d[index];
+  if (mesh.isLight || mesh.isCamera || !mesh.hasPhysics || mesh.isKinematic ||
+      DrivenByMovementScript(mesh))
+    return false;
+  pendingForces_[index] += force;
+  return true;
+}
+
+bool PhysicsSystem::IsGrounded(size_t index) const {
+  const auto it = grounded_.find(index);
+  return it != grounded_.end() && it->second;
 }
 
 void PhysicsSystem::Update(SceneRenderer &renderer, float deltaSeconds,
@@ -78,11 +128,14 @@ void PhysicsSystem::Step(SceneRenderer &renderer, float deltaSeconds,
       body.drag = mesh.drag;
       body.gravity = mesh.useGravity ? glm::vec3(0.0f, mesh.gravityY, 0.0f)
                                      : glm::vec3(0.0f);
+      if (auto fit = pendingForces_.find(i); fit != pendingForces_.end())
+        body.gravity += fit->second * body.inverseMass;
       if (auto it = velocities_.find(i); it != velocities_.end())
         body.velocity = it->second;
     }
     world_.bodies.push_back(body);
   }
+  pendingForces_.clear();
   // A child collider rides on its parent; they must not push each other.
   world_.ignorePair = [&renderer](size_t a, size_t b) {
     return IsAncestor(renderer, a, b) || IsAncestor(renderer, b, a);
@@ -90,10 +143,14 @@ void PhysicsSystem::Step(SceneRenderer &renderer, float deltaSeconds,
   world_.Step(deltaSeconds);
   world_.ignorePair = nullptr;
 
+  grounded_.clear();
   for (const PhysicsBody &body : world_.bodies) {
     const size_t i = body.owner;
-    if (body.type == BodyType::Dynamic)
+    grounded_[i] = body.grounded;
+    if (body.type == BodyType::Dynamic) {
       velocities_[i] = Finite(body.velocity) ? body.velocity : glm::vec3(0.0f);
+      renderer.meshes3d[i].velocity = velocities_[i];
+    }
     if (body.type != BodyType::Dynamic && body.type != BodyType::Character)
       continue;
     glm::vec3 local = renderer.GetMesh3DPosition(i);

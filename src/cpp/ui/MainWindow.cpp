@@ -207,6 +207,7 @@ void MainWindow::OnUpdate(float deltaTime) {
     nativeScriptContext.media = &media;
     nativeScriptContext.ui = &gameUi;
     nativeScriptContext.dialog = &dialogSystem;
+    nativeScriptContext.physics = &physicsSystem;
     nativeScriptContext.previousKeys = 0;
     if (sceneRenderer) {
       dialogSystem.SetProjectRoot(projectHandler.projectPath);
@@ -233,6 +234,7 @@ void MainWindow::OnUpdate(float deltaTime) {
     dialogSystem.Update(*sceneRenderer, gameUi, gameMovementInput, deltaTime);
   }
   if (builder.IsPlaying()) {
+    ilmeee::ScriptSceneDispatchPhysics(nativeScriptContext, nativeScripts);
     nativeScripts.Update(deltaTime);
     ilmeee::ScriptSceneEndFrame(nativeScriptContext);
     if (sceneRenderer) sceneRenderer->UpdateAnimations(std::max(0.0f, deltaTime));

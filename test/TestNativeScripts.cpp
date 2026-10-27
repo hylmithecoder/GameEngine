@@ -485,6 +485,137 @@ public:
   CHECK(world.log.size() == 2 && world.log[0] == "pressed" &&
         world.log[1] == "clicked");
   runtime.Stop();
+  // API 6: PhysicsGameObject, ColliderGameObject and Trigger/Collision events.
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "Bouncer", error));
+  Write(project / "assets/scripts/Bouncer.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Bouncer : public Component {
+public:
+  ObjectRef<PhysicsGameObject> body;
+  ObjectRef<ColliderGameObject> sensor;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Body", body);
+    p.Field("Sensor", sensor);
+  }
+  void Start() override {
+    if (body.IsValid() && body.Get().IsGrounded()) {
+      body.Get().AddImpulse({0, 5, 0});
+      body.Get().AddForce({1, 0, 0});
+    }
+    if (sensor.IsValid() && sensor.Get().IsTrigger()) {
+      sensor.Get().SetShape(ColliderGameObject::Shape::Sphere);
+      sensor.Get().SetRadius(2.5f);
+      sensor.Get().FitToMesh();
+    }
+  }
+  void OnTriggerEnter(GameObject other) override {
+    Log("trig_enter:" + std::to_string(other.Id()));
+  }
+  void OnTriggerStay(GameObject other) override {
+    Log("trig_stay:" + std::to_string(other.Id()));
+  }
+  void OnTriggerExit(GameObject other) override {
+    Log("trig_exit:" + std::to_string(other.Id()));
+  }
+  void OnCollisionEnter(GameObject other) override {
+    Log("col_enter:" + std::to_string(other.Id()));
+  }
+  void OnCollisionStay(GameObject other) override {
+    Log("col_stay:" + std::to_string(other.Id()));
+  }
+  void OnCollisionExit(GameObject other) override {
+    Log("col_exit:" + std::to_string(other.Id()));
+  }
+};
+)cpp");
+  Write(project / "assets/scripts/Bouncer.cpp", "#include \"Bouncer.hpp\"\n");
+  const auto bouncer =
+      ilmeee::CompileNativeScript(options, "assets/scripts/Bouncer.cpp");
+  if (!bouncer.ok)
+    std::fprintf(stderr, "%s\n", bouncer.diagnostics.c_str());
+  CHECK(bouncer.ok);
+  CHECK(runtime.Load(bouncer, error));
+  ilmeee::NativeScriptBinding bouncerBinding{"assets/scripts/Bouncer.cpp",
+                                             "Bouncer", true, {}};
+  bouncerBinding.values = runtime.Properties(bouncerBinding);
+  CHECK(bouncerBinding.values.size() == 2);
+  bouncerBinding.values[0].object = 300;
+  bouncerBinding.values[1].object = 400;
+  world.objects[42] = {};
+  world.objects[300] = {};
+  world.objects[400] = {};
+  world.log.clear();
+  static ilmeee::script::Vec3 lastImpulse{}, lastForce{};
+  static float colliderShape = 0, colliderRadius = 0;
+  static int fitCalls = 0;
+  host.kinds = [](void *, uint64_t id) -> uint32_t {
+    using ilmeee::script::ObjectKind;
+    if (id == 300)
+      return static_cast<uint32_t>(ObjectKind::Physics);
+    if (id == 400)
+      return static_cast<uint32_t>(ObjectKind::Collider);
+    return 0;
+  };
+  host.getBool = [](void *, uint64_t id, ilmeee::script::Prop prop, bool *out) {
+    if (id == 300 && prop == ilmeee::script::Prop::PhysicsGrounded) {
+      *out = true;
+      return true;
+    }
+    if (id == 400 && prop == ilmeee::script::Prop::ColliderTrigger) {
+      *out = true;
+      return true;
+    }
+    return false;
+  };
+  host.setVec3 = [](void *, uint64_t id, ilmeee::script::Prop prop,
+                    const ilmeee::script::Vec3 *v) {
+    if (id == 300 && prop == ilmeee::script::Prop::PhysicsImpulse) {
+      lastImpulse = *v;
+      return true;
+    }
+    if (id == 300 && prop == ilmeee::script::Prop::PhysicsForce) {
+      lastForce = *v;
+      return true;
+    }
+    return false;
+  };
+  host.setFloat = [](void *, uint64_t id, ilmeee::script::Prop prop,
+                     float value) {
+    if (id == 400 && prop == ilmeee::script::Prop::ColliderShape) {
+      colliderShape = value;
+      return true;
+    }
+    if (id == 400 && prop == ilmeee::script::Prop::ColliderRadius) {
+      colliderRadius = value;
+      return true;
+    }
+    return false;
+  };
+  host.command = [](void *, uint64_t id, ilmeee::script::Command command) {
+    if (id == 400 && command == ilmeee::script::Command::ColliderFit) {
+      ++fitCalls;
+      return true;
+    }
+    return false;
+  };
+  std::vector<ilmeee::NativeScriptBinding> bouncerBindings{bouncerBinding};
+  runtime.Start(host, {{42, &bouncerBindings}});
+  CHECK(lastImpulse.y == 5.0f && lastForce.x == 1.0f);
+  CHECK(colliderShape == 1.0f && colliderRadius == 2.5f && fitCalls == 1);
+  // Symmetric trigger & collision edge detection across frames.
+  runtime.DispatchPhysicsEvents({{400, 42}}, {{300, 42}});
+  CHECK(world.log ==
+        (std::vector<std::string>{"trig_enter:400", "col_enter:300"}));
+  world.log.clear();
+  runtime.DispatchPhysicsEvents({{400, 42}}, {{300, 42}});
+  CHECK(world.log ==
+        (std::vector<std::string>{"trig_stay:400", "col_stay:300"}));
+  world.log.clear();
+  runtime.DispatchPhysicsEvents({}, {});
+  CHECK(world.log ==
+        (std::vector<std::string>{"trig_exit:400", "col_exit:300"}));
+  runtime.Stop();
   CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "InvalidClass",
                                   error));
   Write(project / "assets/scripts/InvalidClass.hpp",
@@ -546,6 +677,16 @@ class AbiMismatch : public Component {};
   CHECK(asynchronous.Ready(source));
   CHECK(!asynchronous.Ready("assets/scripts/InvalidClass.cpp"));
   CHECK(!asynchronous.Diagnostics("assets/scripts/InvalidApi.cpp").empty());
+  CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "McpLive", error));
+  const auto liveOk =
+      asynchronous.CompileAndLoad("assets/scripts/McpLive.cpp");
+  CHECK(liveOk.ok && asynchronous.Ready("assets/scripts/McpLive.cpp"));
+  CHECK(asynchronous.Diagnostics("assets/scripts/McpLive.cpp").empty());
+  const auto liveBad =
+      asynchronous.CompileAndLoad("assets/scripts/InvalidApi.cpp");
+  CHECK(!liveBad.ok && !asynchronous.Ready("assets/scripts/InvalidApi.cpp"));
+  CHECK(asynchronous.Diagnostics("assets/scripts/InvalidApi.cpp")
+            .find("FunctionThatDoesNotExist") != std::string::npos);
   // Keep a runnable fixture for the real player's renderer/host smoke test.
   ilmeee::IlmeeeScene scene;
   ilmeee::SceneEntity owner;

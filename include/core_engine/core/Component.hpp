@@ -119,6 +119,18 @@ public:
   virtual void Update(float deltaTime) {}
   virtual void OnEnable() {}
   virtual void OnDisable() {}
+  virtual void OnTriggerEnter(ilmeee::script::GameObject other) { (void)other; }
+  virtual void OnTriggerStay(ilmeee::script::GameObject other) { (void)other; }
+  virtual void OnTriggerExit(ilmeee::script::GameObject other) { (void)other; }
+  virtual void OnCollisionEnter(ilmeee::script::GameObject other) {
+    (void)other;
+  }
+  virtual void OnCollisionStay(ilmeee::script::GameObject other) {
+    (void)other;
+  }
+  virtual void OnCollisionExit(ilmeee::script::GameObject other) {
+    (void)other;
+  }
   virtual void DescribeProperties(ScriptProperties &) {}
 
   // Coroutines (see script/Coroutine.hpp): run until the first co_await now,

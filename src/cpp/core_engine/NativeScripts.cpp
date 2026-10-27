@@ -492,6 +492,7 @@ struct NativeScripts::Module {
 struct NativeScripts::Instance {
   std::shared_ptr<Module> module;
   Component *component = nullptr;
+  uint64_t owner = 0;
   bool failed = false;
   ~Instance() {
     if (component)
@@ -546,6 +547,38 @@ void NativeScripts::CompileAll() {
   });
   if (log)
     log("[INFO] [Scripts] Compiling project scripts...");
+}
+CompiledScript NativeScripts::CompileAndLoad(const std::string &source) {
+  CompiledScript result;
+  result.source = source;
+  result.className = fs::path(source).stem().string();
+  if (options_.project.empty()) {
+    result.diagnostics = "No project is configured.";
+    return result;
+  }
+  if (active_) {
+    result.diagnostics = "Stop Play before compiling scripts.";
+    return result;
+  }
+  if (job_.valid()) {
+    job_.wait();
+    Poll();
+  }
+  std::string dbError;
+  WriteScriptCompilationDatabase(options_, dbError);
+  sourceRevision_ = ScriptRevision(options_.project);
+  lastScan_ = std::chrono::steady_clock::now();
+  result = CompileNativeScript(options_, source);
+  std::string error = result.diagnostics;
+  const bool ok = result.ok && Load(result, error);
+  result.ok = ok;
+  if (!ok)
+    result.diagnostics = error;
+  errors_[source] = ok ? "" : error;
+  if (log)
+    log(std::string(ok ? "[INFO] [Scripts] " : "[ERROR] [Scripts] ") + source +
+        (ok ? ": compiled and validated" : ": compile failed\n" + error));
+  return result;
 }
 void NativeScripts::Poll() {
   if (active_)
@@ -713,6 +746,7 @@ void NativeScripts::Start(script::HostApi host,
         instance->component = instance->module->create();
         if (!instance->component)
           throw std::runtime_error("Script factory returned no instance");
+        instance->owner = owner.id;
         instance->component->Bind(&host_, owner.id);
         ApplyProperties(*instance->component, binding, &host_);
         instance->component->Awake();
@@ -728,6 +762,56 @@ void NativeScripts::Start(script::HostApi host,
               ": unknown exception during initialization");
       }
     }
+}
+void NativeScripts::DispatchPhysicsEvents(
+    const std::vector<std::pair<uint64_t, uint64_t>> &triggers,
+    const std::vector<std::pair<uint64_t, uint64_t>> &collisions) {
+  if (!active_)
+    return;
+  const auto dispatch =
+      [&](const std::vector<std::pair<uint64_t, uint64_t>> &pairs,
+          std::set<std::pair<uint64_t, uint64_t>> &active,
+          void (Component::*onEnter)(script::GameObject),
+          void (Component::*onStay)(script::GameObject),
+          void (Component::*onExit)(script::GameObject)) {
+        std::set<std::pair<uint64_t, uint64_t>> current;
+        for (const auto &[a, b] : pairs) {
+          if (a != 0 && b != 0 && a != b) {
+            current.emplace(a, b);
+            current.emplace(b, a);
+          }
+        }
+        const auto call = [&](uint64_t ownerId, uint64_t otherId,
+                              void (Component::*fn)(script::GameObject)) {
+          for (auto &instance : instances_) {
+            if (instance->failed || instance->owner != ownerId)
+              continue;
+            try {
+              (instance->component->*fn)({otherId, &host_});
+            } catch (const std::exception &e) {
+              instance->failed = true;
+              if (log)
+                log(std::string("[ERROR] [Scripts] Event stopped: ") +
+                    e.what());
+            } catch (...) {
+              instance->failed = true;
+              if (log)
+                log("[ERROR] [Scripts] Event stopped: unknown exception");
+            }
+          }
+        };
+        for (const auto &[ownerId, otherId] : active)
+          if (!current.contains({ownerId, otherId}))
+            call(ownerId, otherId, onExit);
+        for (const auto &[ownerId, otherId] : current)
+          call(ownerId, otherId,
+               active.contains({ownerId, otherId}) ? onStay : onEnter);
+        active = std::move(current);
+      };
+  dispatch(triggers, activeTriggers_, &Component::OnTriggerEnter,
+           &Component::OnTriggerStay, &Component::OnTriggerExit);
+  dispatch(collisions, activeCollisions_, &Component::OnCollisionEnter,
+           &Component::OnCollisionStay, &Component::OnCollisionExit);
 }
 void NativeScripts::Update(float deltaTime) {
   if (!std::isfinite(deltaTime) || deltaTime <= 0)
@@ -752,6 +836,8 @@ void NativeScripts::Update(float deltaTime) {
 }
 void NativeScripts::Stop() {
   active_ = false;
+  activeTriggers_.clear();
+  activeCollisions_.clear();
   for (auto &instance : instances_) {
     try {
       instance->component->OnDisable();

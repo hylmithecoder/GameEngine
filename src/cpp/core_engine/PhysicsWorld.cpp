@@ -334,6 +334,7 @@ void AppendShapeWireframe(const PhysicsShape &shape,
 
 void PhysicsWorld::Step(float dt) {
   triggers_.clear();
+  collisions_.clear();
   if (!Finite(dt) || dt <= 0.0f) return;
   for (PhysicsBody &b : bodies) {
     b.displacement = glm::vec3(0.0f);
@@ -378,6 +379,10 @@ void PhysicsWorld::Step(float dt) {
       PhysicsBody &a = bodies[i], &b = bodies[j];
       Contact c;
       if (!Collide(a.shape, b.shape, c, kSkin)) continue;
+      if (std::find(collisions_.begin(), collisions_.end(),
+                    std::pair<size_t, size_t>{a.owner, b.owner}) ==
+          collisions_.end())
+        collisions_.emplace_back(a.owner, b.owner);
       const glm::vec3 n = c.normal;
       // Something below holds the body up (normal points up into it).
       if (n.y > 0.5f && Moves(b)) b.grounded = true;

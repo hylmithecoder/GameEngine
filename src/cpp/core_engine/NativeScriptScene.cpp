@@ -2,6 +2,7 @@
 #include "../../../include/core_engine/DialogSystem.hpp"
 #include "../../../include/core_engine/GameUI.hpp"
 #include "../../../include/core_engine/MediaSystem.hpp"
+#include "../../../include/core_engine/Physics.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -63,6 +64,12 @@ uint32_t Kinds(const SceneRenderer::Mesh3D &mesh) {
   if (mesh.dialog.enabled || !mesh.dialog.lines.empty() ||
       !mesh.dialog.file.empty())
     kinds |= static_cast<uint32_t>(ObjectKind::Dialog);
+  if (!mesh.isLight && !mesh.isCamera) {
+    if (mesh.hasPhysics || (mesh.movable && !mesh.movementScript.empty()))
+      kinds |= static_cast<uint32_t>(ObjectKind::Physics);
+    if (mesh.collider.enabled)
+      kinds |= static_cast<uint32_t>(ObjectKind::Collider);
+  }
   return kinds;
 }
 ObjectKind KindOf(Prop prop) {
@@ -77,7 +84,9 @@ ObjectKind KindOf(Prop prop) {
   if (prop <= Prop::UiClicked)
     return ObjectKind::Ui;
   if (prop <= Prop::DialogLine) return ObjectKind::Dialog;
-  return ObjectKind::WorldText;
+  if (prop <= Prop::TextAlignment) return ObjectKind::WorldText;
+  if (prop <= Prop::PhysicsGrounded) return ObjectKind::Physics;
+  return ObjectKind::Collider;
 }
 bool IsUi(Prop prop) { return KindOf(prop) == ObjectKind::Ui; }
 // The Dialog line/speaker, only while `mesh` owns the open dialog.
@@ -94,6 +103,9 @@ SceneRenderer::Mesh3D *Owner(void *ctx, uint64_t id, Prop prop) {
     return nullptr;
   auto &mesh =
       static_cast<NativeScriptSceneContext *>(ctx)->renderer->meshes3d[index];
+  if ((prop == Prop::PhysicsEnabled || prop == Prop::ColliderEnabled) &&
+      !mesh.isLight && !mesh.isCamera)
+    return &mesh;
   return Kinds(mesh) & static_cast<uint32_t>(KindOf(prop)) ? &mesh : nullptr;
 }
 float *FloatField(SceneRenderer::Mesh3D &mesh, Prop prop) {
@@ -128,6 +140,20 @@ float *FloatField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.worldText.size;
   case Prop::TextAlpha:
     return &mesh.worldText.color.a;
+  case Prop::PhysicsMass:
+    return &mesh.mass;
+  case Prop::PhysicsDrag:
+    return &mesh.drag;
+  case Prop::PhysicsGravityY:
+    return &mesh.gravityY;
+  case Prop::ColliderRadius:
+    return &mesh.collider.radius;
+  case Prop::ColliderHeight:
+    return &mesh.collider.height;
+  case Prop::ColliderFriction:
+    return &mesh.collider.friction;
+  case Prop::ColliderBounciness:
+    return &mesh.collider.bounciness;
   default:
     return nullptr;
   }
@@ -154,6 +180,16 @@ bool *BoolField(SceneRenderer::Mesh3D &mesh, Prop prop) {
     return &mesh.dialog.enabled;
   case Prop::TextVisible:
     return &mesh.worldText.visible;
+  case Prop::PhysicsEnabled:
+    return &mesh.hasPhysics;
+  case Prop::PhysicsUseGravity:
+    return &mesh.useGravity;
+  case Prop::PhysicsKinematic:
+    return &mesh.isKinematic;
+  case Prop::ColliderEnabled:
+    return &mesh.collider.enabled;
+  case Prop::ColliderTrigger:
+    return &mesh.collider.isTrigger;
   default:
     return nullptr;
   }
@@ -307,6 +343,10 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       *out = static_cast<float>(mesh->worldText.alignment);
       return true;
     }
+    if (prop == Prop::ColliderShape) {
+      *out = static_cast<float>(mesh->collider.shape);
+      return true;
+    }
     const float *field = FloatField(*mesh, prop);
     if (field)
       *out = *field;
@@ -344,9 +384,30 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       mesh->worldText.alignment = static_cast<int>(value);
       return true;
     }
+    if (prop == Prop::ColliderShape) {
+      if (value < 0 || value > 2 || std::floor(value) != value) return false;
+      mesh->collider.shape =
+          static_cast<ColliderShape>(static_cast<uint32_t>(value));
+      return true;
+    }
     if (!field)
       return false;
-    if (prop == Prop::TextSize)
+    if (prop == Prop::PhysicsMass) {
+      if (value <= 0.0f) return false;
+      value = std::clamp(value, 0.001f, 100000.0f);
+    } else if (prop == Prop::PhysicsDrag) {
+      if (value < 0.0f) return false;
+      value = std::clamp(value, 0.0f, 1000.0f);
+    } else if (prop == Prop::PhysicsGravityY) {
+      value = std::clamp(value, -1000.0f, 1000.0f);
+    } else if (prop == Prop::ColliderRadius || prop == Prop::ColliderHeight) {
+      if (value < 0.0f) return false;
+      value = std::clamp(value, 0.0f, 10000.0f);
+    } else if (prop == Prop::ColliderFriction ||
+               prop == Prop::ColliderBounciness) {
+      if (value < 0.0f || value > 1.0f) return false;
+      value = std::clamp(value, 0.0f, 1.0f);
+    } else if (prop == Prop::TextSize)
       value = std::clamp(value, 0.001f, 100.0f);
     else if (prop == Prop::TextAlpha)
       value = std::clamp(value, 0.0f, 1.0f);
@@ -396,6 +457,10 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
                                           *context->renderer, index));
       return true;
     }
+    if (prop == Prop::PhysicsGrounded) {
+      *out = context->physics && context->physics->IsGrounded(index);
+      return true;
+    }
     if (prop == Prop::CameraOrthographic) {
       *out = mesh->camProjection == 1;
       return true;
@@ -442,7 +507,25 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       return true;
     }
     auto *mesh = Owner(ctx, id, prop);
-    if (!mesh || (prop != Prop::LightColor && prop != Prop::TextColor))
+    if (!mesh)
+      return false;
+    if (prop == Prop::PhysicsVelocity) {
+      const auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+      const auto index =
+          static_cast<size_t>(mesh - context->renderer->meshes3d.data());
+      *out = ToScript(context->physics ? context->physics->GetVelocity(index)
+                                       : mesh->velocity);
+      return true;
+    }
+    if (prop == Prop::ColliderCenter) {
+      *out = ToScript(mesh->collider.center);
+      return true;
+    }
+    if (prop == Prop::ColliderSize) {
+      *out = ToScript(mesh->collider.size);
+      return true;
+    }
+    if (prop != Prop::LightColor && prop != Prop::TextColor)
       return false;
     *out = ToScript(prop == Prop::TextColor ? glm::vec3(mesh->worldText.color) : mesh->lightColor);
     return true;
@@ -470,7 +553,43 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
       return true;
     }
     auto *mesh = Owner(ctx, id, prop);
-    if (!mesh || (prop != Prop::LightColor && prop != Prop::TextColor) || !Finite(*value))
+    if (!mesh || !Finite(*value))
+      return false;
+    auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    const auto index =
+        static_cast<size_t>(mesh - context->renderer->meshes3d.data());
+    if (prop == Prop::PhysicsVelocity) {
+      if (context->physics)
+        return context->physics->SetVelocity(*context->renderer, index,
+                                             ToEngine(*value));
+      if (!mesh->hasPhysics)
+        return false;
+      mesh->velocity = ToEngine(*value);
+      return true;
+    }
+    if (prop == Prop::PhysicsImpulse) {
+      return context->physics &&
+             context->physics->AddImpulse(*context->renderer, index,
+                                          ToEngine(*value));
+    }
+    if (prop == Prop::PhysicsForce) {
+      return context->physics &&
+             context->physics->AddForce(*context->renderer, index,
+                                        ToEngine(*value));
+    }
+    if (prop == Prop::ColliderCenter) {
+      mesh->collider.center =
+          glm::clamp(ToEngine(*value), -100000.0f, 100000.0f);
+      return true;
+    }
+    if (prop == Prop::ColliderSize) {
+      const glm::vec3 s = ToEngine(*value);
+      if (glm::any(glm::lessThan(s, glm::vec3(0.0f))))
+        return false;
+      mesh->collider.size = glm::clamp(s, 0.0f, 10000.0f);
+      return true;
+    }
+    if (prop != Prop::LightColor && prop != Prop::TextColor)
       return false;
     const auto color = glm::clamp(ToEngine(*value), 0.0f, 1.0f);
     if (prop == Prop::TextColor) mesh->worldText.color = glm::vec4(color, mesh->worldText.color.a);
@@ -511,6 +630,17 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
   };
   host.command = [](void *ctx, uint64_t id, script::Command command) {
     auto *context = static_cast<NativeScriptSceneContext *>(ctx);
+    if (command == script::Command::ColliderFit) {
+      auto *mesh = Owner(ctx, id, Prop::ColliderEnabled);
+      if (!mesh || !mesh->collider.enabled || !context->renderer)
+        return false;
+      auto &renderer = *context->renderer;
+      const auto index = static_cast<size_t>(mesh - renderer.meshes3d.data());
+      glm::vec3 lo(-0.5f), hi(0.5f);
+      renderer.GetMesh3DLocalBounds(index, lo, hi);
+      FitColliderToBounds(mesh->collider, lo, hi);
+      return true;
+    }
     if (command >= script::Command::DialogStart) {
       auto *mesh = Owner(ctx, id, Prop::DialogEnabled);
       auto *dialog = context->dialog;
@@ -552,6 +682,22 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     return false;
   };
   return host;
+}
+void ScriptSceneDispatchPhysics(NativeScriptSceneContext &context,
+                                NativeScripts &scripts) {
+  if (!context.renderer || !context.physics)
+    return;
+  const auto &meshes = context.renderer->meshes3d;
+  const auto toIds = [&](const std::vector<std::pair<size_t, size_t>> &pairs) {
+    std::vector<std::pair<uint64_t, uint64_t>> out;
+    out.reserve(pairs.size());
+    for (const auto &[a, b] : pairs)
+      if (a < meshes.size() && b < meshes.size())
+        out.emplace_back(meshes[a].objectId, meshes[b].objectId);
+    return out;
+  };
+  scripts.DispatchPhysicsEvents(toIds(context.physics->Triggers()),
+                                toIds(context.physics->Collisions()));
 }
 void ScriptSceneEndFrame(NativeScriptSceneContext &context) {
   context.previousKeys = KeyBits(context.input);

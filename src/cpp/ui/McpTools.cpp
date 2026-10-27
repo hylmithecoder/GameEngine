@@ -1,11 +1,14 @@
 #include "../../../include/ui/MainWindow.hpp"
 #include "core_engine/AnimationTooling.hpp"
 #include "core_engine/AnimationController.hpp"
+#include "core_engine/ScriptWorkspace.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <type_traits>
 
 namespace {
@@ -207,6 +210,74 @@ std::string ScalarFromJson(ilmeee::ScriptValueType type, const json &in,
     return {};
   default: return "has an unsupported type";
   }
+}
+
+constexpr size_t kMaxScriptBytes = 256 * 1024;
+
+// Accepts "Door", "Door.cpp", "Door.hpp", or "assets/scripts/Door.cpp".
+std::string NormalizeScriptName(const std::string &raw, std::string &className) {
+  std::string s = raw;
+  const std::string prefix = "assets/scripts/";
+  if (s.rfind(prefix, 0) == 0)
+    s.erase(0, prefix.size());
+  if (s.size() > 4 &&
+      (s.substr(s.size() - 4) == ".cpp" || s.substr(s.size() - 4) == ".hpp"))
+    s.resize(s.size() - 4);
+  className = s;
+  return ilmeee::ValidateScriptName(className);
+}
+
+bool ReadScriptFile(const std::filesystem::path &path, std::string &out,
+                    std::string &error) {
+  std::error_code ec;
+  if (std::filesystem::is_symlink(path, ec)) {
+    error = "Refusing to read symlink " + path.filename().string();
+    return false;
+  }
+  if (!std::filesystem::is_regular_file(path, ec)) {
+    error = "Missing file " + path.filename().string();
+    return false;
+  }
+  const auto bytes = std::filesystem::file_size(path, ec);
+  if (ec || bytes > kMaxScriptBytes) {
+    error = path.filename().string() + " exceeds the 256 KiB script limit";
+    return false;
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    error = "Could not read " + path.filename().string();
+    return false;
+  }
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  out = ss.str();
+  return true;
+}
+
+bool WriteScriptFile(const std::filesystem::path &path,
+                     const std::string &content, std::string &error) {
+  if (content.size() > kMaxScriptBytes) {
+    error = path.filename().string() + " exceeds the 256 KiB script limit";
+    return false;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  if (ec || std::filesystem::is_symlink(path.parent_path(), ec) ||
+      std::filesystem::is_symlink(path, ec)) {
+    error = "Invalid destination for " + path.filename().string();
+    return false;
+  }
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    error = "Could not write " + path.filename().string();
+    return false;
+  }
+  out << content;
+  if (!out.good()) {
+    error = "Failed while writing " + path.filename().string();
+    return false;
+  }
+  return true;
 }
 } // namespace
 
@@ -410,6 +481,94 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
   if (name == "list_components" || name == "add_component" ||
       name == "remove_component")
     return HandleMcpComponentTool(name, args);
+  const auto scriptInfoJson = [&](const std::string &relSource) -> json {
+    const std::string className =
+        std::filesystem::path(relSource).stem().string();
+    const ObjectNamer objectName = [&](uint64_t id) -> json {
+      if (!id) return nullptr;
+      for (size_t m = 0; m < sceneRenderer->meshes3d.size(); ++m)
+        if (sceneRenderer->meshes3d[m].objectId == id)
+          return {{"index", m}, {"name", sceneRenderer->meshes3d[m].displayName}};
+      if (const auto *e = ilmeee::FindUiElement(gameUi, id))
+        return {{"ui", e->id}};
+      return "(missing)";
+    };
+    ilmeee::NativeScriptBinding probe;
+    probe.source = relSource;
+    probe.className = className;
+    json fields = json::object();
+    for (const auto &value : nativeScripts.Properties(probe)) {
+      json field = {{"type", ScriptTypeName(value.type)}};
+      if (value.type == ilmeee::ScriptValueType::List) {
+        field["elementType"] = ScriptTypeName(value.elementType);
+        json items = json::array();
+        for (const auto &item : value.items)
+          items.push_back(ScalarJson(value.elementType, item, objectName));
+        field["default"] = std::move(items);
+      } else {
+        field["default"] = ScalarJson(value.type, value, objectName);
+      }
+      fields[value.name] = std::move(field);
+    }
+    json attachedTo = json::array();
+    for (size_t m = 0; m < sceneRenderer->meshes3d.size(); ++m) {
+      for (const auto &b : sceneRenderer->meshes3d[m].scripts) {
+        if (b.source == relSource || b.className == className) {
+          attachedTo.push_back({{"index", m},
+                                {"name", sceneRenderer->meshes3d[m].displayName},
+                                {"enabled", b.enabled}});
+        }
+      }
+    }
+    return {{"className", className},
+            {"source", relSource},
+            {"header", "assets/scripts/" + className + ".hpp"},
+            {"ready", nativeScripts.Ready(relSource)},
+            {"diagnostics", nativeScripts.Diagnostics(relSource)},
+            {"fields", std::move(fields)},
+            {"attachedTo", std::move(attachedTo)}};
+  };
+  if (name == "list_scripts") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    LoadGameUiForProject();
+    nativeScripts.Configure(
+        ilmeee::DefaultScriptCompileOptions(projectHandler.projectPath));
+    json scripts = json::array();
+    for (const auto &source :
+         ilmeee::DiscoverNativeScripts(projectHandler.projectPath))
+      scripts.push_back(scriptInfoJson(source));
+    return {{"scripts", std::move(scripts)},
+            {"compiling", nativeScripts.IsCompiling()}};
+  }
+  if (name == "get_script") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    std::string rawName, className;
+    if (!Optional(args, "name", rawName) || rawName.empty())
+      return Error("name is required");
+    if (const std::string err = NormalizeScriptName(rawName, className);
+        !err.empty())
+      return Error(err);
+    const std::filesystem::path scriptsDir =
+        std::filesystem::path(projectHandler.projectPath) / "assets" / "scripts";
+    const std::filesystem::path hppPath = scriptsDir / (className + ".hpp");
+    const std::filesystem::path cppPath = scriptsDir / (className + ".cpp");
+    std::string headerContent, sourceContent, readErr;
+    if (!ReadScriptFile(cppPath, sourceContent, readErr))
+      return Error(readErr);
+    if (std::filesystem::exists(hppPath) &&
+        !ReadScriptFile(hppPath, headerContent, readErr))
+      return Error(readErr);
+    LoadGameUiForProject();
+    nativeScripts.Configure(
+        ilmeee::DefaultScriptCompileOptions(projectHandler.projectPath));
+    const std::string relSource = "assets/scripts/" + className + ".cpp";
+    json out = scriptInfoJson(relSource);
+    out["headerContent"] = std::move(headerContent);
+    out["sourceContent"] = std::move(sourceContent);
+    return out;
+  }
   if (name == "list_scene_objects") {
     json objects = json::array();
     for (size_t i = 0; i < count; ++i)
@@ -452,6 +611,140 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
   }
   if (SceneStructureLocked())
     return Error("Stop play mode before editing the scene");
+  if (name == "create_script") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad =
+            UnknownKey(args, {"name", "header", "source", "attachTo", "overwrite"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    std::string rawName, className;
+    if (!Optional(args, "name", rawName) || rawName.empty())
+      return Error("name is required");
+    if (const std::string err = NormalizeScriptName(rawName, className);
+        !err.empty())
+      return Error(err);
+    std::string headerContent, sourceContent;
+    bool overwrite = false;
+    if (!Optional(args, "header", headerContent) ||
+        !Optional(args, "source", sourceContent) ||
+        !Optional(args, "overwrite", overwrite))
+      return Error("Invalid argument type");
+    const bool hasHeader = args.contains("header");
+    const bool hasSource = args.contains("source");
+    if (hasHeader != hasSource)
+      return Error("Provide both header and source, or omit both to use the "
+                   "default template");
+    size_t attachIndex = 0;
+    const bool hasAttach = args.contains("attachTo");
+    if (hasAttach && !Index(args, "attachTo", count, attachIndex))
+      return Error("Invalid attachTo object index");
+    const std::filesystem::path scriptsDir =
+        std::filesystem::path(projectHandler.projectPath) / "assets" / "scripts";
+    const std::filesystem::path hppPath = scriptsDir / (className + ".hpp");
+    const std::filesystem::path cppPath = scriptsDir / (className + ".cpp");
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(hppPath, ec) ||
+                        std::filesystem::exists(cppPath, ec);
+    if (exists && !overwrite)
+      return Error("Script " + className +
+                   " already exists (pass overwrite: true to replace)");
+    std::string ioErr;
+    const auto opts =
+        ilmeee::DefaultScriptCompileOptions(projectHandler.projectPath);
+    if (hasHeader) {
+      if (!WriteScriptFile(hppPath, headerContent, ioErr) ||
+          !WriteScriptFile(cppPath, sourceContent, ioErr))
+        return Error(ioErr);
+      std::string dbErr;
+      ilmeee::WriteScriptCompilationDatabase(opts, dbErr);
+    } else {
+      if (overwrite) {
+        std::filesystem::remove(hppPath, ec);
+        std::filesystem::remove(cppPath, ec);
+      }
+      if (!ilmeee::CreateScriptFiles(scriptsDir, className, ioErr))
+        return Error(ioErr);
+    }
+    LoadGameUiForProject();
+    nativeScripts.Configure(opts);
+    const std::string relSource = "assets/scripts/" + className + ".cpp";
+    const auto compiled = nativeScripts.CompileAndLoad(relSource);
+    const bool ready = compiled.ok && nativeScripts.Ready(relSource);
+    bool attached = false;
+    if (hasAttach && ready) {
+      auto &mesh = sceneRenderer->meshes3d[attachIndex];
+      auto it = std::find_if(mesh.scripts.begin(), mesh.scripts.end(),
+                             [&](const auto &b) {
+                               return b.source == relSource ||
+                                      b.className == className;
+                             });
+      ilmeee::NativeScriptBinding binding;
+      binding.source = relSource;
+      binding.className = className;
+      binding.enabled = it != mesh.scripts.end() ? it->enabled : true;
+      if (it != mesh.scripts.end())
+        binding.values = it->values;
+      binding.values = nativeScripts.Properties(binding);
+      if (it != mesh.scripts.end())
+        *it = std::move(binding);
+      else
+        mesh.scripts.push_back(std::move(binding));
+      RecordEditorHistory();
+      attached = true;
+    }
+    json out = scriptInfoJson(relSource);
+    out["ok"] = ready;
+    if (hasAttach) {
+      out["attached"] = attached;
+      out["saved"] = false;
+    }
+    return out;
+  }
+  if (name == "edit_script") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad = UnknownKey(args, {"name", "header", "source"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    std::string rawName, className;
+    if (!Optional(args, "name", rawName) || rawName.empty())
+      return Error("name is required");
+    if (const std::string err = NormalizeScriptName(rawName, className);
+        !err.empty())
+      return Error(err);
+    std::string headerContent, sourceContent;
+    if (!Optional(args, "header", headerContent) ||
+        !Optional(args, "source", sourceContent))
+      return Error("Invalid argument type");
+    const bool hasHeader = args.contains("header");
+    const bool hasSource = args.contains("source");
+    if (!hasHeader && !hasSource)
+      return Error("Provide header and/or source to update");
+    const std::filesystem::path scriptsDir =
+        std::filesystem::path(projectHandler.projectPath) / "assets" / "scripts";
+    const std::filesystem::path hppPath = scriptsDir / (className + ".hpp");
+    const std::filesystem::path cppPath = scriptsDir / (className + ".cpp");
+    std::error_code ec;
+    if (!std::filesystem::exists(cppPath, ec) &&
+        !std::filesystem::exists(hppPath, ec))
+      return Error("No script named " + className +
+                   "; use create_script first");
+    std::string ioErr;
+    if (hasHeader && !WriteScriptFile(hppPath, headerContent, ioErr))
+      return Error(ioErr);
+    if (hasSource && !WriteScriptFile(cppPath, sourceContent, ioErr))
+      return Error(ioErr);
+    LoadGameUiForProject();
+    const auto opts =
+        ilmeee::DefaultScriptCompileOptions(projectHandler.projectPath);
+    nativeScripts.Configure(opts);
+    const std::string relSource = "assets/scripts/" + className + ".cpp";
+    const auto compiled = nativeScripts.CompileAndLoad(relSource);
+    json out = scriptInfoJson(relSource);
+    out["ok"] = compiled.ok && nativeScripts.Ready(relSource);
+    return out;
+  }
   if (name == "set_ui_element") {
     LoadGameUiForProject();
     std::string elementName;
@@ -829,6 +1122,7 @@ ilmeee::net::json MainWindow::McpComponentList(size_t i) {
     scripts.push_back({{"source", source},
                        {"className", std::filesystem::path(source).stem().string()},
                        {"ready", nativeScripts.Ready(source)},
+                       {"diagnostics", nativeScripts.Diagnostics(source)},
                        {"attached", std::any_of(mesh.scripts.begin(), mesh.scripts.end(),
                                                 [&](const auto &b) { return b.source == source; })}});
   return {{"index", i},

@@ -45,6 +45,14 @@ private:
     glm::vec3 position;
     glm::vec3 rotation;
     glm::vec3 scale;
+    bool hasPhysics = false;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float mass = 1.0f;
+    float drag = 0.0f;
+    float gravityY = -9.81f;
+    glm::vec3 velocity{0.0f};
+    ilmeee::ColliderComponent collider;
   };
   std::vector<MeshSnapshot> snapshot_;
 };

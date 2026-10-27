@@ -150,8 +150,14 @@ public:
     return triggers_;
   }
 
+  // (ownerA, ownerB) solid pairs in contact during the last Step.
+  const std::vector<std::pair<size_t, size_t>> &Collisions() const {
+    return collisions_;
+  }
+
 private:
   std::vector<std::pair<size_t, size_t>> triggers_;
+  std::vector<std::pair<size_t, size_t>> collisions_;
 };
 
 // Runs scene-object physics at a fixed 60 Hz during Play. Shared by the
@@ -168,10 +174,24 @@ public:
   const std::vector<std::pair<size_t, size_t>> &Triggers() const {
     return world_.Triggers();
   }
+  // Solid scene objects in contact during the last step.
+  const std::vector<std::pair<size_t, size_t>> &Collisions() const {
+    return world_.Collisions();
+  }
+
+  glm::vec3 GetVelocity(size_t index) const;
+  bool SetVelocity(SceneRenderer &renderer, size_t index,
+                   const glm::vec3 &velocity);
+  bool AddImpulse(SceneRenderer &renderer, size_t index,
+                  const glm::vec3 &impulse);
+  bool AddForce(SceneRenderer &renderer, size_t index, const glm::vec3 &force);
+  bool IsGrounded(size_t index) const;
 
 private:
   PhysicsWorld world_;
   std::unordered_map<size_t, glm::vec3> velocities_;
+  std::unordered_map<size_t, glm::vec3> pendingForces_;
+  std::unordered_map<size_t, bool> grounded_;
   float accumulator_ = 0.0f;
 };
 
