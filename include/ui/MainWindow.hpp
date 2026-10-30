@@ -319,6 +319,8 @@ public:
   // (which the Hierarchy would immediately recreate).
   bool DeletingRemovesLastCamera(size_t index) const;
   bool Save3DScene();
+  bool Save3DSceneToPath(const std::string &targetPath);
+  bool SaveAs3DScene();
   EditorSessionHistory::Snapshot CaptureEditorSnapshot() const;
   void StartEditorSession();
   void RecordEditorHistory();

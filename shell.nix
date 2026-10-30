@@ -36,6 +36,7 @@ pkgs.mkShell {
     
     # UI & System
     gtk3
+    gsettings-desktop-schemas
     libnotify
     xorg.libxcb
     xorg.libX11
@@ -59,6 +60,8 @@ pkgs.mkShell {
   shellHook = ''
     export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
     export LD_LIBRARY_PATH="${pkgs.vulkan-loader}/lib:${pkgs.lib.makeLibraryPath [ pkgs.libGL pkgs.libGLU pkgs.libnotify pkgs.gtk3 pkgs.discord-gamesdk ]}:$LD_LIBRARY_PATH"
+    export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+    export GTK_USE_PORTAL="''${GTK_USE_PORTAL:-1}"
     export DISCORD_SDK_PATH="${pkgs.discord-gamesdk}"
     export DISCORD_SDK_DEV_PATH="${pkgs.discord-gamesdk.dev}"
     # Point the OpenCL loader to your system's ICD profiles

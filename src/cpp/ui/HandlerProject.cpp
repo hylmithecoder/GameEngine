@@ -130,32 +130,43 @@ void HandlerProject::SaveNewScene() {
 }
 
 void HandlerProject::SaveAsScene() {
-  NFD_Init();
+  NFD::Guard nfdGuard;
+  NFD::UniquePath savePath;
 
-  nfdchar_t *savePath;
-
-  // prepare filters for the dialog
   nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
+  const std::string baseName =
+      currentSceneName.empty() ? "Untitled" : currentSceneName;
+  const std::string defaultFile = baseName + ".ilmeeescene";
+  std::string defaultDir;
+  if (!currentScenePath.empty()) {
+    defaultDir = fs::path(currentScenePath).parent_path().string();
+  } else if (!projectPath.empty()) {
+    defaultDir = (fs::path(projectPath) / "scenes").string();
+  }
 
-  // show the dialog
-  nfdsavedialogu8args_t args = {0};
-  args.filterList = filterItem;
-  args.filterCount = 1;
-  args.defaultName = (currentSceneName + ".ilmeeescene").c_str();
-  nfdresult_t result = NFD_SaveDialogU8_With(&savePath, &args);
-  if (result == NFD_OKAY) {
-    puts("Success!");
-    puts(savePath);
-    // remember to free the memory (since NFD_OKAY is returned)
-    NFD_FreePath(savePath);
+  const nfdresult_t result = NFD::SaveDialog(
+      savePath, filterItem, 1,
+      defaultDir.empty() ? nullptr : defaultDir.c_str(), defaultFile.c_str());
+  if (result == NFD_OKAY && savePath.get() != nullptr) {
+    fs::path chosen(savePath.get());
+    if (chosen.extension() != ".ilmeeescene") {
+      chosen.replace_extension(".ilmeeescene");
+    }
+    currentScenePath = chosen.string();
+    currentSceneName = chosen.stem().string();
+    serializer.SaveScene(currentScene, currentScenePath);
+    ShowNotification("Scene Saved",
+                     "Successfully saved " + chosen.filename().string(),
+                     ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
   } else if (result == NFD_CANCEL) {
     puts("User pressed cancel.");
   } else {
-    printf("Error: %s\n", NFD_GetError());
+    const char *err = NFD::GetError();
+    printf("Error: %s\n", err ? err : "Save dialog failed");
+    ShowNotification("Save Error",
+                     err ? std::string(err) : "Failed to open Save As dialog",
+                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
   }
-
-  // Quit NFD
-  NFD_Quit();
 }
 
 void HandlerProject::OpenScene() {
@@ -378,6 +389,8 @@ void HandlerProject::OpenProject(const char *folderPath) {
   LoadProjectAssets();
   rootAsset = BuildAssetTree(projectPath);
   currentDirectory = projectPath + "/assets";
+  currentScenePath = (fs::path(projectPath) / "scenes" / "main.ilmeeescene").string();
+  currentSceneName = "main";
   ::Log("Project loaded successfully: " + projectPath,
         Debug::LogLevel::SUCCESS);
   if (resumeWatcher) StartFileWatcher();

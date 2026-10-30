@@ -48,6 +48,7 @@
             
             # UI & System
             gtk3
+            gsettings-desktop-schemas
             libnotify
             xorg.libxcb
             xorg.libX11
@@ -71,6 +72,8 @@
               pkgs.gtk3 
               pkgs.discord-gamesdk 
             ]}:$LD_LIBRARY_PATH"
+            export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+            export GTK_USE_PORTAL="''${GTK_USE_PORTAL:-1}"
             
             # Set path to discord sdk for CMake
             export DISCORD_SDK_PATH="${pkgs.discord-gamesdk}"

@@ -7,7 +7,13 @@
   Note: We do not check for malloc failure on Linux - Linux overcommits memory!
 */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <assert.h>
+#include <dlfcn.h>
+#include <gio/gio.h>
 #include <gtk/gtk.h>
 #if defined(GDK_WINDOWING_X11)
 #include <gdk/gdkx.h>
@@ -16,6 +22,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <filesystem>
+#include <string>
+#include <vector>
 
 #include "nfd.h"
 
@@ -33,15 +43,6 @@ struct Free_Guard {
     T* data;
     Free_Guard(T* freeable) noexcept : data(freeable) {}
     ~Free_Guard() { NFDi_Free(data); }
-};
-
-template <typename T>
-struct FreeCheck_Guard {
-    T* data;
-    FreeCheck_Guard(T* freeable = nullptr) noexcept : data(freeable) {}
-    ~FreeCheck_Guard() {
-        if (data) NFDi_Free(data);
-    }
 };
 
 /* current error */
@@ -99,11 +100,6 @@ struct Pair_GtkFileFilter_FileExtension {
     GtkFileFilter* filter;
     const nfdnchar_t* extensionBegin;
     const nfdnchar_t* extensionEnd;
-};
-
-struct ButtonClickedArgs {
-    Pair_GtkFileFilter_FileExtension* map;
-    GtkFileChooser* chooser;
 };
 
 void AddFiltersToDialog(GtkFileChooser* chooser,
@@ -337,12 +333,22 @@ Pair_GtkFileFilter_FileExtension* AddFiltersToDialogWithMap(GtkFileChooser* choo
 void SetDefaultPath(GtkFileChooser* chooser, const char* defaultPath) {
     if (!defaultPath || !*defaultPath) return;
 
-    /* GTK+ manual recommends not specifically setting the default path.
-    We do it anyway in order to be consistent across platforms.
-
-    If consistency with the native OS is preferred, this is the line
-    to comment out. -ml */
-    gtk_file_chooser_set_current_folder(chooser, defaultPath);
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p(defaultPath);
+    if (fs::is_regular_file(p, ec)) {
+        p = p.parent_path();
+    }
+    while (!p.empty()) {
+        ec.clear();
+        if (fs::is_directory(p, ec) && !ec) {
+            gtk_file_chooser_set_current_folder(chooser, p.c_str());
+            return;
+        }
+        const fs::path parent = p.parent_path();
+        if (parent == p) break;
+        p = parent;
+    }
 }
 
 void SetDefaultName(GtkFileChooser* chooser, const char* defaultName) {
@@ -355,179 +361,181 @@ void WaitForCleanup() {
     while (gtk_events_pending()) gtk_main_iteration();
 }
 
-struct Widget_Guard {
-    GtkWidget* data;
-    Widget_Guard(GtkWidget* widget) : data(widget) {}
-    ~Widget_Guard() {
-        WaitForCleanup();
-        gtk_widget_destroy(data);
-        WaitForCleanup();
+struct NativeDialog_Guard {
+    GtkFileChooserNative* data;
+    explicit NativeDialog_Guard(GtkFileChooserNative* dlg) noexcept : data(dlg) {}
+    ~NativeDialog_Guard() {
+        if (data) {
+            WaitForCleanup();
+            gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(data));
+            g_object_unref(data);
+            WaitForCleanup();
+        }
     }
 };
 
-void FileActivatedSignalHandler(GtkButton* saveButton, void* userdata) {
-    (void)saveButton;  // silence the unused arg warning
+bool HasCompiledSchemas(const std::filesystem::path& schemaDir) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(schemaDir / "gschemas.compiled", ec) && !ec;
+}
 
-    ButtonClickedArgs* args = static_cast<ButtonClickedArgs*>(userdata);
-    GtkFileChooser* chooser = args->chooser;
-    char* currentFileName = gtk_file_chooser_get_current_name(chooser);
-    if (*currentFileName) {  // string is not empty
+void PrependXdgDataDir(const std::filesystem::path& shareDir) {
+    const std::string dirStr = shareDir.string();
+    if (dirStr.empty()) return;
 
-        // find a '.' in the file name
-        const char* p_period = currentFileName;
-        for (; *p_period; ++p_period) {
-            if (*p_period == '.') {
+    const char* cur = getenv("XDG_DATA_DIRS");
+    if (cur && *cur) {
+        const std::string curStr(cur);
+        // Check colon-delimited token match
+        size_t pos = 0;
+        while (pos <= curStr.size()) {
+            const size_t next = curStr.find(':', pos);
+            const std::string token =
+                next == std::string::npos ? curStr.substr(pos) : curStr.substr(pos, next - pos);
+            if (token == dirStr) return;
+            if (next == std::string::npos) break;
+            pos = next + 1;
+        }
+        const std::string updated = dirStr + ":" + curStr;
+        setenv("XDG_DATA_DIRS", updated.c_str(), 1);
+    } else {
+        const std::string updated = dirStr + ":/usr/local/share:/usr/share";
+        setenv("XDG_DATA_DIRS", updated.c_str(), 1);
+    }
+}
+
+void RegisterSchemaDir(const std::filesystem::path& shareRoot,
+                       const std::filesystem::path& schemaDir) {
+    if (!HasCompiledSchemas(schemaDir)) return;
+    PrependXdgDataDir(shareRoot);
+    const char* curSchemaEnv = getenv("GSETTINGS_SCHEMA_DIR");
+    if (!curSchemaEnv || !*curSchemaEnv || !HasCompiledSchemas(curSchemaEnv)) {
+        setenv("GSETTINGS_SCHEMA_DIR", schemaDir.c_str(), 1);
+    }
+}
+
+void RegisterSchemaPrefix(const std::filesystem::path& prefix) {
+    if (prefix.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(prefix, ec) || ec) return;
+
+    RegisterSchemaDir(prefix / "share", prefix / "share" / "glib-2.0" / "schemas");
+
+    const fs::path gsRoot = prefix / "share" / "gsettings-schemas";
+    ec.clear();
+    if (fs::is_directory(gsRoot, ec) && !ec) {
+        for (fs::directory_iterator it(gsRoot, ec), end; it != end && !ec; it.increment(ec)) {
+            if (it->is_directory(ec) && !ec) {
+                RegisterSchemaDir(it->path(), it->path() / "glib-2.0" / "schemas");
+            }
+        }
+    }
+}
+
+void RegisterLibrarySchemaPrefix(void* symbolAddr) {
+    Dl_info info{};
+    if (dladdr(symbolAddr, &info) && info.dli_fname && *info.dli_fname) {
+        const std::filesystem::path libPath(info.dli_fname);
+        // e.g. /nix/store/<hash>-gtk+3-3.24.52/lib/libgtk-3.so.0 -> prefix
+        RegisterSchemaPrefix(libPath.parent_path().parent_path());
+    }
+}
+
+void EnsureGtkDialogEnvironment() noexcept {
+    static bool configured = false;
+    if (configured) return;
+    configured = true;
+
+    // Prefer xdg-desktop-portal (org.freedesktop.portal.FileChooser) so file,
+    // folder, and Save As dialogs use the native desktop picker when available.
+    // Respects any explicit caller override (overwrite = 0).
+    setenv("GTK_USE_PORTAL", "1", 0);
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path selfExe = fs::read_symlink("/proc/self/exe", ec);
+    if (!ec && !selfExe.empty()) {
+        const fs::path exeDir = selfExe.parent_path();
+        RegisterSchemaPrefix(exeDir);
+        RegisterSchemaPrefix(exeDir.parent_path());
+    }
+
+    RegisterLibrarySchemaPrefix(reinterpret_cast<void*>(&gtk_init_check));
+    RegisterLibrarySchemaPrefix(reinterpret_cast<void*>(&g_settings_schema_source_get_default));
+
+    RegisterSchemaPrefix("/run/current-system/sw");
+    if (const char* user = getenv("USER"); user && *user) {
+        RegisterSchemaPrefix(fs::path("/etc/profiles/per-user") / user);
+    }
+    if (const char* home = getenv("HOME"); home && *home) {
+        RegisterSchemaPrefix(fs::path(home) / ".nix-profile");
+    }
+    RegisterSchemaPrefix("/usr/local");
+    RegisterSchemaPrefix("/usr");
+}
+
+struct GtkDialogEnvBootstrap {
+    GtkDialogEnvBootstrap() noexcept { EnsureGtkDialogEnvironment(); }
+} g_gtkDialogEnvBootstrap;
+
+nfdresult_t EnsureGtkInitialized() {
+    EnsureGtkDialogEnvironment();
+    if (!gtk_init_check(nullptr, nullptr)) {
+        NFDi_SetError("Failed to initialize GTK+ with gtk_init_check.");
+        return NFD_ERROR;
+    }
+
+    // GtkFileChooserNative eagerly initializes a fallback GtkFileChooserDialog,
+    // which aborts the process via g_error() if org.gtk.Settings.FileChooser is
+    // absent. Verify the schema exists first so we never SIGABRT.
+    GSettingsSchemaSource* src = g_settings_schema_source_get_default();
+    GSettingsSchema* schema =
+        src ? g_settings_schema_source_lookup(src, "org.gtk.Settings.FileChooser", TRUE) : nullptr;
+    if (!schema) {
+        NFDi_SetError("GTK GSettings schema 'org.gtk.Settings.FileChooser' is not installed.");
+        return NFD_ERROR;
+    }
+    g_settings_schema_unref(schema);
+    return NFD_OKAY;
+}
+
+char* AppendDefaultExtensionIfMissing(char* rawPath,
+                                      GtkFileChooser* chooser,
+                                      Pair_GtkFileFilter_FileExtension* map) {
+    if (!rawPath || !*rawPath || !map || !map[0].filter) return rawPath;
+
+    const std::filesystem::path chosen(rawPath);
+    if (chosen.filename().has_extension()) return rawPath;
+
+    const Pair_GtkFileFilter_FileExtension* selected = nullptr;
+    GtkFileFilter* activeFilter = gtk_file_chooser_get_filter(chooser);
+    if (activeFilter) {
+        for (const Pair_GtkFileFilter_FileExtension* it = map; it->filter; ++it) {
+            if (it->filter == activeFilter) {
+                selected = it;
                 break;
             }
         }
-
-        if (!*p_period) {  // there is no '.', so append the default extension
-            Pair_GtkFileFilter_FileExtension* filterMap =
-                static_cast<Pair_GtkFileFilter_FileExtension*>(args->map);
-            GtkFileFilter* currentFilter = gtk_file_chooser_get_filter(chooser);
-            if (currentFilter) {
-                for (; filterMap->filter; ++filterMap) {
-                    if (filterMap->filter == currentFilter) break;
-                }
-            }
-            if (filterMap->filter) {
-                // memory for appended string (including '.' and
-                // trailing '\0')
-                char* appendedFileName = NFDi_Malloc<char>(
-                    sizeof(char) * ((p_period - currentFileName) +
-                                    (filterMap->extensionEnd - filterMap->extensionBegin) + 2));
-                char* p_fileName = copy(currentFileName, p_period, appendedFileName);
-                *p_fileName++ = '.';
-                p_fileName = copy(filterMap->extensionBegin, filterMap->extensionEnd, p_fileName);
-                *p_fileName++ = '\0';
-
-                assert(p_fileName - appendedFileName ==
-                       (p_period - currentFileName) +
-                           (filterMap->extensionEnd - filterMap->extensionBegin) + 2);
-
-                // set the appended file name
-                gtk_file_chooser_set_current_name(chooser, appendedFileName);
-
-                // free the memory
-                NFDi_Free(appendedFileName);
-            }
-        }
+        // If activeFilter is the trailing "All files" wildcard filter, do not force an extension.
+        if (!selected) return rawPath;
+    } else {
+        // Portal backends may not report the selected GtkFileFilter back; fall back to first filter.
+        selected = &map[0];
     }
 
-    // free the memory
-    g_free(currentFileName);
+    if (!selected->extensionBegin || !selected->extensionEnd ||
+        selected->extensionEnd <= selected->extensionBegin) {
+        return rawPath;
+    }
+
+    std::string withExt(rawPath);
+    withExt.push_back('.');
+    withExt.append(selected->extensionBegin,
+                   static_cast<size_t>(selected->extensionEnd - selected->extensionBegin));
+    g_free(rawPath);
+    return g_strdup(withExt.c_str());
 }
-
-// wrapper for gtk_dialog_run() that brings the dialog to the front
-// see issues at:
-// https://github.com/btzy/nativefiledialog-extended/issues/31
-// https://github.com/mlabbe/nativefiledialog/pull/92
-// https://github.com/guillaumechereau/noc/pull/11
-gint RunDialogWithFocus(GtkDialog* dialog) {
-#if defined(GDK_WINDOWING_X11)
-    gtk_widget_show_all(GTK_WIDGET(dialog));  // show the dialog so that it gets a display
-    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(dialog)))) {
-        GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(dialog));
-        gdk_window_set_events(
-            window,
-            static_cast<GdkEventMask>(gdk_window_get_events(window) | GDK_PROPERTY_CHANGE_MASK));
-        gtk_window_present_with_time(GTK_WINDOW(dialog), gdk_x11_get_server_time(window));
-    }
-#endif
-    return gtk_dialog_run(dialog);
-}
-
-// Gets the GdkWindow from the given window handle.  This function might fail even if parentWindow
-// is set correctly, since it calls some failable GDK functions.  If it fails, it will return
-// nullptr.  The caller is responsible for freeing ths returned GdkWindow, if not nullptr.
-GdkWindow* GetAllocNativeWindowHandle(const nfdwindowhandle_t& parentWindow) {
-    switch (parentWindow.type) {
-#if defined(GDK_WINDOWING_X11)
-        case NFD_WINDOW_HANDLE_TYPE_X11: {
-            const Window x11_handle = reinterpret_cast<Window>(parentWindow.handle);
-            // AFAIK, _any_ X11 display will do, because Windows are not associated to a specific
-            // Display.  Supposedly, a Display is just a connection to the X server.
-
-            // This will contain the X11 display we want to use.
-            GdkDisplay* x11_display = nullptr;
-            GdkDisplayManager* display_manager = gdk_display_manager_get();
-
-            // If we can find an existing X11 display, use it.
-            GSList* gdk_display_list = gdk_display_manager_list_displays(display_manager);
-            while (gdk_display_list) {
-                GSList* node = gdk_display_list;
-                GdkDisplay* display = GDK_DISPLAY(node->data);
-                if (GDK_IS_X11_DISPLAY(display)) {
-                    g_slist_free(node);
-                    x11_display = display;
-                    break;
-                } else {
-                    gdk_display_list = node->next;
-                    g_slist_free_1(node);
-                }
-            }
-
-            // Otherwise, we have to create our own X11 display.
-            if (!x11_display) {
-                // This is not very nice, because we are always resetting the allowed backends
-                // setting to NULL (which means all backends are allowed), even though we can't be
-                // sure that the user didn't call gdk_set_allowed_backends() earlier to force a
-                // specific backend.  But well if the user doesn't have an X11 display already open
-                // and yet is telling us with have an X11 window as parent, they probably don't use
-                // GTK in their application at all so they probably won't notice this.
-                //
-                // There is no way, AFAIK, to get the allowed backends first so we can restore it
-                // later, and gdk_x11_display_open() is GTK4-only (the GTK3 version is a private
-                // implementation detail).
-                //
-                // Also, we don't close the display we specially opened, since GTK will need it to
-                // show the dialog.  Though it probably doesn't matter very much if we want to free
-                // up resources and clean it up.
-                gdk_set_allowed_backends("x11");
-                x11_display = gdk_display_manager_open_display(display_manager, NULL);
-                gdk_set_allowed_backends(NULL);
-            }
-            if (!x11_display) return nullptr;
-            GdkWindow* gdk_window = gdk_x11_window_foreign_new_for_display(x11_display, x11_handle);
-            return gdk_window;
-        }
-#endif
-        default:
-            return nullptr;
-    }
-}
-
-void RealizedSignalHandler(GtkWidget* window, void* userdata) {
-    GdkWindow* const parentWindow = static_cast<GdkWindow*>(userdata);
-    gdk_window_set_transient_for(gtk_widget_get_window(window), parentWindow);
-}
-
-struct NativeWindowParenter {
-    NativeWindowParenter(GtkWidget* w, const nfdwindowhandle_t& parentWindow) noexcept : widget(w) {
-        parent = GetAllocNativeWindowHandle(parentWindow);
-
-        if (parent) {
-            // set the handler to the realize signal to set the transient GDK parent
-            handlerID = g_signal_connect(G_OBJECT(widget),
-                                         "realize",
-                                         G_CALLBACK(RealizedSignalHandler),
-                                         static_cast<void*>(parent));
-
-            // make the dialog window use the same GtkScreen as the parent (so that parenting works)
-            gtk_window_set_screen(GTK_WINDOW(widget), gdk_window_get_screen(parent));
-        }
-    }
-    ~NativeWindowParenter() {
-        if (parent) {
-            // unset the handler and delete the parent GdkWindow
-            g_signal_handler_disconnect(G_OBJECT(widget), handlerID);
-            g_object_unref(parent);
-        }
-    }
-    GtkWidget* const widget;
-    GdkWindow* parent;
-    gulong handlerID;
-};
 
 }  // namespace
 
@@ -542,12 +550,7 @@ void NFD_ClearError(void) {
 /* public */
 
 nfdresult_t NFD_Init(void) {
-    // Init GTK
-    if (!gtk_init_check(NULL, NULL)) {
-        NFDi_SetError("Failed to initialize GTK+ with gtk_init_check.");
-        return NFD_ERROR;
-    }
-    return NFD_OKAY;
+    return EnsureGtkInitialized();
 }
 void NFD_Quit(void) {
     // do nothing, GTK cannot be de-initialized
@@ -574,44 +577,32 @@ nfdresult_t NFD_OpenDialogN(nfdnchar_t** outPath,
 nfdresult_t NFD_OpenDialogN_With_Impl(nfdversion_t version,
                                       nfdnchar_t** outPath,
                                       const nfdopendialognargs_t* args) {
-    // We haven't needed to bump the interface version yet.
     (void)version;
+    const nfdresult_t initRes = EnsureGtkInitialized();
+    if (initRes != NFD_OKAY) return initRes;
 
-    GtkWidget* widget = gtk_file_chooser_dialog_new("Open File",
-                                                    nullptr,
-                                                    GTK_FILE_CHOOSER_ACTION_OPEN,
-                                                    "_Cancel",
-                                                    GTK_RESPONSE_CANCEL,
-                                                    "_Open",
-                                                    GTK_RESPONSE_ACCEPT,
-                                                    nullptr);
-
-    // guard to destroy the widget when returning from this function
-    Widget_Guard widgetGuard(widget);
-
-    /* Build the filter list */
-    AddFiltersToDialog(GTK_FILE_CHOOSER(widget), args->filterList, args->filterCount);
-
-    /* Set the default path */
-    SetDefaultPath(GTK_FILE_CHOOSER(widget), args->defaultPath);
-
-    gint result;
-    {
-        /* Parent the window properly */
-        NativeWindowParenter nativeWindowParenter(widget, args->parentWindow);
-
-        /* invoke the dialog (blocks until dialog is closed) */
-        result = RunDialogWithFocus(GTK_DIALOG(widget));
+    GtkFileChooserNative* native = gtk_file_chooser_native_new(
+        "Open File", nullptr, GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
+    if (!native) {
+        NFDi_SetError("Failed to create GtkFileChooserNative.");
+        return NFD_ERROR;
     }
+    NativeDialog_Guard dialogGuard(native);
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
 
+    AddFiltersToDialog(GTK_FILE_CHOOSER(native), args->filterList, args->filterCount);
+    SetDefaultPath(GTK_FILE_CHOOSER(native), args->defaultPath);
+
+    const gint result = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
     if (result == GTK_RESPONSE_ACCEPT) {
-        // write out the file name
-        *outPath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(widget));
-
+        *outPath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
+        if (!*outPath) {
+            NFDi_SetError("Selected file cannot be represented as a local filesystem path.");
+            return NFD_ERROR;
+        }
         return NFD_OKAY;
-    } else {
-        return NFD_CANCEL;
     }
+    return NFD_CANCEL;
 }
 
 nfdresult_t NFD_OpenDialogU8(nfdu8char_t** outPath,
@@ -639,48 +630,34 @@ nfdresult_t NFD_OpenDialogMultipleN(const nfdpathset_t** outPaths,
 nfdresult_t NFD_OpenDialogMultipleN_With_Impl(nfdversion_t version,
                                               const nfdpathset_t** outPaths,
                                               const nfdopendialognargs_t* args) {
-    // We haven't needed to bump the interface version yet.
     (void)version;
+    const nfdresult_t initRes = EnsureGtkInitialized();
+    if (initRes != NFD_OKAY) return initRes;
 
-    GtkWidget* widget = gtk_file_chooser_dialog_new("Open Files",
-                                                    nullptr,
-                                                    GTK_FILE_CHOOSER_ACTION_OPEN,
-                                                    "_Cancel",
-                                                    GTK_RESPONSE_CANCEL,
-                                                    "_Open",
-                                                    GTK_RESPONSE_ACCEPT,
-                                                    nullptr);
-
-    // guard to destroy the widget when returning from this function
-    Widget_Guard widgetGuard(widget);
-
-    // set select multiple
-    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(widget), TRUE);
-
-    /* Build the filter list */
-    AddFiltersToDialog(GTK_FILE_CHOOSER(widget), args->filterList, args->filterCount);
-
-    /* Set the default path */
-    SetDefaultPath(GTK_FILE_CHOOSER(widget), args->defaultPath);
-
-    gint result;
-    {
-        /* Parent the window properly */
-        NativeWindowParenter nativeWindowParenter(widget, args->parentWindow);
-
-        /* invoke the dialog (blocks until dialog is closed) */
-        result = RunDialogWithFocus(GTK_DIALOG(widget));
+    GtkFileChooserNative* native = gtk_file_chooser_native_new(
+        "Open Files", nullptr, GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
+    if (!native) {
+        NFDi_SetError("Failed to create GtkFileChooserNative.");
+        return NFD_ERROR;
     }
+    NativeDialog_Guard dialogGuard(native);
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
+    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(native), TRUE);
 
+    AddFiltersToDialog(GTK_FILE_CHOOSER(native), args->filterList, args->filterCount);
+    SetDefaultPath(GTK_FILE_CHOOSER(native), args->defaultPath);
+
+    const gint result = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
     if (result == GTK_RESPONSE_ACCEPT) {
-        // write out the file name
-        GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(widget));
-
+        GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(native));
+        if (!fileList) {
+            NFDi_SetError("Selected files cannot be represented as local filesystem paths.");
+            return NFD_ERROR;
+        }
         *outPaths = static_cast<void*>(fileList);
         return NFD_OKAY;
-    } else {
-        return NFD_CANCEL;
     }
+    return NFD_CANCEL;
 }
 
 nfdresult_t NFD_OpenDialogMultipleU8(const nfdpathset_t** outPaths,
@@ -710,65 +687,38 @@ nfdresult_t NFD_SaveDialogN(nfdnchar_t** outPath,
 nfdresult_t NFD_SaveDialogN_With_Impl(nfdversion_t version,
                                       nfdnchar_t** outPath,
                                       const nfdsavedialognargs_t* args) {
-    // We haven't needed to bump the interface version yet.
     (void)version;
+    const nfdresult_t initRes = EnsureGtkInitialized();
+    if (initRes != NFD_OKAY) return initRes;
 
-    GtkWidget* widget = gtk_file_chooser_dialog_new("Save File",
-                                                    nullptr,
-                                                    GTK_FILE_CHOOSER_ACTION_SAVE,
-                                                    "_Cancel",
-                                                    GTK_RESPONSE_CANCEL,
-                                                    nullptr);
-
-    // guard to destroy the widget when returning from this function
-    Widget_Guard widgetGuard(widget);
-
-    GtkWidget* saveButton = gtk_dialog_add_button(GTK_DIALOG(widget), "_Save", GTK_RESPONSE_ACCEPT);
-
-    // Prompt on overwrite
-    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(widget), TRUE);
-
-    /* Build the filter list */
-    ButtonClickedArgs buttonClickedArgs;
-    buttonClickedArgs.chooser = GTK_FILE_CHOOSER(widget);
-    buttonClickedArgs.map =
-        AddFiltersToDialogWithMap(GTK_FILE_CHOOSER(widget), args->filterList, args->filterCount);
-
-    /* Set the default path */
-    SetDefaultPath(GTK_FILE_CHOOSER(widget), args->defaultPath);
-
-    /* Set the default file name */
-    SetDefaultName(GTK_FILE_CHOOSER(widget), args->defaultName);
-
-    /* set the handler to add file extension */
-    gulong handlerID = g_signal_connect(G_OBJECT(saveButton),
-                                        "pressed",
-                                        G_CALLBACK(FileActivatedSignalHandler),
-                                        static_cast<void*>(&buttonClickedArgs));
-
-    gint result;
-    {
-        /* Parent the window properly */
-        NativeWindowParenter nativeWindowParenter(widget, args->parentWindow);
-
-        /* invoke the dialog (blocks until dialog is closed) */
-        result = RunDialogWithFocus(GTK_DIALOG(widget));
+    GtkFileChooserNative* native = gtk_file_chooser_native_new(
+        "Save File", nullptr, GTK_FILE_CHOOSER_ACTION_SAVE, "_Save", "_Cancel");
+    if (!native) {
+        NFDi_SetError("Failed to create GtkFileChooserNative.");
+        return NFD_ERROR;
     }
+    NativeDialog_Guard dialogGuard(native);
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(native), TRUE);
 
-    /* unset the handler */
-    g_signal_handler_disconnect(G_OBJECT(saveButton), handlerID);
+    Pair_GtkFileFilter_FileExtension* filterMap =
+        AddFiltersToDialogWithMap(GTK_FILE_CHOOSER(native), args->filterList, args->filterCount);
+    Free_Guard<Pair_GtkFileFilter_FileExtension> filterMapGuard(filterMap);
 
-    /* free the filter map */
-    NFDi_Free(buttonClickedArgs.map);
+    SetDefaultPath(GTK_FILE_CHOOSER(native), args->defaultPath);
+    SetDefaultName(GTK_FILE_CHOOSER(native), args->defaultName);
 
+    const gint result = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
     if (result == GTK_RESPONSE_ACCEPT) {
-        // write out the file name
-        *outPath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(widget));
-
+        char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
+        if (!filename) {
+            NFDi_SetError("Selected save destination cannot be represented as a local path.");
+            return NFD_ERROR;
+        }
+        *outPath = AppendDefaultExtensionIfMissing(filename, GTK_FILE_CHOOSER(native), filterMap);
         return NFD_OKAY;
-    } else {
-        return NFD_CANCEL;
     }
+    return NFD_CANCEL;
 }
 
 nfdresult_t NFD_SaveDialogU8(nfdu8char_t** outPath,
@@ -792,41 +742,31 @@ nfdresult_t NFD_PickFolderN(nfdnchar_t** outPath, const nfdnchar_t* defaultPath)
 nfdresult_t NFD_PickFolderN_With_Impl(nfdversion_t version,
                                       nfdnchar_t** outPath,
                                       const nfdpickfoldernargs_t* args) {
-    // We haven't needed to bump the interface version yet.
     (void)version;
+    const nfdresult_t initRes = EnsureGtkInitialized();
+    if (initRes != NFD_OKAY) return initRes;
 
-    GtkWidget* widget = gtk_file_chooser_dialog_new("Select Folder",
-                                                    nullptr,
-                                                    GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-                                                    "_Cancel",
-                                                    GTK_RESPONSE_CANCEL,
-                                                    "_Select",
-                                                    GTK_RESPONSE_ACCEPT,
-                                                    nullptr);
-
-    // guard to destroy the widget when returning from this function
-    Widget_Guard widgetGuard(widget);
-
-    /* Set the default path */
-    SetDefaultPath(GTK_FILE_CHOOSER(widget), args->defaultPath);
-
-    gint result;
-    {
-        /* Parent the window properly */
-        NativeWindowParenter nativeWindowParenter(widget, args->parentWindow);
-
-        /* invoke the dialog (blocks until dialog is closed) */
-        result = RunDialogWithFocus(GTK_DIALOG(widget));
+    GtkFileChooserNative* native = gtk_file_chooser_native_new(
+        "Select Folder", nullptr, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "_Select", "_Cancel");
+    if (!native) {
+        NFDi_SetError("Failed to create GtkFileChooserNative.");
+        return NFD_ERROR;
     }
+    NativeDialog_Guard dialogGuard(native);
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
 
+    SetDefaultPath(GTK_FILE_CHOOSER(native), args->defaultPath);
+
+    const gint result = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
     if (result == GTK_RESPONSE_ACCEPT) {
-        // write out the file name
-        *outPath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(widget));
-
+        *outPath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
+        if (!*outPath) {
+            NFDi_SetError("Selected folder cannot be represented as a local filesystem path.");
+            return NFD_ERROR;
+        }
         return NFD_OKAY;
-    } else {
-        return NFD_CANCEL;
     }
+    return NFD_CANCEL;
 }
 
 nfdresult_t NFD_PickFolderU8(nfdu8char_t** outPath, const nfdu8char_t* defaultPath)
@@ -846,42 +786,33 @@ nfdresult_t NFD_PickFolderMultipleN(const nfdpathset_t** outPaths, const nfdncha
 nfdresult_t NFD_PickFolderMultipleN_With_Impl(nfdversion_t version,
                                               const nfdpathset_t** outPaths,
                                               const nfdpickfoldernargs_t* args) {
-    // We haven't needed to bump the interface version yet.
     (void)version;
+    const nfdresult_t initRes = EnsureGtkInitialized();
+    if (initRes != NFD_OKAY) return initRes;
 
-    GtkWidget* widget = gtk_file_chooser_dialog_new("Select Folders",
-                                                    nullptr,
-                                                    GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-                                                    "_Cancel",
-                                                    GTK_RESPONSE_CANCEL,
-                                                    "_Select",
-                                                    GTK_RESPONSE_ACCEPT,
-                                                    nullptr);
-
-    // guard to destroy the widget when returning from this function
-    Widget_Guard widgetGuard(widget);
-
-    /* Set the default path */
-    SetDefaultPath(GTK_FILE_CHOOSER(widget), args->defaultPath);
-
-    gint result;
-    {
-        /* Parent the window properly */
-        NativeWindowParenter nativeWindowParenter(widget, args->parentWindow);
-
-        /* invoke the dialog (blocks until dialog is closed) */
-        result = RunDialogWithFocus(GTK_DIALOG(widget));
+    GtkFileChooserNative* native = gtk_file_chooser_native_new(
+        "Select Folders", nullptr, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "_Select", "_Cancel");
+    if (!native) {
+        NFDi_SetError("Failed to create GtkFileChooserNative.");
+        return NFD_ERROR;
     }
+    NativeDialog_Guard dialogGuard(native);
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(native), TRUE);
+    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(native), TRUE);
 
+    SetDefaultPath(GTK_FILE_CHOOSER(native), args->defaultPath);
+
+    const gint result = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
     if (result == GTK_RESPONSE_ACCEPT) {
-        // write out the file name
-        GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(widget));
-
+        GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(native));
+        if (!fileList) {
+            NFDi_SetError("Selected folders cannot be represented as local filesystem paths.");
+            return NFD_ERROR;
+        }
         *outPaths = static_cast<void*>(fileList);
         return NFD_OKAY;
-    } else {
-        return NFD_CANCEL;
     }
+    return NFD_CANCEL;
 }
 
 nfdresult_t NFD_PickFolderMultipleU8(const nfdpathset_t** outPaths, const nfdu8char_t* defaultPath)

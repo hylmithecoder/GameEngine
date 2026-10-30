@@ -1866,6 +1866,8 @@ void MainWindow::EnsureSceneLoaded() {
   sceneRenderer->ClearMeshes3D();
   projectHandler.currentScene.objects.clear();
   if (activeProject.empty()) {
+    projectHandler.currentScenePath.clear();
+    projectHandler.currentSceneName.clear();
     if (debug2D) {
       GameObject sprite;
       sprite.name = "TestSprite";
@@ -1907,6 +1909,8 @@ void MainWindow::EnsureSceneLoaded() {
       ::Log(std::to_string(report.failed) +
                 " scene object(s) could not be loaded",
             Debug::LogLevel::WARNING);
+    projectHandler.currentScenePath = mainScene.string();
+    projectHandler.currentSceneName = "main";
     loadedSceneProject = desired;
   }
   if (loadedSceneProject == desired)
@@ -3030,7 +3034,7 @@ void MainWindow::RenderMenuBar() {
         Save3DScene();
       }
       if (MenuItem("Save As...", "Ctrl+Shift+S")) {
-        projectHandler.SaveAsScene();
+        SaveAs3DScene();
       }
       Separator();
       if (MenuItem("Exit", "Alt+F4"))
@@ -3454,26 +3458,19 @@ void MainWindow::ClearMessages() {
   messages.clear();
 }
 
-bool MainWindow::Save3DScene() {
+bool MainWindow::Save3DSceneToPath(const std::string &targetPath) {
   if (!sceneRenderer)
     return false;
   if (SceneStructureLocked()) {
     PushMessage("[WARNING] Stop the game before saving the scene");
     return false;
   }
+  if (targetPath.empty())
+    return false;
+
   LoadGameUiForProject();
   const std::string activeProject = projectHandler.projectPath;
-  if (activeProject.empty()) {
-    ::Log("Cannot save scene: No active project opened.",
-          Debug::LogLevel::WARNING);
-    projectHandler.ShowNotification("Save Warning",
-                                    "No active project is opened",
-                                    ImVec4(1.0f, 0.6f, 0.0f, 1.0f));
-    return false;
-  }
   namespace fs = std::filesystem;
-  fs::path scenesDir = fs::path(activeProject) / "scenes";
-  fs::path mainScene = scenesDir / "main.ilmeeescene";
 
   ilmeee::IlmeeeScene scene;
   scene.backgroundColor = sceneRenderer->GetBackgroundColor();
@@ -3544,9 +3541,13 @@ bool MainWindow::Save3DScene() {
         e.kind = ilmeee::PrimitiveKind::Cube; // unknown mesh → safe default
       } else {
         fs::path absPath = path;
-        std::error_code ec;
-        fs::path rel = fs::relative(absPath, activeProject, ec);
-        e.externalPath = ec ? path : rel.string();
+        if (!activeProject.empty()) {
+          std::error_code ec;
+          fs::path rel = fs::relative(absPath, activeProject, ec);
+          e.externalPath = ec ? path : rel.string();
+        } else {
+          e.externalPath = path;
+        }
         std::string ext = absPath.extension().string();
         if (ext == ".pmx" || ext == ".PMX")
           e.kind = ilmeee::PrimitiveKind::ExternalPmx;
@@ -3564,11 +3565,15 @@ bool MainWindow::Save3DScene() {
           continue;
         ilmeee::SurfaceTexture st;
         st.surfaceIndex = s;
-        std::error_code ec2;
-        fs::path rel = fs::relative(fs::path(tex), activeProject, ec2);
-        std::string relStr = ec2 ? std::string() : rel.string();
-        st.texturePath =
-            (!relStr.empty() && relStr.rfind("..", 0) != 0) ? relStr : tex;
+        if (!activeProject.empty()) {
+          std::error_code ec2;
+          fs::path rel = fs::relative(fs::path(tex), activeProject, ec2);
+          std::string relStr = ec2 ? std::string() : rel.string();
+          st.texturePath =
+              (!relStr.empty() && relStr.rfind("..", 0) != 0) ? relStr : tex;
+        } else {
+          st.texturePath = tex;
+        }
         e.surfaceTextures.push_back(std::move(st));
       }
     }
@@ -3578,17 +3583,112 @@ bool MainWindow::Save3DScene() {
   if (hasGameUiCanvas)
     ilmeee::AppendGameUIToScene(scene, gameUi);
 
-  if (ilmeee::SaveScene(mainScene.string(), scene)) {
-    ::Log("Saved 3D scene to " + mainScene.string(), Debug::LogLevel::SUCCESS);
+  const fs::path dstPath(targetPath);
+  if (dstPath.has_parent_path()) {
+    std::error_code ecDir;
+    fs::create_directories(dstPath.parent_path(), ecDir);
+  }
+  const std::string filename = dstPath.filename().string();
+
+  if (ilmeee::SaveScene(targetPath, scene)) {
+    ::Log("Saved 3D scene to " + targetPath, Debug::LogLevel::SUCCESS);
     projectHandler.ShowNotification("Scene Saved",
-                                    "Successfully saved main.ilmeeescene",
+                                    "Successfully saved " + filename,
                                     ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
     return true;
   } else {
-    ::Log("Failed to save 3D scene to " + mainScene.string(),
+    ::Log("Failed to save 3D scene to " + targetPath,
           Debug::LogLevel::ERROR);
-    projectHandler.ShowNotification("Save Error", "Failed to save scene",
+    projectHandler.ShowNotification("Save Error",
+                                    "Failed to save " + filename,
                                     ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
     return false;
   }
+}
+
+bool MainWindow::Save3DScene() {
+  if (!sceneRenderer)
+    return false;
+  if (SceneStructureLocked()) {
+    PushMessage("[WARNING] Stop the game before saving the scene");
+    return false;
+  }
+  if (!projectHandler.currentScenePath.empty()) {
+    return Save3DSceneToPath(projectHandler.currentScenePath);
+  }
+  const std::string activeProject = projectHandler.projectPath;
+  if (activeProject.empty()) {
+    ::Log("Cannot save scene: No active project opened.",
+          Debug::LogLevel::WARNING);
+    projectHandler.ShowNotification("Save Warning",
+                                    "No active project is opened",
+                                    ImVec4(1.0f, 0.6f, 0.0f, 1.0f));
+    return false;
+  }
+  namespace fs = std::filesystem;
+  const fs::path mainScene =
+      fs::path(activeProject) / "scenes" / "main.ilmeeescene";
+  if (Save3DSceneToPath(mainScene.string())) {
+    projectHandler.currentScenePath = mainScene.string();
+    projectHandler.currentSceneName = "main";
+    return true;
+  }
+  return false;
+}
+
+bool MainWindow::SaveAs3DScene() {
+  if (!sceneRenderer)
+    return false;
+  if (SceneStructureLocked()) {
+    PushMessage("[WARNING] Stop the game before saving the scene");
+    return false;
+  }
+
+  namespace fs = std::filesystem;
+  std::string defaultDir;
+  if (!projectHandler.currentScenePath.empty()) {
+    defaultDir = fs::path(projectHandler.currentScenePath).parent_path().string();
+  } else if (!projectHandler.projectPath.empty()) {
+    const fs::path scenesDir = fs::path(projectHandler.projectPath) / "scenes";
+    std::error_code ec;
+    fs::create_directories(scenesDir, ec);
+    defaultDir = scenesDir.string();
+  }
+
+  const std::string baseName = projectHandler.currentSceneName.empty()
+                                   ? "main"
+                                   : projectHandler.currentSceneName;
+  const std::string defaultFile = baseName + ".ilmeeescene";
+
+  NFD::Guard nfdGuard;
+  NFD::UniquePath savePath;
+  nfdfilteritem_t filterItem[1] = {{"Scene", "ilmeeescene"}};
+  const nfdresult_t result = NFD::SaveDialog(
+      savePath, filterItem, 1,
+      defaultDir.empty() ? nullptr : defaultDir.c_str(), defaultFile.c_str());
+
+  if (result == NFD_OKAY && savePath.get() != nullptr) {
+    fs::path chosen(savePath.get());
+    if (chosen.extension() != ".ilmeeescene")
+      chosen.replace_extension(".ilmeeescene");
+
+    if (!Save3DSceneToPath(chosen.string()))
+      return false;
+
+    projectHandler.currentScenePath = chosen.string();
+    projectHandler.currentSceneName = chosen.stem().string();
+    if (!projectHandler.projectPath.empty()) {
+      projectHandler.rootAsset =
+          projectHandler.BuildAssetTree(projectHandler.projectPath);
+    }
+    return true;
+  }
+  if (result == NFD_ERROR) {
+    const char *err = NFD::GetError();
+    const std::string errMsg = err ? err : "Failed to open Save As dialog";
+    ::Log("Save As dialog failed: " + errMsg, Debug::LogLevel::ERROR);
+    projectHandler.ShowNotification("Save Error", errMsg,
+                                    ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+  }
+  return false;
 }

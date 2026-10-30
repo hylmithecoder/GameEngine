@@ -273,9 +273,12 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
     }
   }
 
-  // Check for Ctrl+S keyboard shortcut
-  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-    Save3DScene();
+  // Ctrl+S saves the active scene; Ctrl+Shift+S opens Save As...
+  if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+    if (io.KeyShift)
+      SaveAs3DScene();
+    else
+      Save3DScene();
   }
 
   // Ctrl+B builds the game, Ctrl+Shift+B builds and runs it.

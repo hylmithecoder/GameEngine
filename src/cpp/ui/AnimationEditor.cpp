@@ -1,7 +1,7 @@
 #include "ui/AnimationEditor.hpp"
 #include "ui/MainWindow.hpp"
 #include "core_engine/UserDataDir.hpp"
-#include <nfd.h>
+#include <nfd.hpp>
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cmath>
@@ -65,11 +65,15 @@ void AnimationEditor::MotionLibrary(MainWindow &app) {
   }
   if (paths.empty()) TextDisabled("No bundled motions found.");
   if (Button("Browse Motion...")) {
-    nfdchar_t *path = nullptr;
+    NFD::Guard guard;
+    NFD::UniquePath path;
     nfdfilteritem_t filters[] = {{"PMX motion", "vmd,ilmeeeanim"}};
-    const auto result = NFD_OpenDialog(&path, filters, 1, nullptr);
-    if (result == NFD_OKAY && path) { OpenMotion(app, path); NFD_FreePath(path); }
-    else if (result == NFD_ERROR) message_ = NFD_GetError();
+    const auto result = NFD::OpenDialog(path, filters, 1, nullptr);
+    if (result == NFD_OKAY && path.get()) { OpenMotion(app, path.get()); }
+    else if (result == NFD_ERROR) {
+      const char *err = NFD::GetError();
+      message_ = err ? err : "Failed to open file dialog.";
+    }
   }
 }
 

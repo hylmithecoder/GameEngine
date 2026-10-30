@@ -1,7 +1,7 @@
 #include "ui/AnimationEditor.hpp"
 #include "ui/MainWindow.hpp"
 #include "core_engine/UserDataDir.hpp"
-#include <nfd.h>
+#include <nfd.hpp>
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -24,10 +24,11 @@ bool EditString(const char *label, std::string &value) {
   value = text; return true;
 }
 std::string Browse(const char *title, const char *extensions) {
-  nfdchar_t *path = nullptr;
+  NFD::Guard guard;
+  NFD::UniquePath path;
   nfdfilteritem_t filter[] = {{title, extensions}};
-  if (NFD_OpenDialog(&path, filter, 1, nullptr) != NFD_OKAY || !path) return {};
-  std::string result(path); NFD_FreePath(path); return result;
+  if (NFD::OpenDialog(path, filter, 1, nullptr) != NFD_OKAY || !path.get()) return {};
+  return std::string(path.get());
 }
 }
 

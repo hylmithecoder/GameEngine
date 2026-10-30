@@ -44,6 +44,13 @@ if [ -d /run/opengl-driver ]; then
         export OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors
 fi
 
+# Point GTK/GIO at bundled GSettings schemas when the host environment does not
+# provide them, and prefer xdg-desktop-portal native file/folder dialogs.
+[ -z "${GSETTINGS_SCHEMA_DIR:-}" ] &&
+    [ -f "$root/share/glib-2.0/schemas/gschemas.compiled" ] &&
+    export GSETTINGS_SCHEMA_DIR="$root/share/glib-2.0/schemas"
+[ -z "${GTK_USE_PORTAL:-}" ] && export GTK_USE_PORTAL=1
+
 bin=${1:?usage: ilmeee <binary-name> [args...]}
 shift
 exec "$root/bin/$bin" "$@"

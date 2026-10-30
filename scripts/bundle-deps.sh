@@ -44,6 +44,7 @@ absolutise_needed
 
 # ldd only reports direct dependencies, so repeat until nothing new appears
 # (bundled libraries pull in dependencies of their own).
+gtk_lib_src=""
 copied_total=0
 for _pass in 1 2 3 4 5; do
     copied=0
@@ -54,6 +55,9 @@ for _pass in 1 2 3 4 5; do
             # ldd names the ELF interpreter by absolute path rather than a
             # soname; it belongs to the host libc and must never be copied.
             case "$soname" in /*) continue ;; esac
+            case "$soname" in
+                libgtk-3.so*) [ -z "$gtk_lib_src" ] && gtk_lib_src="$path" ;;
+            esac
             [[ "$soname" =~ $EXCLUDE_RE ]] && continue
             [ -e "$STAGE/lib/$soname" ] && continue
             cp -L "$path" "$STAGE/lib/$soname"
@@ -67,6 +71,23 @@ for _pass in 1 2 3 4 5; do
 done
 
 echo "Bundled $copied_total libraries into $STAGE/lib"
+
+# Bundle GTK3 compiled GSettings schemas (org.gtk.Settings.FileChooser) so
+# file/folder/save dialogs never abort on minimal desktops without GTK schemas.
+if [ -n "$gtk_lib_src" ]; then
+    gtk_prefix=$(dirname -- "$(dirname -- "$gtk_lib_src")")
+    for candidate in \
+        "$gtk_prefix/share/glib-2.0/schemas/gschemas.compiled" \
+        "$gtk_prefix"/share/gsettings-schemas/*/glib-2.0/schemas/gschemas.compiled; do
+        if [ -f "$candidate" ]; then
+            mkdir -p "$STAGE/share/glib-2.0/schemas"
+            cp -L "$candidate" "$STAGE/share/glib-2.0/schemas/gschemas.compiled"
+            chmod u+w "$STAGE/share/glib-2.0/schemas/gschemas.compiled"
+            echo "  + share/glib-2.0/schemas/gschemas.compiled"
+            break
+        fi
+    done
+fi
 
 # Normalise RPATHs: binaries look next to themselves and in ../lib, libraries
 # look next to themselves. No absolute path survives.
