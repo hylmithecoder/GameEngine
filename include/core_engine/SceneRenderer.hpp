@@ -267,6 +267,9 @@ public:
     // PMX bone hierarchy (empty for OBJ meshes / primitives)
     std::vector<pmx::PMXBone> bones;
     std::vector<pmx::PMXVertex> skinVertices;
+    // Reused CPU skinning/upload storage, avoiding a mesh-sized allocation
+    // on every animation or spring-physics frame.
+    std::vector<MeshVertex> skinnedVertices;
     std::vector<ilmeee::SkeletonBone> skeleton;
     std::vector<glm::vec3> posedBones;
     ilmeee::AnimationComponent animation;

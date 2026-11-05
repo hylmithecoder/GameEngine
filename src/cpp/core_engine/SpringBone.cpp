@@ -60,6 +60,8 @@ std::string Signature(const std::vector<SkeletonBone> &bones,
   std::string s = std::to_string(bones.size());
   if (!bones.empty()) s += ':' + bones.front().name + ':' + bones.back().name;
   for (const auto &chain : component.chains) s += '|' + chain.rootBone;
+  s += "#colliders";
+  for (const auto &collider : component.colliders) s += '|' + collider.bone;
   return s;
 }
 
@@ -71,6 +73,8 @@ bool Setup(const std::vector<SkeletonBone> &bones,
   if (rt.signature == signature) return !rt.joints.empty();
   rt.Reset();
   rt.signature = signature;
+  for (const auto &collider : component.colliders)
+    rt.colliderBones.push_back(FindBone(bones, collider.bone));
   const int n = int(bones.size());
   std::vector<int> depth(n, 0);
   for (int i = 0; i < n; ++i) {
@@ -121,13 +125,15 @@ struct WorldCollider { glm::vec3 a, b; float radius; };
 // tails (no time passes); the first pass after a reset rests every tail.
 bool Solve(const std::vector<SkeletonBone> &bones, const SpringBoneComponent &component,
            SpringBoneRuntime &rt, const glm::mat4 &model, float dt, bool integrate,
-           const std::vector<glm::mat4> &pose, std::vector<glm::mat4> &out) {
+           const std::vector<glm::mat4> &pose,
+           const std::vector<glm::mat4> &localPose, std::vector<glm::mat4> &out) {
   if (std::abs(glm::determinant(glm::mat3(model))) < 1e-12f) return false;
   const glm::mat4 toModel = glm::inverse(model);
   const float scale = AverageScale(model);
   std::vector<WorldCollider> colliders;
-  for (const auto &c : component.colliders) {
-    const int bone = FindBone(bones, c.bone);
+  for (size_t i = 0; i < component.colliders.size(); ++i) {
+    const auto &c = component.colliders[i];
+    const int bone = rt.colliderBones[i];
     if (bone < 0 || !Finite(c.offset) || !Finite(c.tailOffset) ||
         !std::isfinite(c.radius) || c.radius <= 0) continue;
     const glm::mat4 frame = model * pose[bone];
@@ -140,7 +146,7 @@ bool Solve(const std::vector<SkeletonBone> &bones, const SpringBoneComponent &co
   for (int b : rt.order) {
     const int p = bones[b].parent;
     if (p >= 0 && moved[p]) {
-      out[b] = out[p] * glm::inverse(pose[p]) * pose[b];
+      out[b] = out[p] * localPose[b];
       moved[b] = 1;
     }
     const int j = rt.jointOfBone[b];
@@ -171,19 +177,25 @@ bool Solve(const std::vector<SkeletonBone> &bones, const SpringBoneComponent &co
       // Restoring the bone length can pull the tail back in; a few passes
       // settle it on the collider surface.
       for (int pass = 0; pass < 4; ++pass) {
+        bool projected = false;
         for (const auto &c : colliders) {
           // The animated pose itself sits inside (hair roots in a rough head
           // sphere): honour the model's shape instead of puffing it out.
-          if (glm::length(restTail - ClosestOnSegment(restTail, c.a, c.b)) < c.radius + hit)
+          const float minimum = c.radius + hit;
+          const glm::vec3 restAway = restTail - ClosestOnSegment(restTail, c.a, c.b);
+          if (glm::dot(restAway, restAway) < minimum * minimum)
             continue;
           const glm::vec3 closest = ClosestOnSegment(next, c.a, c.b);
           const glm::vec3 away = next - closest;
-          const float distance = glm::length(away), minimum = c.radius + hit;
-          if (distance >= minimum) continue;
+          const float distance2 = glm::dot(away, away);
+          if (distance2 >= minimum * minimum) continue;
+          const float distance = std::sqrt(distance2);
+          projected = true;
           next = closest + (distance > 1e-6f ? away / distance : (restTail - head) / length) * minimum;
           dir = next - head;
           if (glm::length(dir) > 1e-6f) next = head + glm::normalize(dir) * length;
         }
+        if (!projected) break;
       }
     }
     if (!Finite(next)) return false;
@@ -264,6 +276,23 @@ bool ApplySpringBones(const std::vector<SkeletonBone> &bones,
     return false;
   if (!Setup(bones, component, rt)) return false;
 
+  // The animated pose is identical across all fixed substeps. Compute each
+  // parent inverse and local frame once, instead of once per child per step.
+  std::vector<glm::mat4> inversePose(bones.size()), localPose(bones.size());
+  std::vector<uint8_t> affected(bones.size(), 0), inverted(bones.size(), 0);
+  for (int i : rt.order) {
+    const int parent = bones[i].parent;
+    if (parent >= 0 && affected[parent]) {
+      if (!inverted[parent]) {
+        inversePose[parent] = glm::inverse(world[parent]);
+        inverted[parent] = 1;
+      }
+      localPose[i] = inversePose[parent] * world[i];
+      affected[i] = 1;
+    }
+    if (rt.jointOfBone[i] >= 0) affected[i] = 1;
+  }
+
   // A teleport (respawn, scene jump) would fling every chain; rest instead.
   if (rt.initialized) {
     float reach = 0;
@@ -290,9 +319,9 @@ bool ApplySpringBones(const std::vector<SkeletonBone> &bones,
     const float t = float(k) / float(steps);
     glm::mat4 sub;
     for (int c = 0; c < 4; ++c) sub[c] = glm::mix(rt.previousModel[c], model[c], t);
-    ok = Solve(bones, component, rt, sub, kSpringBoneStep, true, world, out);
+    ok = Solve(bones, component, rt, sub, kSpringBoneStep, true, world, localPose, out);
   }
-  if (ok && steps == 0) ok = Solve(bones, component, rt, model, 0, false, world, out);
+  if (ok && steps == 0) ok = Solve(bones, component, rt, model, 0, false, world, localPose, out);
   rt.previousModel = model;
   if (!ok) { rt.initialized = false; return false; }
   world = std::move(out);

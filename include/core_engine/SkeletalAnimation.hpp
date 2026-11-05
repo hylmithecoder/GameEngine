@@ -80,6 +80,11 @@ glm::vec3 SkinPosition(const glm::vec3 &position, const glm::ivec4 &joints,
 glm::vec3 SkinNormal(const glm::vec3 &normal, const glm::ivec4 &joints,
                      const glm::vec4 &weights,
                      const std::vector<glm::mat4> &matrices);
+// Shares the weighted matrix between position and normal evaluation.
+void SkinVertex(const glm::vec3 &position, const glm::vec3 &normal,
+                const glm::ivec4 &joints, const glm::vec4 &weights,
+                const std::vector<glm::mat4> &matrices,
+                glm::vec3 &outPosition, glm::vec3 &outNormal);
 // A small editable loop, using standard PMX/Japanese and common English names.
 AnimationClip MakeBreathingClip(const std::vector<SkeletonBone> &bones,
                                 float modelHeight);

@@ -44,8 +44,14 @@ void PanelManager::RenderWindowMenuItems() {
 
 Panel *PanelManager::Find(const char *name) {
   for (auto &p : m_Panels) {
-    if (std::strcmp(p->GetName(), name) == 0) {
+    const char *pname = p->GetName();
+    if (std::strcmp(pname, name) == 0) {
       return p.get();
+    }
+    if (const char *idPart = std::strstr(pname, "###")) {
+      if (std::strcmp(idPart + 3, name) == 0) {
+        return p.get();
+      }
     }
   }
   return nullptr;

@@ -13,7 +13,13 @@ namespace ilmeee {
 struct IlmeeeScene;
 
 enum class UiKind { Text, Image, Button, Joystick };
-enum class UiAnchor { TopLeft, TopRight, BottomLeft, BottomRight, Center };
+// The first five values are the original scene/JSON anchors. Stretch modes
+// add the viewport's extra width/height to the reference rectangle.
+enum class UiAnchor {
+  TopLeft, TopRight, BottomLeft, BottomRight, Center,
+  TopCenter, BottomCenter, CenterLeft, CenterRight,
+  StretchTop, StretchBottom, StretchCenter, StretchFull
+};
 
 struct UiElement {
   // Stable identity shared with scene objects (scripts, dialog links).
@@ -48,6 +54,8 @@ UiElement *FindUiElement(GameUI &ui, uint64_t objectId);
 const UiElement *FindUiElement(const GameUI &ui, uint64_t objectId);
 UiRect GameUIElementRect(const GameUI &ui, const UiElement &element,
                          ImVec2 origin, ImVec2 size);
+// Change the layout without moving the element in the reference canvas.
+void SetUiElementAnchor(const GameUI &ui, UiElement &element, UiAnchor anchor);
 
 GameUI DefaultGameUI();
 bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out);

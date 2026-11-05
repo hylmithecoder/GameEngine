@@ -167,46 +167,7 @@ public:
   IconInfo LoadCachedTexture(const string &pathIcon);
   ilmeee::ModelThumbnailCache modelThumbnails;
 
-  IconInfo GetIconForFile(const AssetFile &node) {
-    string path = "assets/icons/svg/";
-    if (node.isDirectory) {
-      path += "folder.svg";
-    } else {
-      string ext = fs::path(node.name).extension().string();
-      if (ext == ".cpp" || ext == ".hpp")
-        path += "code.svg";
-      else if (ext == ".png" || ext == ".jpg" || ext == ".webp" ||
-               ext == ".jpeg")
-        path = node.fullPath; // Show actual image thumbnail
-      else if (ext == ".mp4" || ext == ".avi" || ext == ".mov" ||
-               ext == ".mkv") {
-        // Generate thumbnail for video files
-        auto cachedThumbnail = iconCacheInfo.find(node.fullPath);
-        if (cachedThumbnail != iconCacheInfo.end()) {
-          return cachedThumbnail->second;
-        }
-        IconInfo thumbnail = GenerateVideoThumbnail(node.fullPath);
-        iconCacheInfo[node.fullPath] = thumbnail;
-        return thumbnail;
-      } else if (ilmeee::IsPreviewableModel(node.name)) {
-        // Rendered preview once ready; the generic box until then.
-        const string preview = modelThumbnails.Request(node.fullPath);
-        path = preview.empty() ? path + "box.svg" : preview;
-      }
-      else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" ||
-               ext == ".flac")
-        path += "music.svg";
-      else if (ext == ".glsl" || ext == ".vert" || ext == ".frag" ||
-               ext == ".spv")
-        path += "shader.svg";
-      else if (ext == ".prefab" || ext == ".ilmeeescene" || ext == ".unity")
-        path += "file.svg";
-      else
-        path += "file.svg";
-    }
-
-    return LoadCachedTexture(path);
-  }
+  IconInfo GetIconForFile(const AssetFile &node);
   bool IsFrameValid(const AVFrame *frame, int width, int height);
   float CalculateColorVariance(const uint8_t *data, int width, int height);
   void FlipImageVertically(unsigned char *data, int width, int height,

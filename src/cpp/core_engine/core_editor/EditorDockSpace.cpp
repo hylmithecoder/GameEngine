@@ -1,8 +1,45 @@
 #include "../../../../include/core_engine/core_editor/EditorDockSpace.hpp"
 
 #include <imgui_internal.h>
+#include <string>
 
 namespace Ilmeee {
+
+namespace {
+
+// Seamless migration when panel titles gain leading icons ("<icon> Name###Name"):
+// ImHashStr("...###Name") hashes "###Name", so copy existing "Name" settings once.
+void MigrateLegacyWindowSettings() {
+  static constexpr const char *kPanelNames[] = {
+      "Hierarchy",      "Inspector",      "Scene",
+      "Game",           "Animation",      "Explorer",
+      "Console",        "Video Player",   "Lighting",
+      "Device Monitor", "Engine Motions",
+  };
+  for (const char *baseName : kPanelNames) {
+    const std::string newIdName = std::string("###") + baseName;
+    if (ImGui::FindWindowSettingsByID(ImHashStr(newIdName.c_str())) != nullptr)
+      continue;
+    ImGuiWindowSettings *legacy =
+        ImGui::FindWindowSettingsByID(ImHashStr(baseName));
+    if (legacy == nullptr)
+      continue;
+    const ImGuiWindowSettings copy = *legacy;
+    ImGuiWindowSettings *migrated =
+        ImGui::CreateNewWindowSettings(newIdName.c_str());
+    migrated->Pos = copy.Pos;
+    migrated->Size = copy.Size;
+    migrated->ViewportPos = copy.ViewportPos;
+    migrated->ViewportId = copy.ViewportId;
+    migrated->DockId = copy.DockId;
+    migrated->ClassId = copy.ClassId;
+    migrated->DockOrder = copy.DockOrder;
+    migrated->Collapsed = copy.Collapsed;
+    migrated->WantApply = true;
+  }
+}
+
+} // namespace
 
 bool EditorDockSpace::s_LayoutInitialized = false;
 bool EditorDockSpace::s_LayoutResetRequested = false;
@@ -44,6 +81,8 @@ void EditorDockSpace::Begin(const char *dockspaceId, float topOffset) {
 void EditorDockSpace::End() { ImGui::End(); }
 
 void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
+  MigrateLegacyWindowSettings();
+
   // Only rebuild if no persisted layout exists for this dockspace,
   // unless the user explicitly asked for a reset.
   ImGuiDockNode *existing = ImGui::DockBuilderGetNode(dockspaceId);
@@ -73,14 +112,16 @@ void EditorDockSpace::BuildDefaultLayout(ImGuiID dockspaceId) {
   ImGuiID dockBottomRight = ImGui::DockBuilderSplitNode(
       dockBottom, ImGuiDir_Right, 0.40f, nullptr, &dockBottom);
 
-  ImGui::DockBuilderDockWindow("Hierarchy", dockLeft);
-  ImGui::DockBuilderDockWindow("Inspector", dockRight);
-  ImGui::DockBuilderDockWindow("Scene", dockMain);
-  ImGui::DockBuilderDockWindow("Game", dockMain);
-  ImGui::DockBuilderDockWindow("Animation", dockMain);
-  ImGui::DockBuilderDockWindow("Explorer", dockBottom);
-  ImGui::DockBuilderDockWindow("Console", dockBottom);
-  ImGui::DockBuilderDockWindow("Video Player", dockBottomRight);
+  ImGui::DockBuilderDockWindow("###Hierarchy", dockLeft);
+  ImGui::DockBuilderDockWindow("###Inspector", dockRight);
+  ImGui::DockBuilderDockWindow("###Lighting", dockRight);
+  ImGui::DockBuilderDockWindow("###Scene", dockMain);
+  ImGui::DockBuilderDockWindow("###Game", dockMain);
+  ImGui::DockBuilderDockWindow("###Explorer", dockBottom);
+  ImGui::DockBuilderDockWindow("###Console", dockBottom);
+  ImGui::DockBuilderDockWindow("###Animation", dockBottom);
+  ImGui::DockBuilderDockWindow("###Video Player", dockBottomRight);
+  ImGui::DockBuilderDockWindow("###Device Monitor", dockBottomRight);
 
   ImGui::DockBuilderFinish(dockspaceId);
 }

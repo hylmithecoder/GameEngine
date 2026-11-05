@@ -38,7 +38,8 @@ void AnimationEditor::OpenMotion(MainWindow &app, const std::string &path) {
   queuedMotion_ = path;
 }
 void AnimationEditor::MotionLibrary(MainWindow &app) {
-  if (!CollapsingHeader("Engine Motions")) return;
+  if (!CollapsingHeader(ICON_UI_ANIMATION " Engine Motions###Engine Motions"))
+    return;
   TextWrapped("Choose a scene PMX character, then preview a motion.");
   fs::path folder;
   std::error_code ec;
@@ -365,7 +366,10 @@ void AnimationEditor::Render(MainWindow &app) {
     SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
   SetNextWindowSize({1000, 720}, ImGuiCond_FirstUseEver);
   if (focus_) { SetNextWindowFocus(); focus_ = false; }
-  if (!Begin("Animation", &app.showAnimation)) { End(); return; }
+  if (!Begin(ICON_UI_ANIMATION " Animation###Animation", &app.showAnimation)) {
+    End();
+    return;
+  }
   MotionLibrary(app);
   const bool wasController = controllerMode_;
   if (BeginTabBar("AnimationTools")) {

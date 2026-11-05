@@ -71,4 +71,5 @@ build*/dist/
 
 docs/*
 !docs/ScriptingAPI.md
+!docs/AndroidPerformanceAndUI.md
 .env

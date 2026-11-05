@@ -129,13 +129,25 @@ void MainWindow::OnInit() {
 
   ImFontConfig fontCfg;
   fontCfg.MergeMode = false;
-  io.Fonts->AddFontFromFileTTF("assets/fonts/MiSansLatin-Regular.ttf", 16.0f,
-                               &fontCfg);
-  fontCfg.MergeMode = true;
-  fontCfg.GlyphOffset.y = 1.0f;
-  io.Fonts->AddFontFromFileTTF(
-      "assets/fonts/zh-cn.ttf", 13.0f, &fontCfg,
-      io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+  std::string latinFontPath =
+      SvgIconManager::ResolveSvgFilePath("assets/fonts/MiSansLatin-Regular.ttf");
+  ImFont *mainFont = nullptr;
+  if (std::filesystem::exists(latinFontPath)) {
+    mainFont = io.Fonts->AddFontFromFileTTF(latinFontPath.c_str(), 15.0f, &fontCfg);
+  }
+  if (!mainFont) {
+    mainFont = io.Fonts->AddFontDefault();
+  }
+  std::string cjkFontPath =
+      SvgIconManager::ResolveSvgFilePath("assets/fonts/zh-cn.ttf");
+  if (std::filesystem::exists(cjkFontPath)) {
+    fontCfg.MergeMode = true;
+    fontCfg.GlyphOffset.y = 1.0f;
+    io.Fonts->AddFontFromFileTTF(
+        cjkFontPath.c_str(), 13.0f, &fontCfg,
+        io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+  }
+  SvgIconManager::BakeFontIcons(io.Fonts, mainFont, 15.0f);
 
   Ilmeee::EditorTheme::Apply(darkTheme ? Ilmeee::EditorTheme::Variant::Dark
                                        : Ilmeee::EditorTheme::Variant::Light);
@@ -427,83 +439,8 @@ void MainWindow::HandleUpdateBackground(CurrentBackground currentBg) {
 }
 
 void MainWindow::setTheme(bool dark) {
-  if (dark) {
-    // Dark theme dengan warna yang lebih modern
-    ui::StyleColorsDark();
-    ImGuiStyle &style = ui::GetStyle();
-
-    style.WindowPadding = ImVec2(12, 12);
-    style.FramePadding = ImVec2(8, 6);
-    style.ItemSpacing = ImVec2(8, 6);
-    style.ItemInnerSpacing = ImVec2(6, 6);
-    style.ScrollbarSize = 16;
-    style.GrabMinSize = 12;
-
-    style.WindowRounding = 8.0f;
-    style.ChildRounding = 8.0f;
-    style.FrameRounding = 6.0f;
-    style.PopupRounding = 6.0f;
-    style.ScrollbarRounding = 12.0f;
-    style.GrabRounding = 6.0f;
-    style.TabRounding = 8.0f;
-
-    ImVec4 *colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = ImVec4(0.15f, 0.16f, 0.21f, 1.00f);
-    colors[ImGuiCol_Border] = ImVec4(0.24f, 0.26f, 0.32f, 0.50f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.12f, 0.13f, 0.17f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.16f, 0.18f, 0.21f, 1.00f);
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.14f, 0.15f, 0.18f, 1.00f);
-
-    colors[ImGuiCol_Button] = ImVec4(0.28f, 0.56f, 1.00f, 0.54f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.28f, 0.56f, 1.00f, 0.86f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.28f, 0.56f, 1.00f, 1.00f);
-
-    colors[ImGuiCol_Header] = ImVec4(0.20f, 0.42f, 0.78f, 0.45f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-
-    colors[ImGuiCol_Tab] = ImVec4(0.18f, 0.20f, 0.25f, 1.00f);
-    colors[ImGuiCol_TabHovered] = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-    colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.41f, 0.68f, 1.00f);
-  } else {
-    // Light theme yang elegan
-    ui::StyleColorsLight();
-    ImGuiStyle &style = ui::GetStyle();
-
-    style.WindowPadding = ImVec2(12, 12);
-    style.FramePadding = ImVec2(8, 6);
-    style.ItemSpacing = ImVec2(8, 6);
-    style.ItemInnerSpacing = ImVec2(6, 6);
-    style.ScrollbarSize = 16;
-    style.GrabMinSize = 12;
-
-    style.WindowRounding = 8.0f;
-    style.ChildRounding = 8.0f;
-    style.FrameRounding = 6.0f;
-    style.PopupRounding = 6.0f;
-    style.ScrollbarRounding = 12.0f;
-    style.GrabRounding = 6.0f;
-    style.TabRounding = 8.0f;
-
-    ImVec4 *colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = ImVec4(0.94f, 0.94f, 0.94f, 1.00f);
-    colors[ImGuiCol_Border] = ImVec4(0.70f, 0.70f, 0.70f, 0.50f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.78f, 0.78f, 0.78f, 1.00f);
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.86f, 0.86f, 0.86f, 1.00f);
-
-    colors[ImGuiCol_Button] = ImVec4(0.00f, 0.55f, 0.83f, 0.40f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.00f, 0.55f, 0.83f, 0.60f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.00f, 0.55f, 0.83f, 0.80f);
-
-    colors[ImGuiCol_Header] = ImVec4(0.00f, 0.55f, 0.83f, 0.30f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.55f, 0.83f, 0.50f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.00f, 0.55f, 0.83f, 0.70f);
-
-    colors[ImGuiCol_Tab] = ImVec4(0.84f, 0.84f, 0.84f, 1.00f);
-    colors[ImGuiCol_TabHovered] = ImVec4(0.00f, 0.55f, 0.83f, 0.50f);
-    colors[ImGuiCol_TabActive] = ImVec4(0.00f, 0.55f, 0.83f, 0.70f);
-  }
+  Ilmeee::EditorTheme::Apply(dark ? Ilmeee::EditorTheme::Variant::Dark
+                                  : Ilmeee::EditorTheme::Variant::Light);
 }
 
 bool MainWindow::openVideo(const char *filePath) {

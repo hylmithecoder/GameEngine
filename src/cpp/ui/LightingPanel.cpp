@@ -84,7 +84,7 @@ void MainWindow::RenderLightingMenu() {
 
 void MainWindow::RenderLightingWindow() {
   SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
-  if (!Begin("Lighting", &showLighting)) {
+  if (!Begin(ICON_UI_LIGHTING " Lighting###Lighting", &showLighting)) {
     End();
     return;
   }

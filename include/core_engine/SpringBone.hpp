@@ -55,6 +55,7 @@ struct SpringBoneRuntime {
   std::vector<int> order; // parents before children
   std::vector<Joint> joints;
   std::vector<int> jointOfBone;
+  std::vector<int> colliderBones; // name resolution only when setup changes
   float accumulator = 0.0f;
   glm::mat4 previousModel{1.0f};
   bool initialized = false;

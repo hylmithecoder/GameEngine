@@ -1,4 +1,4 @@
-// .ilmeeescene v1.3–v1.18: round trip, reading
+// .ilmeeescene v1.3–v1.19: round trip, reading
 // older files, and rejecting parent links that would break the hierarchy.
 //
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
@@ -553,7 +553,7 @@ int main() {
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file);
     bytes[6] = 12; bytes.resize(bytes.size() - kNprBytes);
-    bytes.erase(bytes.end() - 18 - kSpringBytes, bytes.end() - 16); // remove v1.16 controller + v1.17
+    bytes.erase(bytes.end() - 18 - kSpringBytes - kPhysicsBytes, bytes.end() - 16); // remove v1.16 controller, v1.17 springs and v1.18 physics
     WriteAll(file, bytes);
     IlmeeeScene loaded;
     CHECK(LoadScene(file.string(), loaded));
@@ -612,7 +612,7 @@ int main() {
 
     auto bytes = ReadAll(file);
     bytes[6] = 14; bytes.resize(bytes.size() - kNprBytes);
-    bytes.erase(bytes.end() - 18 - kSpringBytes, bytes.end() - 16); // remove v1.16 controller + v1.17
+    bytes.erase(bytes.end() - 18 - kSpringBytes - kPhysicsBytes, bytes.end() - 16); // remove v1.16 controller, v1.17 springs and v1.18 physics
     WriteAll(file, bytes);
     CHECK(LoadScene(file.string(), in));
     CHECK(!in.npr.enabled && in.npr.bands == NprSettings().bands);
@@ -623,7 +623,7 @@ int main() {
     IlmeeeScene s; s.entities = {Entity("Legacy15", -1)}; s.npr.enabled = true;
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file); bytes[6] = 15;
-    bytes.erase(bytes.end() - kNprBytes - 18 - kSpringBytes, bytes.end() - kNprBytes - 16);
+    bytes.erase(bytes.end() - kNprBytes - 18 - kSpringBytes - kPhysicsBytes, bytes.end() - kNprBytes - 16);
     WriteAll(file, bytes);
     IlmeeeScene loaded; CHECK(LoadScene(file.string(), loaded));
     CHECK(loaded.entities[0].animation.controller.empty() && loaded.npr.enabled);
@@ -653,7 +653,7 @@ int main() {
     s.entities[0].springBones = {};
     CHECK(SaveScene(file.string(), s));
     auto bytes = ReadAll(file); bytes[6] = 16;
-    bytes.erase(bytes.end() - kNprBytes - 16 - kSpringBytes, bytes.end() - kNprBytes - 16);
+    bytes.erase(bytes.end() - kNprBytes - 16 - kSpringBytes - kPhysicsBytes, bytes.end() - kNprBytes - 16);
     WriteAll(file, bytes);
     IlmeeeScene legacy; CHECK(LoadScene(file.string(), legacy));
     CHECK(!legacy.entities[0].springBones.enabled && legacy.entities[0].springBones.chains.empty());

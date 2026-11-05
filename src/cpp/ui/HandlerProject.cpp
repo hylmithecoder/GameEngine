@@ -74,6 +74,158 @@ bool CopyPath(const fs::path &sourcePath, const fs::path &targetPath,
   return !ec;
 }
 
+std::string ToLowerAsciiStr(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char c) { return (char)std::tolower(c); });
+  return s;
+}
+
+std::vector<std::string> SplitFilterTokens(const std::string &filter) {
+  std::vector<std::string> tokens;
+  std::string cur;
+  for (char ch : filter) {
+    if (ch == ' ' || ch == ',' || ch == ';' || ch == '\t') {
+      if (!cur.empty()) {
+        tokens.push_back(ToLowerAsciiStr(cur));
+        cur.clear();
+      }
+    } else {
+      cur.push_back(ch);
+    }
+  }
+  if (!cur.empty()) {
+    tokens.push_back(ToLowerAsciiStr(cur));
+  }
+  return tokens;
+}
+
+bool MatchesAssetFilter(const std::string &name, bool isDirectory,
+                        const std::string &filter,
+                        bool keepFoldersOnExtFilter = true) {
+  if (filter.empty())
+    return true;
+  auto tokens = SplitFilterTokens(filter);
+  if (tokens.empty())
+    return true;
+
+  bool allExtensions = true;
+  for (const auto &tok : tokens) {
+    if (tok.empty() || tok[0] != '.') {
+      allExtensions = false;
+      break;
+    }
+  }
+
+  std::string nameLower = ToLowerAsciiStr(name);
+  if (allExtensions) {
+    if (isDirectory && keepFoldersOnExtFilter)
+      return true;
+    for (const auto &extTok : tokens) {
+      if (nameLower.size() >= extTok.size() &&
+          nameLower.compare(nameLower.size() - extTok.size(), extTok.size(),
+                            extTok) == 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  for (const auto &tok : tokens) {
+    if (nameLower.find(tok) != std::string::npos)
+      return true;
+  }
+  return false;
+}
+
+size_t PrevUtf8Boundary(const std::string &s, size_t pos) {
+  if (pos == 0)
+    return 0;
+  --pos;
+  while (pos > 0 && ((unsigned char)s[pos] & 0xC0) == 0x80) {
+    --pos;
+  }
+  return pos;
+}
+
+size_t NextUtf8Boundary(const std::string &s, size_t pos) {
+  if (pos >= s.size())
+    return s.size();
+  ++pos;
+  while (pos < s.size() && ((unsigned char)s[pos] & 0xC0) == 0x80) {
+    ++pos;
+  }
+  return pos;
+}
+
+std::string EllipsizeUtf8ToWidth(const std::string &text, float maxWidth) {
+  if (text.empty() || maxWidth <= 8.0f)
+    return text;
+  if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth)
+    return text;
+
+  const std::string dots = "..";
+  size_t cut = text.size();
+  while (cut > 0) {
+    cut = PrevUtf8Boundary(text, cut);
+    std::string candidate = text.substr(0, cut) + dots;
+    if (ImGui::CalcTextSize(candidate.c_str()).x <= maxWidth)
+      return candidate;
+  }
+  return dots;
+}
+
+std::pair<std::string, std::string>
+SplitTwoLinesToWidth(const std::string &text, float maxWidth) {
+  if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth) {
+    return {text, {}};
+  }
+
+  size_t pos = 0;
+  size_t lastFit = 0;
+  size_t preferredBreak = 0;
+  while (pos < text.size()) {
+    size_t next = NextUtf8Boundary(text, pos);
+    std::string slice = text.substr(0, next);
+    if (ImGui::CalcTextSize(slice.c_str()).x > maxWidth)
+      break;
+    lastFit = next;
+    char ch = text[pos];
+    if (ch == ' ' || ch == '_' || ch == '-' || ch == '.')
+      preferredBreak = next;
+    pos = next;
+  }
+
+  size_t splitAt = (preferredBreak >= 4 && preferredBreak < text.size())
+                       ? preferredBreak
+                       : (lastFit > 0 ? lastFit : NextUtf8Boundary(text, 0));
+  std::string line1 = text.substr(0, splitAt);
+  while (!line1.empty() && line1.back() == ' ')
+    line1.pop_back();
+  std::string rest = text.substr(splitAt);
+  while (!rest.empty() && rest.front() == ' ')
+    rest.erase(rest.begin());
+  std::string line2 = EllipsizeUtf8ToWidth(rest, maxWidth);
+  return {line1, line2};
+}
+
+std::string FormatHumanFileSize(const std::string &fullPath) {
+  std::error_code ec;
+  auto bytes = fs::file_size(fullPath, ec);
+  if (ec)
+    return "";
+  char buf[64];
+  if (bytes < 1024)
+    snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+  else if (bytes < 1024ULL * 1024ULL)
+    snprintf(buf, sizeof(buf), "%.1f KB", (double)bytes / 1024.0);
+  else if (bytes < 1024ULL * 1024ULL * 1024ULL)
+    snprintf(buf, sizeof(buf), "%.2f MB", (double)bytes / (1024.0 * 1024.0));
+  else
+    snprintf(buf, sizeof(buf), "%.2f GB",
+             (double)bytes / (1024.0 * 1024.0 * 1024.0));
+  return buf;
+}
+
 } // namespace
 
 void HandlerProject::OpenFolder() {
@@ -416,215 +568,187 @@ void HandlerProject::ScanAssetsFolder(const std::string &rootFolder) {
 }
 
 void HandlerProject::DrawAssetTree(const AssetFile &node) {
-  // Define colors for different file types
-  ImVec4 folderColor = ImVec4(1.0f, 0.87f, 0.36f, 1.0f);    // Yellow
-  ImVec4 cppColor = ImVec4(0.46f, 0.78f, 1.0f, 1.0f);       // Light Blue
-  ImVec4 hppColor = ImVec4(0.71f, 0.46f, 1.0f, 1.0f);       // Purple
-  ImVec4 videoColor = ImVec4(1.0f, 0.44f, 0.37f, 1.0f);     // Red
-  ImVec4 defaultFileColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); // Light Gray
-
-  ImGuiTreeNodeFlags nodeFlags =
-      ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+  const float iconSz = 16.0f;
+  ImDrawList *drawList = ImGui::GetWindowDrawList();
 
   if (node.isDirectory) {
-    // Simpan warna teks awal
-    ImVec4 originalColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-
-    // Atur warna folder dan tampilkan ikon folder
-    ImGui::PushStyleColor(ImGuiCol_Text, folderColor);
-    if (svgIcons_) {
-      svgIcons_->DrawIcon("assets/icons/svg/folder.svg", 20);
-    }
-    ImGui::SameLine();
-    std::string label = node.name;
-
-    // Folder
     if (fileExplorerRenameTarget == node.fullPath) {
-      // ImGui::PushStyleColor(ImGuiCol_Text, originalColor);
       HandleRenameFolder(node);
-    } else {
-      bool nodeOpen = ImGui::TreeNodeEx(label.c_str(), nodeFlags);
-      ImGui::PopStyleColor(); // Kembalikan warna teks
-
-      // Generate ID popup context berdasarkan fullPath untuk menghindari
-      // konflik
-      std::string popupId = "context_menu_dir_" + node.fullPath;
-
-      // Tampilkan popup context pada folder ketika klik kanan
-      if (ImGui::BeginPopupContextItem(popupId.c_str())) {
-        if (ImGui::MenuItem(" Copy")) {
-          HandleCopy(node);
-        }
-
-        if (ImGui::MenuItem(" Paste", nullptr, false,
-                            !fileExplorerCopyTargets.empty())) {
-          HandlePaste(node.fullPath);
-        }
-
-        if (ImGui::MenuItem(" Import")) {
-          OpenFile();
-        }
-
-        if (ImGui::MenuItem(" Create New Folder")) {
-          fileExplorerRenameBufferSet = true;
-          HandleCreateNewFolder(node.fullPath);
-        }
-        // Opsi Delete
-        if (ImGui::MenuItem(" Delete")) {
-          // if (MessageBoxA(NULL,
-          //     ("Are you sure you want to delete " + node.name + "?").c_str(),
-          //     "Confirm Delete",
-          //     MB_YESNO | MB_ICONWARNING) == IDYES) {
-          DeleteFolder(node.fullPath);
-          // }
-        }
-
-        // Panggil method untuk membuat file baru di folder yang diklik
-        HandleCreateNewFile(node.fullPath);
-
-        if (ImGui::MenuItem(" Rename")) {
-          fileExplorerRenameTarget = node.fullPath;
-          strcpy(renameBuffer, node.name.c_str());
-          // HandleRename(node.fullPath);
-        }
-
-        ImGui::EndPopup();
-      }
-      // ImGui::EndGroup();
-
-      // Jika node terbuka, render child-nya
-      if (nodeOpen) {
-        for (const auto &child : node.children) {
-          DrawAssetTree(child);
-        }
-        ImGui::TreePop();
-      }
-    }
-  }
-  // File
-  else {
-    // Check file extension
-    std::string ext = fs::path(node.name).extension().string();
-    bool isCpp = (ext == ".cpp");
-    bool isHpp = (ext == ".hpp");
-    bool isVideo = (ext == ".mp4" || ext == ".mkv" || ext == ".m4a" ||
-                    ext == ".avi" || ext == ".mov");
-    bool isImage = (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                    ext == ".gif" || ext == ".bmp");
-    bool isAudio = (ext == ".mp3" || ext == ".wav" || ext == ".ogg");
-    bool isShader = (ext == ".glsl" || ext == ".shader" || ext == ".frag" ||
-                     ext == ".vert");
-
-    // Generate unique popup ID using file path to avoid conflicts
-    std::string popupId = "context_menu_" + node.fullPath;
-
-    // Start group for the selectable item with icon
-    ImGui::BeginGroup();
-    // Choose appropriate SVG icon based on file type
-    std::string svgIcon = "assets/icons/svg/file.svg";
-    ImVec4 fileColor = defaultFileColor;
-
-    if (isCpp) {
-      svgIcon = "assets/icons/svg/cpp.svg";
-      fileColor = cppColor;
-    } else if (isHpp) {
-      svgIcon = "assets/icons/svg/cpp.svg";
-      fileColor = hppColor;
-    } else if (isVideo) {
-      svgIcon = "assets/icons/svg/video.svg";
-      fileColor = videoColor;
-    } else if (isImage) {
-      svgIcon = "assets/icons/svg/image.svg";
-      fileColor = ImVec4(0.4f, 0.8f, 0.4f, 1.0f);
-    } else if (isAudio) {
-      svgIcon = "assets/icons/svg/music.svg";
-      fileColor = ImVec4(0.8f, 0.4f, 0.8f, 1.0f);
-    } else if (isShader) {
-      svgIcon = "assets/icons/svg/shader.svg";
-      fileColor = ImVec4(0.4f, 0.8f, 0.8f, 1.0f);
+      return;
     }
 
-    // Draw SVG icon inline
+    const bool isCurrentDir =
+        !currentDirectory.empty() &&
+        fs::path(currentDirectory).lexically_normal() ==
+            fs::path(node.fullPath).lexically_normal();
+
+    ImGuiTreeNodeFlags nodeFlags =
+        ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+        ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding |
+        ImGuiTreeNodeFlags_DrawLinesToNodes;
+    if (isCurrentDir) {
+      nodeFlags |= ImGuiTreeNodeFlags_Selected;
+    }
+
+    std::string treeLabel = "     " + node.name + "##dir_" + node.fullPath;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 3.0f));
+    bool nodeOpen = ImGui::TreeNodeEx(treeLabel.c_str(), nodeFlags);
+    ImGui::PopStyleVar();
+
+    ImVec2 itemMin = ImGui::GetItemRectMin();
+    float itemH = ImGui::GetItemRectSize().y;
+
     if (svgIcons_) {
-      svgIcons_->DrawIcon(svgIcon, 20);
+      AssetIconInfo iconMeta =
+          SvgIconManager::ResolveAssetIcon(node.fullPath, true, nodeOpen);
+      ImTextureID tex = svgIcons_->GetIcon(iconMeta.svgPath, 20);
+      if (tex) {
+        float ix = itemMin.x + ImGui::GetTreeNodeToLabelSpacing() - 1.0f;
+        float iy = itemMin.y + (itemH - iconSz) * 0.5f;
+        drawList->AddImage(tex, ImVec2(ix, iy), ImVec2(ix + iconSz, iy + iconSz));
+      }
     }
 
-    // Push color for the icon and text
-    ImGui::PushStyleColor(ImGuiCol_Text, fileColor);
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) &&
+        !ImGui::IsItemToggledOpen()) {
+      currentDirectory = node.fullPath;
+      fileExplorerSelectedPaths.clear();
+      selectedAsset = nullptr;
+    }
 
-    // Create label with icon
-    std::string label = node.name;
+    std::string popupId = "context_menu_dir_" + node.fullPath;
+    if (ImGui::BeginPopupContextItem(popupId.c_str())) {
+      if (ImGui::MenuItem("Copy")) {
+        HandleCopy(node);
+      }
+      if (ImGui::MenuItem("Paste", nullptr, false,
+                          !fileExplorerCopyTargets.empty())) {
+        HandlePaste(node.fullPath);
+      }
+      if (ImGui::MenuItem("Import...")) {
+        OpenFile();
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("New Folder")) {
+        fileExplorerRenameBufferSet = true;
+        HandleCreateNewFolder(node.fullPath);
+      }
+      HandleCreateNewFile(node.fullPath);
+      ImGui::Separator();
+      if (ImGui::MenuItem("Rename")) {
+        fileExplorerRenameTarget = node.fullPath;
+        strncpy(renameBuffer, node.name.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
+      if (ImGui::MenuItem("Delete")) {
+        DeleteFolder(node.fullPath);
+      }
+      ImGui::EndPopup();
+    }
 
+    if (nodeOpen) {
+      for (const auto &child : node.children) {
+        DrawAssetTree(child);
+      }
+      ImGui::TreePop();
+    }
+  } else {
     if (renamingPath == node.fullPath) {
       HandleRename(node);
-    } else {
-      // Ini adalah UI File nya
-      if (ImGui::Selectable(label.c_str(), false,
-                            ImGuiSelectableFlags_AllowDoubleClick)) {
-        if (ImGui::IsMouseDoubleClicked(0)) {
-          if (ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) {
-            if (onFileClicked) onFileClicked(node);
-          } else if (isCpp || isHpp || isShader) {
-            OpenFile(node.fullPath);
-          } else if (isVideo) {
-#ifdef _WIN32
-            ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL,
-                          SW_SHOW);
-#else
-            std::string cmd = "xdg-open \"" + node.fullPath + "\"";
-            system(cmd.c_str());
-#endif
-          } else if (isImage || isAudio) {
-#ifdef _WIN32
-            ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL,
-                          SW_SHOW);
-#else
-            std::string cmd = "xdg-open \"" + node.fullPath + "\"";
-            system(cmd.c_str());
-#endif
-          }
-        }
+      return;
+    }
+
+    const bool isSelected = fileExplorerSelectedPaths.contains(node.fullPath);
+    ImGuiTreeNodeFlags leafFlags =
+        ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+        ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding |
+        ImGuiTreeNodeFlags_DrawLinesToNodes;
+    if (isSelected) {
+      leafFlags |= ImGuiTreeNodeFlags_Selected;
+    }
+
+    std::string leafLabel = "     " + node.name + "##file_" + node.fullPath;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 2.5f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.85f, 0.90f, 1.0f));
+    ImGui::TreeNodeEx(leafLabel.c_str(), leafFlags);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+
+    ImVec2 itemMin = ImGui::GetItemRectMin();
+    float itemH = ImGui::GetItemRectSize().y;
+
+    AssetIconInfo iconMeta =
+        SvgIconManager::ResolveAssetIcon(node.fullPath, false, false);
+    if (svgIcons_) {
+      std::string treeSvg =
+          (iconMeta.svgPath == node.fullPath)
+              ? std::string("assets/icons/svg/ext_image.svg")
+              : iconMeta.svgPath;
+      ImTextureID tex = svgIcons_->GetIcon(treeSvg, 20);
+      if (tex) {
+        float ix = itemMin.x + ImGui::GetTreeNodeToLabelSpacing() - 1.0f;
+        float iy = itemMin.y + (itemH - iconSz) * 0.5f;
+        drawList->AddImage(tex, ImVec2(ix, iy), ImVec2(ix + iconSz, iy + iconSz));
       }
+    }
 
-      // Context menu for files
-      if (ImGui::BeginPopupContextItem(popupId.c_str())) {
-        // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-        // DrawIconFromImage("assets/images/fileicons/trash.png");
-        if (ImGui::MenuItem(" Copy")) {
-          HandleCopy(node);
-        }
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+      const std::string &fp = node.fullPath;
+      ImGui::SetDragDropPayload("ASSET_PATH", fp.c_str(), fp.size() + 1);
+      ImGui::Text("%s", node.name.c_str());
+      ImGui::EndDragDropSource();
+    }
 
-        if (ImGui::MenuItem(" Paste", nullptr, false,
-                            !fileExplorerCopyTargets.empty())) {
-          // A file is not a paste destination; use its containing folder.
-          HandlePaste(fs::path(node.fullPath).parent_path().string());
-        }
+    if (ImGui::IsItemHovered() && ImGui::CalcTextSize(node.name.c_str()).x >
+                                      ImGui::GetContentRegionAvail().x * 0.7f) {
+      ImGui::SetTooltip("%s", node.name.c_str());
+    }
 
-        if (ImGui::MenuItem(" Delete")) {
-          // if (MessageBoxA(NULL,
-          //     ("Are you sure you want to delete " + node.name + "?").c_str(),
-          //     "Confirm Delete",
-          //     MB_YESNO | MB_ICONWARNING) == IDYES) {
-          DeleteFileOrFolder(node.fullPath);
-          // }
-        }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+      fileExplorerSelectedPaths.clear();
+      fileExplorerSelectedPaths.insert(node.fullPath);
+    }
 
-        if (ImGui::MenuItem(" Edit")) {
-          OpenFile(node.fullPath);
-        }
-
-        if (ImGui::MenuItem(" Rename")) {
-          renamingPath = node.fullPath;
-          strcpy(renameBuffer, node.name.c_str());
-          // HandleRename(node.fullPath);
-        }
-
-        ImGui::EndPopup();
+    if (ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+      if (ilmeee::IsAnimationPath(node.fullPath) ||
+          ilmeee::IsAnimationControllerPath(node.fullPath)) {
+        if (onFileClicked)
+          onFileClicked(node);
+      } else {
+        HandlerOpenFileWithExtensionName(const_cast<AssetFile &>(node));
+        if (onFileClicked)
+          onFileClicked(node);
       }
+    }
 
-      // Pop color style
-      ImGui::PopStyleColor();
-      ImGui::EndGroup();
+    std::string popupId = "context_menu_" + node.fullPath;
+    if (ImGui::BeginPopupContextItem(popupId.c_str())) {
+      if (ImGui::MenuItem("Open")) {
+        HandlerOpenFileWithExtensionName(const_cast<AssetFile &>(node));
+        if (onFileClicked)
+          onFileClicked(node);
+      }
+      if (ImGui::MenuItem("Edit in Code Editor")) {
+        OpenFile(node.fullPath);
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Copy")) {
+        HandleCopy(node);
+      }
+      if (ImGui::MenuItem("Paste", nullptr, false,
+                          !fileExplorerCopyTargets.empty())) {
+        HandlePaste(fs::path(node.fullPath).parent_path().string());
+      }
+      if (ImGui::MenuItem("Rename")) {
+        renamingPath = node.fullPath;
+        strncpy(renameBuffer, node.name.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
+      if (ImGui::MenuItem("Delete")) {
+        DeleteFileOrFolder(node.fullPath);
+      }
+      ImGui::EndPopup();
     }
   }
 }
@@ -684,30 +808,138 @@ void HandlerProject::HandleRenameFileOrFolder(const AssetFile &node) {
   ImGui::PopID();
 }
 
+void HandlerProject::DrawBreadcrumbs(const std::string &pathStr) {
+  if (pathStr.empty()) {
+    ImGui::TextDisabled("No folder selected");
+    return;
+  }
+
+  fs::path cur = fs::path(pathStr).lexically_normal();
+  fs::path projRoot =
+      projectPath.empty() ? fs::path() : fs::path(projectPath).lexically_normal();
+
+  struct Crumb {
+    std::string label;
+    std::string targetPath;
+  };
+  std::vector<Crumb> crumbs;
+
+  std::error_code ec;
+  if (!projRoot.empty() &&
+      (cur == projRoot || IsPathInside(projRoot, cur))) {
+    std::string rootName = projRoot.filename().string();
+    if (rootName.empty())
+      rootName = "Project";
+    crumbs.push_back({std::string(ICON_UI_EXPLORER) + " " + rootName,
+                      projRoot.string()});
+    if (cur != projRoot) {
+      fs::path rel = fs::relative(cur, projRoot, ec);
+      fs::path accum = projRoot;
+      for (const auto &part : rel) {
+        if (part.empty() || part == ".")
+          continue;
+        accum /= part;
+        crumbs.push_back({part.string(), accum.string()});
+      }
+    }
+  } else {
+    // External directory (e.g. Engine Motions): show last up to 4 segments
+    std::vector<Crumb> allParts;
+    fs::path walk = cur;
+    while (!walk.empty() && walk != walk.root_path()) {
+      std::string seg = walk.filename().string();
+      if (!seg.empty())
+        allParts.push_back({seg, walk.string()});
+      walk = walk.parent_path();
+    }
+    std::reverse(allParts.begin(), allParts.end());
+    size_t startIdx = allParts.size() > 4 ? allParts.size() - 4 : 0;
+    for (size_t i = startIdx; i < allParts.size(); ++i) {
+      crumbs.push_back(allParts[i]);
+    }
+  }
+
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 2.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 2.0f));
+
+  for (size_t i = 0; i < crumbs.size(); ++i) {
+    bool isLast = (i + 1 == crumbs.size());
+    if (isLast) {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.96f, 0.98f, 1.0f));
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.64f, 0.69f, 0.77f, 1.0f));
+    }
+
+    std::string btnId = crumbs[i].label + "##crumb_" + std::to_string(i);
+    if (ImGui::Button(btnId.c_str())) {
+      currentDirectory = crumbs[i].targetPath;
+      fileExplorerSelectedPaths.clear();
+      selectedAsset = nullptr;
+    }
+    ImGui::PopStyleColor();
+
+    if (!isLast) {
+      ImGui::SameLine();
+      ImGui::TextDisabled(">");
+      ImGui::SameLine();
+    }
+  }
+
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(2);
+}
+
 void HandlerProject::DrawFileExplorer(AssetFile &node) {
-  // The grid entries are rebuilt from disk every frame, so selection must live
-  // in the handler rather than in the temporary AssetFile value.
   ImGui::PushID(node.fullPath.c_str());
 
-  float itemWidth = thumbnailSize.x + itemSpacing * 2;
-  float itemHeight = thumbnailSize.y + ImGui::GetFontSize() + 8.0f;
-  ImVec2 totalSize(itemWidth, itemHeight);
+  const float padX = 8.0f;
+  const float lineH = ImGui::GetTextLineHeight();
+  const float labelAreaH = lineH * 2.0f + 8.0f;
+  const float cardWidth = thumbnailSize.x + padX * 2.0f;
+  const float cardHeight = thumbnailSize.y + labelAreaH + 10.0f;
+  ImVec2 totalSize(cardWidth, cardHeight);
 
-  // Simpan posisi awal
   ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-
   ImGui::InvisibleButton("##ItemButton", totalSize);
   const bool itemHovered = ImGui::IsItemHovered();
-  if (itemHovered && (ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)))
-    ImGui::SetTooltip("Motion clip: double-click to preview on a PMX character in Animation");
+  const bool itemSelected = fileExplorerSelectedPaths.contains(node.fullPath);
 
-  // Drag source: files can be dragged out (e.g. a model dropped onto the
-  // Scene viewport to instantiate it). Payload is the file's full path.
+  AssetIconInfo iconMeta =
+      SvgIconManager::ResolveAssetIcon(node.fullPath, node.isDirectory, false);
+
+  // Rich informative Unity-style tooltip on hover
+  if (itemHovered) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(node.name.c_str());
+    if (node.isDirectory) {
+      ImGui::TextDisabled("Folder");
+    } else {
+      std::string sizeText = FormatHumanFileSize(node.fullPath);
+      if (!iconMeta.badgeLabel.empty() && !sizeText.empty()) {
+        ImGui::TextDisabled("%s Asset  •  %s", iconMeta.badgeLabel.c_str(),
+                            sizeText.c_str());
+      } else if (!iconMeta.badgeLabel.empty()) {
+        ImGui::TextDisabled("%s Asset", iconMeta.badgeLabel.c_str());
+      }
+      if (ilmeee::IsAnimationPath(node.fullPath) ||
+          ilmeee::IsAnimationControllerPath(node.fullPath)) {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.65f, 1.0f),
+                           "Double-click to preview in Animation panel");
+      }
+    }
+    ImGui::EndTooltip();
+  }
+
+  // Drag source for dropping assets onto Scene viewport / Inspector slots
   if (!node.isDirectory &&
       ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
     const std::string &fp = node.fullPath;
     ImGui::SetDragDropPayload("ASSET_PATH", fp.c_str(), fp.size() + 1);
-    ImGui::Text("%s", node.name.c_str());
+    ImGui::Text("%s %s", iconMeta.badgeLabel.empty() ? "" :
+                         ("[" + iconMeta.badgeLabel + "]").c_str(),
+                node.name.c_str());
     ImGui::EndDragDropSource();
   }
 
@@ -724,19 +956,13 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
       selectedAsset = nullptr;
       fileExplorerSelectedPaths.clear();
       ::Log("Opened folder: " + currentDirectory, Debug::LogLevel::SUCCESS);
-      ShowNotification("Opening folder: " + node.name, "Explorer",
-                       ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
     } else {
       HandlerOpenFileWithExtensionName(node);
       selectedAsset = &node;
-      ShowNotification("Opening file: " + node.name, "Explorer",
-                       ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
       if (onFileClicked)
         onFileClicked(node);
     }
   } else if (itemHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    // Ctrl-click keeps the existing selection and toggles this item. A normal
-    // click starts a new selection, matching file-manager behavior.
     if (ImGui::GetIO().KeyCtrl) {
       if (fileExplorerSelectedPaths.contains(node.fullPath)) {
         fileExplorerSelectedPaths.erase(node.fullPath);
@@ -750,88 +976,137 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
     selectedAsset = node.isDirectory ? nullptr : &node;
   }
 
-  // Right-clicking an unselected item makes it the only selected item. If it
-  // is already selected, preserve the other selected items for multi-copy.
   if (itemHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
       !fileExplorerSelectedPaths.contains(node.fullPath)) {
     fileExplorerSelectedPaths.clear();
     fileExplorerSelectedPaths.insert(node.fullPath);
   }
 
-  // Highlight selected items.
-  if (fileExplorerSelectedPaths.contains(node.fullPath)) {
-    ImDrawList *drawList = ImGui::GetWindowDrawList();
+  // Draw Unity-style Asset Card surface
+  ImDrawList *drawList = ImGui::GetWindowDrawList();
+  ImVec2 cardMax(cursorPos.x + cardWidth, cursorPos.y + cardHeight);
+  if (itemSelected) {
     drawList->AddRectFilled(
-        cursorPos, ImVec2(cursorPos.x + itemWidth, cursorPos.y + itemHeight),
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.6f, 1.0f, 0.2f)), 4.0f);
+        cursorPos, cardMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.18f, 0.35f, 0.60f, 0.42f)),
+        5.0f);
     drawList->AddRect(
-        cursorPos, ImVec2(cursorPos.x + itemWidth, cursorPos.y + itemHeight),
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.6f, 1.0f, 1.0f)), 4.0f, 0,
-        2.0f);
+        cursorPos, cardMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.26f, 0.54f, 0.98f, 0.95f)),
+        5.0f, 0, 1.5f);
+  } else if (itemHovered) {
+    drawList->AddRectFilled(
+        cursorPos, cardMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.20f, 0.23f, 0.28f, 0.65f)),
+        5.0f);
+    drawList->AddRect(
+        cursorPos, cardMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.32f, 0.36f, 0.43f, 0.70f)),
+        5.0f, 0, 1.0f);
+  } else {
+    drawList->AddRectFilled(
+        cursorPos, cardMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.14f, 0.15f, 0.18f, 0.45f)),
+        5.0f);
   }
 
-  // Gambar ikon di tengah
-  float iconPosX = cursorPos.x + (itemWidth - thumbnailSize.x) * 0.5f;
-  float iconPosY = cursorPos.y + 4.0f;
-  ImGui::GetWindowDrawList()->AddImage(
-      GetIconForFile(node).textureId, ImVec2(iconPosX, iconPosY),
-      ImVec2(iconPosX + thumbnailSize.x, iconPosY + thumbnailSize.y)
-      // ImVec2(0, 1),
-      // ImVec2(1, 0)
-  );
-
-  // Nama file
-  std::string displayName = node.name;
-  if (displayName.length() > 15) {
-    displayName = displayName.substr(0, 12) + "...";
+  // Draw padded crisp icon / preview thumbnail
+  const float iconInset = 6.0f;
+  const float drawSide = std::max(24.0f, thumbnailSize.x - iconInset * 2.0f);
+  const float iconPosX = cursorPos.x + (cardWidth - drawSide) * 0.5f;
+  const float iconPosY = cursorPos.y + 6.0f + iconInset * 0.5f;
+  IconInfo texInfo = GetIconForFile(node);
+  if (texInfo.textureId) {
+    // Preserve aspect ratio for non-square image thumbnails
+    float w = drawSide;
+    float h = drawSide;
+    if (texInfo.width > 0 && texInfo.height > 0 &&
+        texInfo.width != texInfo.height) {
+      float aspect = (float)texInfo.width / (float)texInfo.height;
+      if (aspect > 1.0f) {
+        h = drawSide / aspect;
+      } else {
+        w = drawSide * aspect;
+      }
+    }
+    float ox = iconPosX + (drawSide - w) * 0.5f;
+    float oy = iconPosY + (drawSide - h) * 0.5f;
+    drawList->AddImage(texInfo.textureId, ImVec2(ox, oy),
+                       ImVec2(ox + w, oy + h));
   }
 
-  ImVec2 textSize = ImGui::CalcTextSize(displayName.c_str());
-  float textPosX = cursorPos.x + (itemWidth - textSize.x) * 0.5f;
-  float textPosY = iconPosY + thumbnailSize.y + 4.0f;
+  // Extension pill badge at bottom-right of icon area (for files)
+  if (!node.isDirectory && !iconMeta.badgeLabel.empty() &&
+      thumbnailSize.x >= 52.0f) {
+    ImGui::SetWindowFontScale(0.76f);
+    ImVec2 badgeTxtSz = ImGui::CalcTextSize(iconMeta.badgeLabel.c_str());
+    const float bPadX = 4.0f;
+    const float bPadY = 1.5f;
+    const float bW = badgeTxtSz.x + bPadX * 2.0f;
+    const float bH = badgeTxtSz.y + bPadY * 2.0f;
+    ImVec2 bMax(cursorPos.x + cardWidth - 5.0f,
+                cursorPos.y + thumbnailSize.y + 1.0f);
+    ImVec2 bMin(bMax.x - bW, bMax.y - bH);
 
-  ImGui::GetWindowDrawList()->AddText(
-      ImVec2(textPosX, textPosY),
-      ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 0.9f, 1.0f)),
-      displayName.c_str());
+    ImVec4 pillBg(iconMeta.accentColor.x * 0.78f,
+                  iconMeta.accentColor.y * 0.78f,
+                  iconMeta.accentColor.z * 0.78f, 0.94f);
+    drawList->AddRectFilled(bMin, bMax, ImGui::ColorConvertFloat4ToU32(pillBg),
+                            3.0f);
+    drawList->AddText(ImVec2(bMin.x + bPadX, bMin.y + bPadY),
+                      IM_COL32(250, 252, 255, 255),
+                      iconMeta.badgeLabel.c_str());
+    ImGui::SetWindowFontScale(1.0f);
+  }
 
-  // Context menu
+  // Two-line centered UTF-8 safe filename
+  auto [line1, line2] = SplitTwoLinesToWidth(node.name, cardWidth - 8.0f);
+  const float textBaseY = cursorPos.y + thumbnailSize.y + 5.0f;
+  const ImU32 textCol =
+      itemSelected
+          ? IM_COL32(255, 255, 255, 255)
+          : (node.isDirectory ? IM_COL32(235, 239, 245, 255)
+                              : IM_COL32(208, 214, 224, 255));
+
+  ImVec2 l1Sz = ImGui::CalcTextSize(line1.c_str());
+  drawList->AddText(
+      ImVec2(cursorPos.x + (cardWidth - l1Sz.x) * 0.5f, textBaseY), textCol,
+      line1.c_str());
+  if (!line2.empty()) {
+    ImVec2 l2Sz = ImGui::CalcTextSize(line2.c_str());
+    drawList->AddText(ImVec2(cursorPos.x + (cardWidth - l2Sz.x) * 0.5f,
+                             textBaseY + lineH),
+                      IM_COL32(165, 174, 188, 255), line2.c_str());
+  }
+
+  // Context menu & inline rename
   if (fileExplorerRenameTarget == node.fullPath) {
-    HandleRenameOperation(node, cursorPos, itemWidth, itemHeight);
+    HandleRenameOperation(node, cursorPos, cardWidth, cardHeight);
   } else {
     if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem("Rename")) {
-        fileExplorerRenameTarget = node.fullPath;
-        strcpy(renameBuffer, node.name.c_str());
-      }
-
-      if (ImGui::MenuItem("Delete")) {
-        // if (MessageBoxA(NULL,
-        //     ("Are you sure you want to delete " + node.name + "?").c_str(),
-        //     "Confirm Delete",
-        //     MB_YESNO | MB_ICONWARNING) == IDYES) {
-        if (node.isDirectory) {
-          DeleteFolder(node.fullPath);
-        } else {
-          DeleteFileOrFolder(node.fullPath);
-        }
-        // }
-      }
-
-      ImGui::Separator();
       if (!node.isDirectory) {
-        if ((ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) &&
+        if ((ilmeee::IsAnimationPath(node.fullPath) ||
+             ilmeee::IsAnimationControllerPath(node.fullPath)) &&
             ImGui::MenuItem("Preview Motion")) {
-          if (onFileClicked) onFileClicked(node);
+          if (onFileClicked)
+            onFileClicked(node);
         }
         if (ImGui::MenuItem("Open")) {
           HandlerOpenFileWithExtensionName(const_cast<AssetFile &>(node));
-          if ((ilmeee::IsAnimationPath(node.fullPath) || ilmeee::IsAnimationControllerPath(node.fullPath)) && onFileClicked) onFileClicked(node);
+          if ((ilmeee::IsAnimationPath(node.fullPath) ||
+               ilmeee::IsAnimationControllerPath(node.fullPath)) &&
+              onFileClicked)
+            onFileClicked(node);
         }
+        ImGui::Separator();
+      } else {
+        if (ImGui::MenuItem("Open Folder")) {
+          currentDirectory = node.fullPath;
+          fileExplorerSelectedPaths.clear();
+        }
+        ImGui::Separator();
       }
 
-      // Folders are first-class clipboard items too.  A paste on a file uses
-      // its containing directory; a paste on a folder uses that folder.
       if (ImGui::MenuItem("Copy")) {
         HandleCopy(node);
       }
@@ -842,14 +1117,25 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
                              : fs::path(node.fullPath).parent_path().string();
         HandlePaste(targetFolder);
       }
+      if (ImGui::MenuItem("Rename")) {
+        fileExplorerRenameTarget = node.fullPath;
+        strncpy(renameBuffer, node.name.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
+      if (ImGui::MenuItem("Delete")) {
+        if (node.isDirectory) {
+          DeleteFolder(node.fullPath);
+        } else {
+          DeleteFileOrFolder(node.fullPath);
+        }
+      }
 
       ImGui::EndPopup();
     }
   }
 
-  // Next item posisi horizontal
   ImGui::SameLine(0, itemSpacing);
-  if (ImGui::GetCursorPosX() + itemWidth >
+  if (ImGui::GetCursorPosX() + cardWidth >
       ImGui::GetWindowContentRegionMax().x) {
     ImGui::NewLine();
   }
@@ -858,9 +1144,6 @@ void HandlerProject::DrawFileExplorer(AssetFile &node) {
 }
 
 void HandlerProject::DrawFolderGridView() {
-  // Gunakan currentDirectory yang sudah di-update dari double-click.
-  // Listing the folder from disk every frame was a big share of the
-  // editor's frame time, so it is cached and refreshed when it can change.
   const double now = ImGui::GetTime();
   if (gridFilesDirectory != currentDirectory ||
       gridFilesVersion != assetTreeVersion ||
@@ -870,45 +1153,68 @@ void HandlerProject::DrawFolderGridView() {
               [](const AssetFile &a, const AssetFile &b) {
                 if (a.isDirectory != b.isDirectory)
                   return a.isDirectory;
-                return a.name < b.name;
+                return ToLowerAsciiStr(a.name) < ToLowerAsciiStr(b.name);
               });
     gridFilesDirectory = currentDirectory;
     gridFilesVersion = assetTreeVersion;
     gridFilesTime = now;
   }
 
-  // Use filesystem paths for comparisons so the Explorer behaves the same on
-  // Windows and POSIX systems.
   const std::string rootDirectory =
       (fs::path(projectPath) / "assets").lexically_normal().string();
 
-  ImGui::SetNextItemWidth(100);
-  // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
-  ImGui::SliderFloat("Size", &thumbnailSize.x, 32.0f, 96.0f);
-  thumbnailSize.y = thumbnailSize.x;
+  // Top Breadcrumb + Filter Chip + Compact Zoom Bar (Unity Project Header)
+  DrawBreadcrumbs(currentDirectory);
 
-  // Tampilkan current directory path
-  ImGui::Text("Current: %s", currentDirectory.c_str());
+  const float rightControlsWidth =
+      currentFilter.empty() ? 124.0f : 230.0f;
+  float availRight = ImGui::GetWindowContentRegionMax().x - rightControlsWidth;
+  if (availRight > ImGui::GetCursorPosX() + 12.0f) {
+    ImGui::SameLine(availRight);
+  } else {
+    ImGui::SameLine();
+  }
+
+  if (!currentFilter.empty()) {
+    std::string chipLabel = currentFilter;
+    if (chipLabel.size() > 12)
+      chipLabel = chipLabel.substr(0, 10) + "..";
+    chipLabel = std::string(ICON_UI_FILTER " ") + chipLabel + " ×";
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.36f, 0.62f, 0.85f));
+    if (ImGui::SmallButton(chipLabel.c_str())) {
+      currentFilter.clear();
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Clear active filter (%s)", currentFilter.c_str());
+    ImGui::SameLine();
+  }
+
+  ImGui::TextDisabled(ICON_UI_GRID);
+  ImGui::SameLine(0, 4.0f);
+  ImGui::SetNextItemWidth(92.0f);
+  ImGui::SliderFloat("##GridIconSize", &thumbnailSize.x, 48.0f, 120.0f,
+                     "%.0fpx");
+  thumbnailSize.y = thumbnailSize.x;
 
   ImGui::Separator();
 
   if (ImGui::BeginChild("FileGrid", ImVec2(0, 0), false)) {
-    float contentWidth = ImGui::GetContentRegionAvail().x;
-    int itemsPerRow =
-        static_cast<int>(contentWidth / (thumbnailSize.x + itemSpacing * 2));
-    if (itemsPerRow < 1)
-      itemsPerRow = 1;
-
-    // Filter berdasarkan currentFilter; list sudah urut (folder dulu).
-    // A rename/delete while drawing bumps assetTreeVersion, so gridFiles is
-    // refreshed next frame, never in the middle of this loop.
+    size_t visibleCount = 0;
     for (auto &file : gridFiles) {
-      if (!currentFilter.empty() &&
-          file.name.find(currentFilter) == std::string::npos)
+      if (!MatchesAssetFilter(file.name, file.isDirectory, currentFilter, true))
         continue;
       DrawFileExplorer(file);
+      ++visibleCount;
     }
-    // Draw the "New Folder" button
+
+    if (visibleCount == 0) {
+      ImGui::Spacing();
+      ImGui::TextDisabled(currentFilter.empty()
+                              ? "  This folder is empty."
+                              : "  No assets match the current filter.");
+    }
+
     if (ImGui::BeginPopupContextWindow("FileGridContentMenu",
                                        ImGuiPopupFlags_MouseButtonRight |
                                            ImGuiPopupFlags_NoOpenOverItems)) {
@@ -917,22 +1223,19 @@ void HandlerProject::DrawFolderGridView() {
           fs::path(currentDirectory).lexically_normal() ==
           fs::path(rootDirectory).lexically_normal();
 
-      if (ImGui::BeginMenu("Create New")) {
+      if (ImGui::BeginMenu("Create")) {
         if (ImGui::MenuItem("Folder")) {
           HandleCreateNewFolder(currentDirectory);
         }
 
-        if (ImGui::BeginMenu("Script")) {
-          if (ImGui::BeginMenu("C++ Script")) {
-            HandleCreateNewFile(currentDirectory);
-            ImGui::EndMenu();
-          }
-          if (ImGui::MenuItem("Shader")) {
-            // HandleCreateShader(currentDirectory);
-            ShowNotification("New Shader", "Creating new shader...",
-                             ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-          }
+        if (ImGui::BeginMenu("C++ Script")) {
+          HandleCreateNewFile(currentDirectory);
           ImGui::EndMenu();
+        }
+
+        if (ImGui::MenuItem("Shader")) {
+          ShowNotification("New Shader", "Creating new shader...",
+                           ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
         }
 
         ImGui::EndMenu();
@@ -943,6 +1246,7 @@ void HandlerProject::DrawFolderGridView() {
         HandlePaste(currentDirectory);
       }
 
+      ImGui::Separator();
       if (ImGui::MenuItem("Import Files...")) {
         OpenFile();
       }
@@ -953,13 +1257,13 @@ void HandlerProject::DrawFolderGridView() {
 
       if (!isInRootDirectory) {
         ImGui::Separator();
-        if (ImGui::MenuItem("Show in Explorer")) {
+        if (ImGui::MenuItem("Reveal in File Manager")) {
 #ifdef _WIN32
           ShellExecuteA(NULL, "explore", currentDirectory.c_str(), NULL, NULL,
                         SW_SHOW);
 #else
           std::string cmd = "xdg-open \"" + currentDirectory + "\"";
-          system(cmd.c_str());
+          if (system(cmd.c_str()) != 0) {}
 #endif
         }
       }
@@ -968,7 +1272,6 @@ void HandlerProject::DrawFolderGridView() {
     }
   }
   ImGui::EndChild();
-  // ImGui::PopStyleColor();
 }
 
 void HandlerProject::OpenFile(const std::string &fileName) {
@@ -1095,21 +1398,61 @@ void HandlerProject::DrawIconFromImage(const char *iconPath, int width,
 }
 
 HandlerProject::IconInfo
+HandlerProject::GetIconForFile(const AssetFile &node) {
+  AssetIconInfo meta =
+      SvgIconManager::ResolveAssetIcon(node.fullPath, node.isDirectory, false);
+
+  if (!node.isDirectory) {
+    if (meta.isImagePreviewable) {
+      IconInfo imgTex = LoadCachedTexture(node.fullPath);
+      if (imgTex.textureId)
+        return imgTex;
+      return LoadCachedTexture("assets/icons/svg/ext_image.svg");
+    }
+
+    if (meta.isVideoPreviewable) {
+      auto cachedThumbnail = iconCacheInfo.find(node.fullPath);
+      if (cachedThumbnail != iconCacheInfo.end()) {
+        return cachedThumbnail->second;
+      }
+      IconInfo thumbnail = GenerateVideoThumbnail(node.fullPath);
+      if (!thumbnail.textureId) {
+        thumbnail = LoadCachedTexture("assets/icons/svg/ext_video.svg");
+      }
+      iconCacheInfo[node.fullPath] = thumbnail;
+      return thumbnail;
+    }
+
+    if (meta.isModelPreviewable && ilmeee::IsPreviewableModel(node.name)) {
+      const std::string preview = modelThumbnails.Request(node.fullPath);
+      if (!preview.empty()) {
+        IconInfo modelTex = LoadCachedTexture(preview);
+        if (modelTex.textureId)
+          return modelTex;
+      }
+      return LoadCachedTexture("assets/icons/svg/ext_model.svg");
+    }
+  }
+
+  return LoadCachedTexture(meta.svgPath);
+}
+
+HandlerProject::IconInfo
 HandlerProject::LoadCachedTexture(const std::string &path) {
-  // Already cached? Return directly
   auto it = iconCacheInfo.find(path);
   if (it != iconCacheInfo.end())
     return it->second;
 
-  // SVG files: route through SvgIconManager
-  if (path.size() >= 4 && path.substr(path.size() - 4) == ".svg") {
+  std::string extLower = ToLowerAsciiStr(fs::path(path).extension().string());
+  if (extLower == ".svg") {
     if (svgIcons_) {
-      ImTextureID tex = svgIcons_->GetIcon(path, 64);
+      constexpr int kGridSvgRasterPx = 128;
+      ImTextureID tex = svgIcons_->GetIcon(path, kGridSvgRasterPx);
       if (tex) {
         IconInfo info;
         info.textureId = tex;
-        info.width = 64;
-        info.height = 64;
+        info.width = kGridSvgRasterPx;
+        info.height = kGridSvgRasterPx;
         iconCacheInfo[path] = info;
         return info;
       }
@@ -1117,22 +1460,23 @@ HandlerProject::LoadCachedTexture(const std::string &path) {
     return {(ImTextureID)0, 0, 0};
   }
 
-  // PNG/JPG: use stbi + VulkanHandler
   if (vulkanHandler) {
-    int width, height, channels;
+    int width = 0, height = 0, channels = 0;
     if (!stbi_info(path.c_str(), &width, &height, &channels)) {
       return {(ImTextureID)0, 0, 0};
     }
 
-    ImTextureID tex = (ImTextureID)vulkanHandler->LoadImage(path.c_str());
-
-    IconInfo info;
-    info.textureId = tex;
-    info.width = width;
-    info.height = height;
-
-    iconCacheInfo[path] = info;
-    return info;
+    try {
+      ImTextureID tex = (ImTextureID)vulkanHandler->LoadImage(path.c_str());
+      IconInfo info;
+      info.textureId = tex;
+      info.width = width;
+      info.height = height;
+      iconCacheInfo[path] = info;
+      return info;
+    } catch (const std::exception &) {
+      return {(ImTextureID)0, 0, 0};
+    }
   }
 
   return {(ImTextureID)0, 0, 0};
@@ -1375,15 +1719,8 @@ void HandlerProject::CheckAndRefreshAssets() {
 void HandlerProject::SearchFileOrFolder(const AssetFile &node,
                                         const std::string &query,
                                         std::vector<AssetFile> &results) {
-  // Case-insensitive search
-  std::string nameLower = node.name;
-  std::string queryLower = query;
-  std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
-                 ::tolower);
-  std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
-                 ::tolower);
-
-  if (nameLower.find(queryLower) != std::string::npos) {
+  if (!query.empty() &&
+      MatchesAssetFilter(node.name, node.isDirectory, query, false)) {
     results.push_back(node);
   }
 
@@ -1748,34 +2085,32 @@ bool HandlerProject::HandleImport(const std::string &targetFolder) {
 }
 
 void HandlerProject::HandlerOpenFileWithExtensionName(AssetFile &node) {
-  std::string ext = fs::path(node.name).extension().string();
-  bool isCpp = (ext == ".cpp");
-  bool isHpp = (ext == ".hpp");
-  bool isVideo = (ext == ".mp4" || ext == ".mkv" || ext == ".m4a" ||
-                  ext == ".avi" || ext == ".mov");
-  bool isImage = (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                  ext == ".gif" || ext == ".bmp");
-  bool isAudio = (ext == ".mp3" || ext == ".wav" || ext == ".ogg");
-  bool isShader =
-      (ext == ".glsl" || ext == ".shader" || ext == ".frag" || ext == ".vert");
+  std::string ext = ToLowerAsciiStr(fs::path(node.name).extension().string());
+  bool isTextOrCode =
+      (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" ||
+       ext == ".hpp" || ext == ".h" || ext == ".hh" || ext == ".inl" ||
+       ext == ".glsl" || ext == ".shader" || ext == ".frag" || ext == ".vert" ||
+       ext == ".comp" || ext == ".hlsl" || ext == ".cl" || ext == ".py" ||
+       ext == ".lua" || ext == ".sh" || ext == ".js" || ext == ".ts" ||
+       ext == ".nix" || ext == ".txt" || ext == ".json" || ext == ".toml" ||
+       ext == ".yaml" || ext == ".yml" || ext == ".ini" || ext == ".xml" ||
+       ext == ".cmake" || ext == ".md" || ext == ".csv" || ext == ".log");
+  bool isMediaOrExternal =
+      (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".avi" ||
+       ext == ".mov" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+       ext == ".gif" || ext == ".bmp" || ext == ".webp" || ext == ".mp3" ||
+       ext == ".wav" || ext == ".ogg" || ext == ".flac" || ext == ".m4a" ||
+       ext == ".blend");
 
-  if (isCpp || isHpp || isShader || ext == ".h" || ext == ".c" ||
-      ext == ".cc" || ext == ".cxx" || ext == ".txt" || ext == ".json" ||
-      ext == ".yaml" || ext == ".yml" || ext == ".md") {
+  if (isTextOrCode) {
     OpenFile(node.fullPath);
-  } else if (isVideo) {
+  } else if (isMediaOrExternal) {
 #ifdef _WIN32
     ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL, SW_SHOW);
 #else
-    std::string cmd = "xdg-open \"" + node.fullPath + "\"";
-    system(cmd.c_str());
-#endif
-  } else if (isImage || isAudio) {
-#ifdef _WIN32
-    ShellExecuteA(NULL, "open", node.fullPath.c_str(), NULL, NULL, SW_SHOW);
-#else
-    std::string cmd = "xdg-open \"" + node.fullPath + "\"";
-    system(cmd.c_str());
+    std::string cmd = "xdg-open \"" + node.fullPath + "\" &";
+    int rc = system(cmd.c_str());
+    (void)rc;
 #endif
   }
 }
@@ -1832,23 +2167,21 @@ void HandlerProject::FlipImageVertically(unsigned char *data, int width,
 
 HandlerProject::IconInfo
 HandlerProject::GenerateVideoThumbnail(const std::string &videoPath) {
-  IconInfo thumbnailInfo;
-  thumbnailInfo.width = thumbnailSize.x;
-  thumbnailInfo.height = thumbnailSize.y;
+  const int thumbW = 128;
+  const int thumbH = 128;
+  IconInfo thumbnailInfo{(ImTextureID)0, thumbW, thumbH};
 
   AVFormatContext *formatContext = nullptr;
   if (avformat_open_input(&formatContext, videoPath.c_str(), nullptr,
                           nullptr) != 0) {
-    ::Log("Failed to open video file: " + videoPath, Debug::LogLevel::CRASH);
-    return LoadCachedTexture("assets/images/fileicons/video.png");
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
   }
 
   if (avformat_find_stream_info(formatContext, nullptr) < 0) {
     avformat_close_input(&formatContext);
-    return LoadCachedTexture("assets/images/fileicons/video.png");
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
   }
 
-  // Find the video stream
   int videoStream = -1;
   for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
     if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -1859,52 +2192,53 @@ HandlerProject::GenerateVideoThumbnail(const std::string &videoPath) {
 
   if (videoStream == -1) {
     avformat_close_input(&formatContext);
-    return LoadCachedTexture("assets/images/fileicons/video.png");
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
   }
 
-  // Get codec parameters
   AVCodecParameters *codecParams =
       formatContext->streams[videoStream]->codecpar;
   const AVCodec *codec = avcodec_find_decoder(codecParams->codec_id);
+  if (!codec || codecParams->width <= 0 || codecParams->height <= 0) {
+    avformat_close_input(&formatContext);
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
+  }
   AVCodecContext *codecContext = avcodec_alloc_context3(codec);
   avcodec_parameters_to_context(codecContext, codecParams);
-  avcodec_open2(codecContext, codec, nullptr);
+  if (avcodec_open2(codecContext, codec, nullptr) < 0) {
+    avcodec_free_context(&codecContext);
+    avformat_close_input(&formatContext);
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
+  }
 
-  // Seek to 1/3 of the video
-  int64_t duration = formatContext->duration / AV_TIME_BASE;
-  int64_t third = duration / 3;
+  int64_t duration = formatContext->duration > 0
+                         ? formatContext->duration / AV_TIME_BASE
+                         : 0;
   int64_t half = duration / 2;
-  int64_t quarter = duration / 4;
+  if (half > 0) {
+    av_seek_frame(formatContext, -1, half * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
+  }
 
-  // Coba seek ke tengah dulu
-  av_seek_frame(formatContext, -1, half * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
-
-  // Read frames
   AVFrame *frame = av_frame_alloc();
   AVFrame *rgbFrame = av_frame_alloc();
   AVPacket *packet = av_packet_alloc();
 
-  // Allocate buffer for RGB frame
-  int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, thumbnailSize.x,
-                                          thumbnailSize.y, 1);
+  int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, thumbW, thumbH, 1);
   uint8_t *buffer = (uint8_t *)av_malloc(numBytes);
   av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, buffer,
-                       AV_PIX_FMT_RGB24, thumbnailSize.x, thumbnailSize.y, 1);
+                       AV_PIX_FMT_RGB24, thumbW, thumbH, 1);
 
-  // Initialize software scaler
   SwsContext *swsContext =
       sws_getContext(codecContext->width, codecContext->height,
-                     codecContext->pix_fmt, thumbnailSize.x, thumbnailSize.y,
+                     codecContext->pix_fmt, thumbW, thumbH,
                      AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 
   int framesTried = 0;
-  float maxVariance = 0.0f;
-  std::vector<uint8_t> bestFrameData(numBytes);
+  float maxVariance = -1.0f;
+  std::vector<uint8_t> bestFrameData(numBytes, 0);
+  bool gotAnyFrame = false;
 
-  // int framesTried = 0;
   const int maxFramesToTry = 20;
-
-  while (av_read_frame(formatContext, packet) >= 0 &&
+  while (swsContext && av_read_frame(formatContext, packet) >= 0 &&
          framesTried < maxFramesToTry) {
     if (packet->stream_index == videoStream) {
       if (avcodec_send_packet(codecContext, packet) >= 0) {
@@ -1912,14 +2246,13 @@ HandlerProject::GenerateVideoThumbnail(const std::string &videoPath) {
           sws_scale(swsContext, frame->data, frame->linesize, 0,
                     codecContext->height, rgbFrame->data, rgbFrame->linesize);
 
-          float variance = CalculateColorVariance(
-              rgbFrame->data[0], thumbnailSize.x, thumbnailSize.y);
-
-          if (variance > maxVariance) {
+          float variance =
+              CalculateColorVariance(rgbFrame->data[0], thumbW, thumbH);
+          if (!gotAnyFrame || variance > maxVariance) {
             maxVariance = variance;
             memcpy(bestFrameData.data(), rgbFrame->data[0], numBytes);
+            gotAnyFrame = true;
           }
-
           framesTried++;
         }
       }
@@ -1927,29 +2260,37 @@ HandlerProject::GenerateVideoThumbnail(const std::string &videoPath) {
     av_packet_unref(packet);
   }
 
-  // Create texture from RGB data
-  // GLuint textureID;
-  // glGenTextures(1, &textureID);
-  // glBindTexture(GL_TEXTURE_2D, textureID);
-  // // FlipImageVertically(bestFrameData.data(), thumbnailSize.x,
-  // thumbnailSize.y,
-  // // 4);
-  // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, thumbnailSize.x, thumbnailSize.y, 0,
-  //              GL_RGB, GL_UNSIGNED_BYTE, rgbFrame->data[0]);
-  // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  if (gotAnyFrame && svgIcons_) {
+    std::vector<unsigned char> rgba(static_cast<size_t>(thumbW) *
+                                    static_cast<size_t>(thumbH) * 4);
+    for (int y = 0; y < thumbH; ++y) {
+      const uint8_t *srcRow = bestFrameData.data() + y * rgbFrame->linesize[0];
+      unsigned char *dstRow = rgba.data() + static_cast<size_t>(y) * thumbW * 4;
+      for (int x = 0; x < thumbW; ++x) {
+        dstRow[x * 4 + 0] = srcRow[x * 3 + 0];
+        dstRow[x * 4 + 1] = srcRow[x * 3 + 1];
+        dstRow[x * 4 + 2] = srcRow[x * 3 + 2];
+        dstRow[x * 4 + 3] = 255;
+      }
+    }
+    thumbnailInfo.textureId =
+        svgIcons_->UploadRgbaPixels(rgba.data(), thumbW, thumbH);
+    thumbnailInfo.width = codecContext->width;
+    thumbnailInfo.height = codecContext->height;
+  }
 
-  thumbnailInfo.textureId = (ImTextureID)0;
-
-  // Cleanup
   av_free(buffer);
   av_frame_free(&rgbFrame);
   av_frame_free(&frame);
   av_packet_free(&packet);
-  sws_freeContext(swsContext);
+  if (swsContext)
+    sws_freeContext(swsContext);
   avcodec_free_context(&codecContext);
   avformat_close_input(&formatContext);
 
+  if (!thumbnailInfo.textureId) {
+    return LoadCachedTexture("assets/icons/svg/ext_video.svg");
+  }
   return thumbnailInfo;
 }
 

@@ -61,6 +61,14 @@ int main() {
   CHECK(json["history"].size() == 5 && json["live"] == true);
   CHECK(json["latest"]["fps"] == 30.0 && json["latest"]["rssMiB"] == 210.5);
   CHECK(json["device"]["android"] == "12");
+  CHECK(json["latest"]["animationMs"] == -1); // old players omit details
+  CHECK(monitor.Feed("ILMEEE_STATS {\"fps\":60,\"movementMs\":0.1,"
+                     "\"physicsMs\":0.2,\"scriptsMs\":0.3,\"animationMs\":3.4}", 16));
+  const auto detailed = monitor.ToJson(16, 1);
+  CHECK(detailed["latest"]["movementMs"] == 0.1);
+  CHECK(detailed["latest"]["physicsMs"] == 0.2);
+  CHECK(detailed["latest"]["scriptsMs"] == 0.3);
+  CHECK(detailed["latest"]["animationMs"] == 3.4);
 
   monitor.SetEnded();
   CHECK(!monitor.Running());

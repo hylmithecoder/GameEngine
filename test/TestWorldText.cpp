@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <filesystem>
+#include <unistd.h>
 
 static int checks = 0, failures = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); } } while (0)
@@ -71,6 +73,60 @@ int main() {
   CHECK(loaded.elements[0].objectId == e.objectId);
   CHECK(loaded.elements[0].scripts[0].values[0].object == 42);
 
+  const auto near = [](float a, float b) { return std::abs(a - b) < 0.01f; };
+  // Stretch panels keep both side margins on phones/tablets, landscape and
+  // portrait; controls retain their aspect ratio. Nonzero origin also models
+  // a docked preview or the player's safe area.
+  for (ImVec2 size : {ImVec2(1280, 720), ImVec2(1600, 720), ImVec2(2340, 1080),
+                     ImVec2(1024, 768), ImVec2(720, 1600), ImVec2(2560, 1600)}) {
+    const float scale = std::min(size.x / 1280, size.y / 720);
+    UiElement panel;
+    panel.anchor = UiAnchor::StretchBottom;
+    panel.x = 40; panel.y = 30; panel.width = 1200; panel.height = 190;
+    auto rect = GameUIElementRect(ui, panel, {57, 29}, size);
+    CHECK(near(rect.min.x, 57 + 40 * scale));
+    CHECK(near(rect.max.x, 57 + size.x - 40 * scale));
+    CHECK(near(rect.max.y, 29 + size.y - 30 * scale));
+    panel.anchor = UiAnchor::BottomRight; panel.width = panel.height = 180;
+    rect = GameUIElementRect(ui, panel, {57, 29}, size);
+    CHECK(near(rect.max.x - rect.min.x, rect.max.y - rect.min.y));
+    CHECK(near(rect.max.x, 57 + size.x - 40 * scale));
+    panel.anchor = UiAnchor::BottomCenter; panel.x = 0;
+    rect = GameUIElementRect(ui, panel, {57, 29}, size);
+    CHECK(near((rect.min.x + rect.max.x) * 0.5f, 57 + size.x * 0.5f));
+    panel.anchor = UiAnchor::StretchFull; panel.x = 40; panel.y = 30;
+    panel.width = 1200; panel.height = 660;
+    rect = GameUIElementRect(ui, panel, {57, 29}, size);
+    CHECK(near(rect.max.x, 57 + size.x - 40 * scale));
+    CHECK(near(rect.max.y, 29 + size.y - 30 * scale));
+  }
+
+  // Anchor changes never jump in the reference canvas, and every new layout
+  // survives both standalone UI JSON and the binary scene/export path.
+  char uiDirectory[] = "/tmp/ilmeee-ui-layout-XXXXXX";
+  CHECK(mkdtemp(uiDirectory) != nullptr);
+  const auto uiFile = std::filesystem::path(uiDirectory) / "layout.json";
+  const auto sceneFile = std::filesystem::path(uiDirectory) / "layout.ilmeeescene";
+  for (int anchor = 0; anchor <= int(UiAnchor::StretchFull); ++anchor) {
+    auto element = e;
+    const auto before = GameUIElementRect(ui, element, {0, 0}, {1280, 720});
+    SetUiElementAnchor(ui, element, UiAnchor(anchor));
+    const auto after = GameUIElementRect(ui, element, {0, 0}, {1280, 720});
+    CHECK(near(before.min.x, after.min.x) && near(before.min.y, after.min.y));
+    GameUI layouts; layouts.elements = {element};
+    std::string error;
+    CHECK(SaveGameUI(uiFile.string(), layouts, &error));
+    GameUI fromJson;
+    CHECK(LoadGameUI(uiFile.string(), fromJson, &error));
+    CHECK(fromJson.elements[0].anchor == UiAnchor(anchor));
+    IlmeeeScene saved; AppendGameUIToScene(saved, layouts);
+    CHECK(SaveScene(sceneFile.string(), saved));
+    IlmeeeScene restored; CHECK(LoadScene(sceneFile.string(), restored));
+    GameUI fromScene; CHECK(GameUIFromScene(restored, fromScene));
+    CHECK(fromScene.elements[0].anchor == UiAnchor(anchor));
+  }
+  std::filesystem::remove_all(uiDirectory);
+
   using namespace ilmeee::script;
   HostApi host;
   host.valid = [](void *, uint64_t id) { return id >= 1 && id <= 4; };
@@ -110,6 +166,18 @@ int main() {
   DrawGameUI(imageUi, {30, 40}, {500, 500}, texture, true);
   CHECK(ImGui::GetWindowDrawList()->VtxBuffer.back().col ==
         ImGui::ColorConvertFloat4ToU32(tinted.color));
+  // A tap in the added width of a stretched button hits the same rectangle
+  // that is drawn, including an inset safe-area origin.
+  GameUI touchUi;
+  UiElement buttonUi; buttonUi.id = "talk"; buttonUi.kind = UiKind::Button;
+  buttonUi.anchor = UiAnchor::StretchBottom;
+  buttonUi.x = 40; buttonUi.y = 30; buttonUi.width = 1200; buttonUi.height = 190;
+  touchUi.elements.push_back(buttonUi);
+  UiFingers fingers; fingers[1].pos = {1500, 650};
+  std::vector<uint64_t> pressed;
+  DrawGameUI(touchUi, {57, 29}, {1600, 720}, {}, true, false, nullptr, &fingers, &pressed);
+  CHECK(pressed.size() == 1 && pressed[0] == buttonUi.objectId);
+  CHECK(fingers[1].element == "talk");
   imageUi.elements[0].visible = false;
   DrawGameUI(imageUi, {30, 40}, {500, 500}, texture, false);
   tinted.color.w *= 0.35f;

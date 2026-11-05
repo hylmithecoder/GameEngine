@@ -3,6 +3,7 @@
 
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
+#include "../../../include/ui/SvgIconManager.hpp"
 #include <cstring>
 #include <cerrno>
 #include <fcntl.h>
@@ -529,7 +530,8 @@ void MainWindow::RenderBuildTab() {
 }
 
 void MainWindow::RenderDeviceMonitorWindow() {
-  if (!Begin("Device Monitor", &showDeviceMonitor)) {
+  if (!Begin(ICON_UI_DEVICE " Device Monitor###Device Monitor",
+             &showDeviceMonitor)) {
     End();
     return;
   }
@@ -614,6 +616,10 @@ void MainWindow::RenderDeviceMonitorWindow() {
       SameLine();
       Text(" |  RAM %.0f MiB", last.rssMiB);
     }
+    if (last.animationMs >= 0)
+      TextWrapped("Update detail (ms): movement %.2f | body physics %.2f | "
+                  "scripts %.2f | animation + spring + skinning %.2f",
+                  last.movementMs, last.physicsMs, last.scriptsMs, last.animationMs);
     for (double seconds : {10.0, 60.0}) {
       const auto s = monitor.Summary(now, seconds);
       if (s.value("samples", 0) > 0)

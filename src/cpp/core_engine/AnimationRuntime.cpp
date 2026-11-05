@@ -21,7 +21,8 @@ bool SceneRenderer::SetMesh3DAnimationPose(size_t index,
       ilmeee::ApplySpringBones(mesh.skeleton, mesh.springBones, mesh.springRuntime,
                                GetMesh3DWorldModel(index), physicsDelta, world);
   ilmeee::BuildSkinMatrices(mesh.skeleton, world, matrices, positions);
-  std::vector<MeshVertex> vertices(mesh.skinVertices.size());
+  auto &vertices = mesh.skinnedVertices;
+  vertices.resize(mesh.skinVertices.size());
   glm::vec3 minimum(std::numeric_limits<float>::max());
   glm::vec3 maximum(-std::numeric_limits<float>::max());
   for (size_t i = 0; i < vertices.size(); ++i) {
@@ -31,10 +32,9 @@ bool SceneRenderer::SetMesh3DAnimationPose(size_t index,
     const glm::vec4 weights(v.boneWeights[0], v.boneWeights[1],
                             v.boneWeights[2], v.boneWeights[3]);
     auto &out = vertices[i];
-    out.pos = ilmeee::SkinPosition({v.position.x, v.position.y, -v.position.z},
-                                   joints, weights, matrices);
-    out.normal = ilmeee::SkinNormal({v.normal.x, v.normal.y, -v.normal.z},
-                                    joints, weights, matrices);
+    ilmeee::SkinVertex({v.position.x, v.position.y, -v.position.z},
+                       {v.normal.x, v.normal.y, -v.normal.z}, joints, weights,
+                       matrices, out.pos, out.normal);
     out.uv = v.uv;
     minimum = glm::min(minimum, out.pos);
     maximum = glm::max(maximum, out.pos);

@@ -22,6 +22,7 @@ struct DeviceSample {
   double time = 0; // editor clock (seconds) when received
   double fps = 0, frameMs = 0, worstMs = 0;
   double updateMs = 0, mediaMs = 0, sceneMs = 0;
+  double movementMs = -1, physicsMs = -1, scriptsMs = -1, animationMs = -1;
   double rssMiB = -1;
 };
 
@@ -129,7 +130,9 @@ private:
     return {{"ageSeconds", Round(now - s.time)}, {"fps", s.fps},
             {"frameMs", s.frameMs},             {"worstMs", s.worstMs},
             {"updateMs", s.updateMs},           {"mediaMs", s.mediaMs},
-            {"sceneMs", s.sceneMs},             {"rssMiB", s.rssMiB}};
+            {"sceneMs", s.sceneMs},             {"rssMiB", s.rssMiB},
+            {"movementMs", s.movementMs},       {"physicsMs", s.physicsMs},
+            {"scriptsMs", s.scriptsMs},         {"animationMs", s.animationMs}};
   }
   void AddSample(const nlohmann::json &j, double now) {
     DeviceSample s;
@@ -140,6 +143,10 @@ private:
     s.updateMs = Number(j, "updateMs");
     s.mediaMs = Number(j, "mediaMs");
     s.sceneMs = Number(j, "sceneMs");
+    s.movementMs = Number(j, "movementMs", -1);
+    s.physicsMs = Number(j, "physicsMs", -1);
+    s.scriptsMs = Number(j, "scriptsMs", -1);
+    s.animationMs = Number(j, "animationMs", -1);
     s.rssMiB = Number(j, "rssMiB", -1);
     for (const char *key : {"width", "height", "objects", "paused"})
       if (j.contains(key))

@@ -98,7 +98,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 18;
+constexpr uint16_t kSceneFormatMinor = 19; // additional UI anchor/stretch modes
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,

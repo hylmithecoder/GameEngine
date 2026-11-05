@@ -30,6 +30,14 @@ const char *AnchorName(UiAnchor anchor) {
   case UiAnchor::BottomLeft: return "bottomLeft";
   case UiAnchor::BottomRight: return "bottomRight";
   case UiAnchor::Center: return "center";
+  case UiAnchor::TopCenter: return "topCenter";
+  case UiAnchor::BottomCenter: return "bottomCenter";
+  case UiAnchor::CenterLeft: return "centerLeft";
+  case UiAnchor::CenterRight: return "centerRight";
+  case UiAnchor::StretchTop: return "stretchTop";
+  case UiAnchor::StretchBottom: return "stretchBottom";
+  case UiAnchor::StretchCenter: return "stretchCenter";
+  case UiAnchor::StretchFull: return "stretchFull";
   }
   return "topLeft";
 }
@@ -46,6 +54,14 @@ UiAnchor ParseAnchor(const std::string &name) {
   if (name == "bottomLeft") return UiAnchor::BottomLeft;
   if (name == "bottomRight") return UiAnchor::BottomRight;
   if (name == "center") return UiAnchor::Center;
+  if (name == "topCenter") return UiAnchor::TopCenter;
+  if (name == "bottomCenter") return UiAnchor::BottomCenter;
+  if (name == "centerLeft") return UiAnchor::CenterLeft;
+  if (name == "centerRight") return UiAnchor::CenterRight;
+  if (name == "stretchTop") return UiAnchor::StretchTop;
+  if (name == "stretchBottom") return UiAnchor::StretchBottom;
+  if (name == "stretchCenter") return UiAnchor::StretchCenter;
+  if (name == "stretchFull") return UiAnchor::StretchFull;
   return UiAnchor::TopLeft;
 }
 
@@ -119,7 +135,8 @@ bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out) {
     default: continue;
     }
     element.id = e.name;
-    element.anchor = static_cast<UiAnchor>(e.uiAnchor);
+    element.anchor = e.uiAnchor <= static_cast<uint8_t>(UiAnchor::StretchFull)
+        ? static_cast<UiAnchor>(e.uiAnchor) : UiAnchor::TopLeft;
     element.x = e.uiX;
     element.y = e.uiY;
     element.width = e.uiWidth;
@@ -184,7 +201,8 @@ bool LoadGameUI(const std::string &path, GameUI &out, std::string *error) {
   }
   const json root = json::parse(input, nullptr, false);
   if (!root.is_object() || !root.contains("version") ||
-      !root["version"].is_number_integer() || root["version"] != 1 ||
+      !root["version"].is_number_integer() ||
+      (root["version"] != 1 && root["version"] != 2) ||
       !root.contains("elements") || !root["elements"].is_array()) {
     if (error) *error = "Invalid Game UI document: " + path;
     return false;
@@ -248,7 +266,8 @@ bool SaveGameUI(const std::string &path, const GameUI &ui, std::string *error) {
     }
   }
   json root;
-  root["version"] = 1;
+  root["version"] = std::any_of(ui.elements.begin(), ui.elements.end(),
+      [](const UiElement &e) { return e.anchor > UiAnchor::Center; }) ? 2 : 1;
   root["referenceWidth"] = ui.referenceWidth;
   root["referenceHeight"] = ui.referenceHeight;
   root["elements"] = json::array();
@@ -289,17 +308,26 @@ const UiElement *FindUiElement(const GameUI &ui, uint64_t objectId) {
 
 UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
                          ImVec2 origin, ImVec2 size) {
-  if (ui.referenceWidth <= 0.0f || ui.referenceHeight <= 0.0f)
+  if (!std::isfinite(ui.referenceWidth) || !std::isfinite(ui.referenceHeight) ||
+      ui.referenceWidth <= 0.0f || ui.referenceHeight <= 0.0f ||
+      !std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 || size.y <= 0)
     return {origin, origin};
   const float scale = std::min(size.x / ui.referenceWidth,
                                size.y / ui.referenceHeight);
-  const float w = std::max(1.0f, e.width * scale);
-  const float h = std::max(1.0f, e.height * scale);
+  const bool stretchX = e.anchor >= UiAnchor::StretchTop;
+  const bool stretchY = e.anchor == UiAnchor::StretchFull;
+  const float w = std::max(1.0f, e.width * scale +
+      (stretchX ? size.x - ui.referenceWidth * scale : 0.0f));
+  const float h = std::max(1.0f, e.height * scale +
+      (stretchY ? size.y - ui.referenceHeight * scale : 0.0f));
   const float x = e.x * scale, y = e.y * scale;
   ImVec2 pos = origin;
   switch (e.anchor) {
+  case UiAnchor::StretchTop:
+  case UiAnchor::StretchFull:
   case UiAnchor::TopLeft: pos.x += x; pos.y += y; break;
   case UiAnchor::TopRight: pos.x += size.x - x - w; pos.y += y; break;
+  case UiAnchor::StretchBottom:
   case UiAnchor::BottomLeft: pos.x += x; pos.y += size.y - y - h; break;
   case UiAnchor::BottomRight:
     pos.x += size.x - x - w; pos.y += size.y - y - h; break;
@@ -307,8 +335,32 @@ UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
     pos.x += (size.x - w) * 0.5f + x;
     pos.y += (size.y - h) * 0.5f + y;
     break;
+  case UiAnchor::TopCenter:
+    pos.x += (size.x - w) * 0.5f + x; pos.y += y; break;
+  case UiAnchor::BottomCenter:
+    pos.x += (size.x - w) * 0.5f + x; pos.y += size.y - y - h; break;
+  case UiAnchor::StretchCenter:
+  case UiAnchor::CenterLeft:
+    pos.x += x; pos.y += (size.y - h) * 0.5f + y; break;
+  case UiAnchor::CenterRight:
+    pos.x += size.x - x - w; pos.y += (size.y - h) * 0.5f + y; break;
   }
   return {pos, ImVec2(pos.x + w, pos.y + h)};
+}
+
+void SetUiElementAnchor(const GameUI &ui, UiElement &e, UiAnchor anchor) {
+  const ImVec2 size(ui.referenceWidth, ui.referenceHeight);
+  const UiRect before = GameUIElementRect(ui, e, {0, 0}, size);
+  e.anchor = anchor;
+  e.x = e.y = 0;
+  const UiRect base = GameUIElementRect(ui, e, {0, 0}, size);
+  const bool right = anchor == UiAnchor::TopRight ||
+      anchor == UiAnchor::BottomRight || anchor == UiAnchor::CenterRight;
+  const bool bottom = anchor == UiAnchor::BottomLeft ||
+      anchor == UiAnchor::BottomRight || anchor == UiAnchor::BottomCenter ||
+      anchor == UiAnchor::StretchBottom;
+  e.x = (before.min.x - base.min.x) * (right ? -1.0f : 1.0f);
+  e.y = (before.min.y - base.min.y) * (bottom ? -1.0f : 1.0f);
 }
 
 std::string DrawGameUI(
@@ -316,7 +368,9 @@ std::string DrawGameUI(
     const std::function<ImTextureID(const std::string &)> &imageTexture,
     bool interactive, bool paused, UiAxisMap *axes, UiFingers *fingers,
     std::vector<uint64_t> *pressed) {
-  if (size.x <= 0 || size.y <= 0)
+  if (size.x <= 0 || size.y <= 0 ||
+      !std::isfinite(ui.referenceWidth) || !std::isfinite(ui.referenceHeight) ||
+      ui.referenceWidth <= 0 || ui.referenceHeight <= 0)
     return {};
   const float scale = std::min(size.x / ui.referenceWidth,
                                size.y / ui.referenceHeight);
@@ -444,8 +498,10 @@ std::string DrawGameUI(
                      pos.y + (h - textSize.y) * 0.5f)
             : ImVec2(pos.x + pad,
                      multiline ? pos.y + pad : pos.y + (h - textSize.y) * 0.5f);
+        draw->PushClipRect(pos, max, true);
         draw->AddText(ImGui::GetFont(), fontSize, textPos, color,
                       label.c_str(), nullptr, wrap);
+        draw->PopClipRect();
       }
     }
     if (interactive && e.kind == UiKind::Button) {

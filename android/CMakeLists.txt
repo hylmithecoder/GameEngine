@@ -94,7 +94,16 @@ target_include_directories(main PRIVATE
     ${GLM_INCLUDE_DIR}
     ${STB_INCLUDE_DIR}
 )
-# Per-pixel video conversion and audio resampling stay fast in Debug builds.
+# CPU animation/skinning, secondary physics, per-pixel video conversion and
+# audio resampling stay fast in Debug builds (debug symbols are retained).
+set_source_files_properties(
+    ${ENGINE_ROOT}/src/cpp/core_engine/SkeletalAnimation.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AnimationRuntime.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/SpringBone.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/AnimationController.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/PhysicsWorld.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/PhysicsRuntime.cpp
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
 set_source_files_properties(
     ${ENGINE_ROOT}/src/cpp/core_engine/VideoDecoder.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/AndroidMedia.cpp

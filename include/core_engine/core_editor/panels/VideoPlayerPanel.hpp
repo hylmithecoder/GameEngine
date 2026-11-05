@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../../ui/SvgIconManager.hpp"
 #include "Panel.hpp"
 #include <string>
 
@@ -19,7 +20,9 @@ public:
   explicit VideoPlayerPanel(VulkanHandler *handler);
 
   void OnImGuiRender() override;
-  const char *GetName() const override { return "Video Player"; }
+  const char *GetName() const override {
+    return ICON_UI_VIDEO " Video Player###Video Player";
+  }
   DockHint GetDockHint() const override { return DockHint::Bottom; }
 
   // Programmatic control (e.g. cutscene trigger from a script).

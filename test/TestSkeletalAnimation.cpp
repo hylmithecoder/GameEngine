@@ -39,6 +39,40 @@ int main(int argc, char **argv) {
   CHECK(Near(positions[0], {-std::sqrt(0.5f),std::sqrt(0.5f),0}));
   const std::vector<glm::mat4> scale = {glm::scale(glm::mat4(1), glm::vec3(2,1,1))};
   CHECK(Near(SkinNormal(glm::normalize(glm::vec3(1,1,0)), {0,-1,-1,-1}, {1,0,0,0}, scale), glm::normalize(glm::vec3(0.5f,1,0))));
+  // Independent inverse-transpose reference: mixed rotations, nonuniform
+  // scale, reflections, singular matrices and invalid/missing influences.
+  for (int sample = 0; sample < 80; ++sample) {
+    std::vector<glm::mat4> skin;
+    for (int b = 0; b < 4; ++b) {
+      auto m = glm::rotate(glm::mat4(1), 0.07f * (sample + b),
+                            glm::normalize(glm::vec3(1, 2 + b, 3)));
+      const float sx = sample % 5 == 0 ? -2.0f : 0.5f + 0.1f * b;
+      skin.push_back(glm::scale(m, {sx, sample % 7 == 0 ? 0.0f : 1.3f, 2.1f}));
+    }
+    glm::ivec4 joints(0, 1, 2, 3);
+    glm::vec4 weights(0.4f, 0.3f, 0.2f, 0.1f);
+    if (sample % 3 == 0) joints[1] = -1;
+    if (sample % 4 == 0) joints[2] = 999;
+    if (sample % 6 == 0) weights[3] = NAN;
+    if (sample % 11 == 0) weights = glm::vec4(0);
+    glm::mat4 blend(0); float total = 0;
+    for (int j = 0; j < 4; ++j)
+      if (joints[j] >= 0 && size_t(joints[j]) < skin.size() &&
+          std::isfinite(weights[j]) && weights[j] > 0) {
+        blend += skin[joints[j]] * weights[j]; total += weights[j];
+      }
+    blend = total > 0.00001f ? blend / total : glm::mat4(1);
+    const glm::vec3 p(1, 2, -3), n = glm::normalize(glm::vec3(1, 1, -1));
+    const glm::mat3 m(blend);
+    auto normal = std::abs(glm::determinant(m)) > 0.000001f
+        ? glm::transpose(glm::inverse(m)) * n : m * n;
+    normal = glm::length(normal) > 0.000001f ? glm::normalize(normal) : n;
+    glm::vec3 outPosition, outNormal;
+    SkinVertex(p, n, joints, weights, skin, outPosition, outNormal);
+    CHECK(Near(outPosition, glm::vec3(blend * glm::vec4(p, 1))));
+    CHECK(Near(outNormal, normal));
+    CHECK(Near(SkinNormal(n, joints, weights, skin), normal));
+  }
   CHECK(AnimationTime(4.5f, 2, true) == 0.5f);
   CHECK(AnimationTime(2, 2, true) == 0);
   CHECK(AnimationTime(4, 2, false) == 2);

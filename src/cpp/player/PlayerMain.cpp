@@ -269,6 +269,7 @@ protected:
     Clock::time_point windowStart = Clock::now();
     int frames = 0;
     double updateMs = 0.0, mediaMs = 0.0, sceneMs = 0.0, worstMs = 0.0;
+    double movementMs = 0.0, physicsMs = 0.0, scriptsMs = 0.0, animationMs = 0.0;
     Clock::time_point lastFrame = Clock::now();
   } stats_, live_;
   bool liveStats_ = false;
@@ -297,14 +298,18 @@ protected:
       return;
     }
     const double n = live_.frames;
-    char line[320];
+    char line[512];
     std::snprintf(line, sizeof line,
                   "ILMEEE_STATS {\"fps\":%.2f,\"frameMs\":%.2f,"
                   "\"worstMs\":%.2f,\"updateMs\":%.2f,\"mediaMs\":%.2f,"
+                  "\"movementMs\":%.2f,\"physicsMs\":%.2f,"
+                  "\"scriptsMs\":%.2f,\"animationMs\":%.2f,"
                   "\"sceneMs\":%.2f,\"rssMiB\":%.1f,\"width\":%u,"
                   "\"height\":%u,\"objects\":%zu,\"paused\":%s}",
                   n / windowS, windowS * 1000.0 / n, live_.worstMs,
-                  live_.updateMs / n, live_.mediaMs / n, live_.sceneMs / n,
+                  live_.updateMs / n, live_.mediaMs / n,
+                  live_.movementMs / n, live_.physicsMs / n,
+                  live_.scriptsMs / n, live_.animationMs / n, live_.sceneMs / n,
                   ResidentMiB(), swapChainExtent.width, swapChainExtent.height,
                   renderer_ ? renderer_->GetMesh3DCount() : size_t{0},
                   paused_ ? "true" : "false");
@@ -340,12 +345,15 @@ protected:
         duration<double>(now - stats_.windowStart).count();
     if (windowS < 5.0)
       return;
-    char line[160];
+    char line[320];
     std::snprintf(line, sizeof line,
                   "[Perf] %.1f fps | per frame: update %.1f ms (media %.1f), "
+                  "movement %.1f, physics %.1f, scripts %.1f, animation %.1f, "
                   "scene %.1f ms, worst frame %.1f ms",
                   stats_.frames / windowS, stats_.updateMs / stats_.frames,
                   stats_.mediaMs / stats_.frames,
+                  stats_.movementMs / stats_.frames, stats_.physicsMs / stats_.frames,
+                  stats_.scriptsMs / stats_.frames, stats_.animationMs / stats_.frames,
                   stats_.sceneMs / stats_.frames, stats_.worstMs);
     SDL_Log("%s", line); // straight to logcat / stderr, unbuffered
     stats_ = FrameStats{};
@@ -359,19 +367,27 @@ protected:
     }
     // Input gathered while drawing the previous frame (keyboard + sticks).
     if (renderer_ && !paused_ && error_.empty()) {
+      const auto movementStart = FrameStats::Clock::now();
       movement_.Update(*renderer_,
                        dialog_.FreezesPlayer()
                            ? ilmeee::FrozenMovementInput(input_)
                            : input_,
                        deltaTime);
+      AddTiming(&FrameStats::movementMs, movementStart);
+      const auto physicsStart = FrameStats::Clock::now();
       physics_.Update(*renderer_, std::max(0.0f, deltaTime), &movement_);
+      AddTiming(&FrameStats::physicsMs, physicsStart);
       dialog_.Update(*renderer_, gameUi_, input_, deltaTime);
     }
     if (!paused_ && error_.empty()) {
+      const auto scriptsStart = FrameStats::Clock::now();
       ilmeee::ScriptSceneDispatchPhysics(nativeContext_, native_);
       native_.Update(deltaTime);
       ilmeee::ScriptSceneEndFrame(nativeContext_);
+      AddTiming(&FrameStats::scriptsMs, scriptsStart);
+      const auto animationStart = FrameStats::Clock::now();
       if (renderer_) renderer_->UpdateAnimations(std::max(0.0f, deltaTime));
+      AddTiming(&FrameStats::animationMs, animationStart);
     }
     // A game is always playing; sounds and videos start on the first frame.
     const auto mediaStart = FrameStats::Clock::now();
@@ -428,8 +444,24 @@ protected:
         // Same flow as the editor's Game tab: sticks mirror the keyboard,
         // a held stick overrides it.
         ilmeee::EchoKeyboardOnJoysticks(*renderer_, input_);
+        // SDL's safe area is in window coordinates, while ImGui may use a
+        // scaled display. Map it once for drawing and touch hit testing.
+        ImVec2 uiOrigin = imagePos, uiSize = vp->Size;
+        SDL_Rect safe{};
+        int windowW = 0, windowH = 0;
+        if (SDL_GetWindowSize(window, &windowW, &windowH) &&
+            windowW > 0 && windowH > 0 && SDL_GetWindowSafeArea(window, &safe) &&
+            safe.w > 0 && safe.h > 0) {
+          const float sx = vp->Size.x / windowW, sy = vp->Size.y / windowH;
+          const int left = std::clamp(safe.x, 0, windowW);
+          const int top = std::clamp(safe.y, 0, windowH);
+          const int right = std::clamp(safe.x + safe.w, left, windowW);
+          const int bottom = std::clamp(safe.y + safe.h, top, windowH);
+          uiOrigin = {imagePos.x + left * sx, imagePos.y + top * sy};
+          uiSize = {(right - left) * sx, (bottom - top) * sy};
+        }
         const std::string action =
-            ilmeee::DrawGameUI(gameUi_, imagePos, vp->Size, texture, true,
+            ilmeee::DrawGameUI(gameUi_, uiOrigin, uiSize, texture, true,
                                paused_, &input_.axes, &fingers_,
                                &input_.uiPressed);
         if (action == "TogglePause")

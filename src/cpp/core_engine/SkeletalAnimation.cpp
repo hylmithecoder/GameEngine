@@ -58,6 +58,27 @@ glm::mat4 Blend(const glm::ivec4 &joints, const glm::vec4 &weights,
   }
   return total > 0.00001f ? blended / total : glm::mat4(1);
 }
+
+glm::vec3 TransformNormal(const glm::mat3 &m, const glm::vec3 &n) {
+  // inverse-transpose(m) * n, up to a positive scale removed by normalization.
+  // This avoids constructing an inverse for every vertex, and preserves
+  // nonuniform scales, reflections and the singular-matrix fallback.
+  const glm::vec3 c0 = glm::cross(m[1], m[2]);
+  const float determinant = glm::dot(m[0], c0);
+  glm::vec3 transformed;
+  if (std::abs(determinant) > 0.000001f) {
+    transformed = c0 * n.x + glm::cross(m[2], m[0]) * n.y +
+                  glm::cross(m[0], m[1]) * n.z;
+    if (determinant < 0) transformed = -transformed;
+  } else {
+    transformed = m * n;
+  }
+  const float length = glm::length(transformed);
+  // Match the previous threshold after accounting for the omitted division.
+  const float threshold = std::abs(determinant) > 0.000001f
+      ? 0.000001f * std::abs(determinant) : 0.000001f;
+  return length > threshold ? transformed / length : n;
+}
 } // namespace
 
 bool ValidateAnimation(const AnimationClip &clip, std::string &error) {
@@ -447,11 +468,16 @@ glm::vec3 SkinPosition(const glm::vec3 &p, const glm::ivec4 &joints,
 glm::vec3 SkinNormal(const glm::vec3 &n, const glm::ivec4 &joints,
                      const glm::vec4 &weights,
                      const std::vector<glm::mat4> &matrices) {
-  const glm::mat3 m(Blend(joints, weights, matrices));
-  const glm::vec3 transformed = std::abs(glm::determinant(m)) > 0.000001f
-      ? glm::transpose(glm::inverse(m)) * n : m * n;
-  const float length = glm::length(transformed);
-  return length > 0.000001f ? transformed / length : n;
+  return TransformNormal(glm::mat3(Blend(joints, weights, matrices)), n);
+}
+
+void SkinVertex(const glm::vec3 &p, const glm::vec3 &n,
+                const glm::ivec4 &joints, const glm::vec4 &weights,
+                const std::vector<glm::mat4> &matrices,
+                glm::vec3 &outPosition, glm::vec3 &outNormal) {
+  const glm::mat4 blended = Blend(joints, weights, matrices);
+  outPosition = glm::vec3(blended * glm::vec4(p, 1));
+  outNormal = TransformNormal(glm::mat3(blended), n);
 }
 
 AnimationClip MakeBreathingClip(const std::vector<SkeletonBone> &bones,

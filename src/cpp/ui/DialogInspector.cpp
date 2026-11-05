@@ -96,9 +96,9 @@ void MainWindow::CreateDialogUi(ilmeee::DialogComponent &d) {
     return &gameUi.elements.back();
   };
   const float boxW = std::max(200.0f, w - 80.0f);
-  add(d.box, "Dialog Box", ilmeee::UiKind::Image, ilmeee::UiAnchor::BottomLeft,
+  add(d.box, "Dialog Box", ilmeee::UiKind::Image, ilmeee::UiAnchor::StretchBottom,
       40, 30, boxW, 190, 24, ImVec4(0.05f, 0.06f, 0.10f, 0.85f));
-  add(d.text, "Dialog Text", ilmeee::UiKind::Text, ilmeee::UiAnchor::BottomLeft,
+  add(d.text, "Dialog Text", ilmeee::UiKind::Text, ilmeee::UiAnchor::StretchBottom,
       64, 46, boxW - 48, 150, 28, ImVec4(0, 0, 0, 0));
   add(d.speaker, "Dialog Name", ilmeee::UiKind::Text,
       ilmeee::UiAnchor::BottomLeft, 40, 228, 260, 48, 26,
@@ -145,10 +145,23 @@ void MainWindow::RenderDialogInspector(size_t meshIndex) {
       record = true;
       PushMessage("[INFO] Dialog UI added to the Canvas. Save with Ctrl+S.");
     }
-    EndDisabled();
     if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       SetTooltip("Adds the missing Box / Text / Name elements and a Talk "
                  "button (action Interact) as the Prompt");
+    if (Button("Make Dialog UI Responsive")) {
+      LoadGameUiForProject();
+      for (uint64_t link : {d.box, d.text})
+        if (auto *element = ilmeee::FindUiElement(gameUi, link))
+          ilmeee::SetUiElementAnchor(gameUi, *element, ilmeee::UiAnchor::StretchBottom);
+      if (auto *element = ilmeee::FindUiElement(gameUi, d.speaker))
+        ilmeee::SetUiElementAnchor(gameUi, *element, ilmeee::UiAnchor::BottomLeft);
+      record = true;
+    }
+    if (IsItemHovered())
+      SetTooltip("Stretches the linked Box/Text to keep side margins on wide "
+                 "screens, preserving their reference positions and sizes. "
+                 "The speaker name stays attached to the bottom left.");
+    EndDisabled();
 
     SeparatorText("Lines");
     InputString("##lines", d.lines, true,

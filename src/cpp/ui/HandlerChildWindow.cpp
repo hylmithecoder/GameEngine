@@ -4,6 +4,7 @@
 #include "../../../include/core_engine/InspectMode.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
+#include "../../../include/core_engine/core_editor/EditorDockSpace.hpp"
 #include "../../../include/core_engine/net/Protocol.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include <algorithm>
@@ -336,10 +337,12 @@ void MainWindow::DeleteSceneObject(size_t index) {
 
 void MainWindow::RenderHierarchyWindow() {
   LoadGameUiForProject();
-  Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
+  Begin(ICON_UI_HIERARCHY " Hierarchy###Hierarchy", nullptr,
+        ImGuiWindowFlags_NoCollapse);
   DEBUG_TRACE_PANEL("Hierarchy panel");
   ImGuiTreeNodeFlags nodeFlags =
-      ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+      ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+      ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DrawLinesToNodes;
 
   // Base Template: Ensure there is always a camera in the scene renderer!
   if (sceneRenderer && !sceneRenderer->HasPlayerCamera()) {
@@ -370,6 +373,41 @@ void MainWindow::RenderHierarchyWindow() {
       op = Op::SpawnCanvas;
   };
 
+  // Unity-style Hierarchy Top Bar: [+ Create] + Search Filter
+  static char hierarchySearch[64] = "";
+  BeginDisabled(locked);
+  if (Button(ICON_UI_PLUS " Create")) {
+    OpenPopup("HierarchyCreatePopup");
+  }
+  EndDisabled();
+  if (BeginPopup("HierarchyCreatePopup")) {
+    createMenu(-1);
+    EndPopup();
+  }
+  SameLine();
+  const bool hasHierQuery = hierarchySearch[0] != '\0';
+  SetNextItemWidth(hasHierQuery ? GetContentRegionAvail().x - 24.0f : -1.0f);
+  InputTextWithHint("##HierarchySearch", ICON_UI_SEARCH " Search hierarchy...",
+                    hierarchySearch, IM_ARRAYSIZE(hierarchySearch));
+  if (hasHierQuery) {
+    SameLine(0, 3.0f);
+    if (Button("×##ClearHierSearch", ImVec2(20, 0))) {
+      hierarchySearch[0] = '\0';
+    }
+  }
+  Separator();
+
+  auto matchesHierFilter = [&](const std::string &name) -> bool {
+    if (hierarchySearch[0] == '\0')
+      return true;
+    std::string nl = name, ql = hierarchySearch;
+    std::transform(nl.begin(), nl.end(), nl.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    std::transform(ql.begin(), ql.end(), ql.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return nl.find(ql) != std::string::npos;
+  };
+
   if (sceneRenderer) {
     const size_t count = sceneRenderer->GetMesh3DCount();
     std::vector<std::vector<size_t>> children(count);
@@ -381,6 +419,16 @@ void MainWindow::RenderHierarchyWindow() {
       else
         roots.push_back(i);
     }
+
+    std::function<bool(size_t)> subtreeMatches = [&](size_t idx) -> bool {
+      if (matchesHierFilter(sceneRenderer->GetMesh3DName(idx)))
+        return true;
+      for (size_t ch : children[idx]) {
+        if (subtreeMatches(ch))
+          return true;
+      }
+      return false;
+    };
 
     // Accept a hierarchy entry dropped on the current item.
     auto dropTarget = [&](int newParent) {
@@ -395,29 +443,27 @@ void MainWindow::RenderHierarchyWindow() {
     };
 
     std::function<void(size_t)> drawNode = [&](size_t i) {
+      if (!subtreeMatches(i))
+        return;
       const std::string &meshName = sceneRenderer->GetMesh3DName(i);
       bool isCamera = sceneRenderer->IsMesh3DCamera(i);
       bool isLight = sceneRenderer->IsMesh3DLight(i);
 
-      // Pick SVG icon and label prefix
-      std::string svgPath = "assets/icons/svg/box.svg";
-      std::string prefix = "";
+      // Pick crisp entity SVG icon (no redundant [Cam]/[Light] text clutter)
+      std::string svgPath = "assets/icons/svg/ui_scene.svg";
       if (isCamera) {
         svgPath = "assets/icons/svg/camera.svg";
-        prefix = "[Cam] ";
       } else if (isLight) {
-        svgPath = "assets/icons/svg/flash.svg";
-        prefix = "[Light] ";
+        svgPath = "assets/icons/svg/ui_lighting.svg";
       } else if (sceneRenderer->meshes3d[i].isAudioEmitter) {
-        svgPath = "assets/icons/svg/music.svg";
+        svgPath = "assets/icons/svg/ext_audio.svg";
       } else if (sceneRenderer->meshes3d[i].video.enabled) {
-        svgPath = "assets/icons/svg/video.svg";
+        svgPath = "assets/icons/svg/ui_video.svg";
       } else if (sceneRenderer->meshes3d[i].isWorldText) {
-        svgPath = "assets/icons/svg/image.svg";
+        svgPath = "assets/icons/svg/ui_text3d.svg";
       }
 
-      // Draw icon
-      svgIcons.DrawIcon(svgPath, 16);
+      svgIcons.DrawIcon(svgPath, 15);
 
       ImGuiTreeNodeFlags flags = nodeFlags;
       if (children[i].empty())
@@ -426,11 +472,10 @@ void MainWindow::RenderHierarchyWindow() {
         flags |= ImGuiTreeNodeFlags_Selected;
 
       PushID((int)i);
-      std::string label = prefix + meshName;
+      const std::string &label = meshName;
       const bool renaming = renamingMesh == (int)i;
-      // New children should be visible without hunting for the arrow.
       SetNextItemOpen(true, ImGuiCond_Once);
-      bool open = renaming ? TreeNodeEx("##node", flags, "%s", prefix.c_str())
+      bool open = renaming ? TreeNodeEx("##node", flags, "%s", "")
                            : TreeNodeEx(label.c_str(), flags);
       DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
       if (IsItemClicked(ImGuiMouseButton_Left) ||
@@ -486,8 +531,14 @@ void MainWindow::RenderHierarchyWindow() {
       PopID();
     };
 
+    std::string sceneRootLabel = projectHandler.currentSceneName.empty()
+                                     ? std::string(ICON_UI_SCENE " Scene###SceneRootNode")
+                                     : (std::string(ICON_UI_SCENE " ") +
+                                        projectHandler.currentSceneName +
+                                        "###SceneRootNode");
     const bool sceneOpen =
-        TreeNodeEx("Scene", nodeFlags | ImGuiTreeNodeFlags_DefaultOpen);
+        TreeNodeEx(sceneRootLabel.c_str(),
+                   nodeFlags | ImGuiTreeNodeFlags_DefaultOpen);
     if (BeginPopupContextItem("SceneRootMenu")) {
       if (BeginMenu("Create", !locked)) {
         createMenu(-1);
@@ -504,7 +555,7 @@ void MainWindow::RenderHierarchyWindow() {
       // children. Its data is saved in the scene alongside world entities.
       if (hasGameUiCanvas) {
       PushID("GameCanvas");
-      svgIcons.DrawIcon("assets/icons/svg/image.svg", 16);
+      svgIcons.DrawIcon("assets/icons/svg/ui_canvas.svg", 15);
       SetNextItemOpen(true, ImGuiCond_Once);
       ImGuiTreeNodeFlags canvasFlags = nodeFlags | ImGuiTreeNodeFlags_DefaultOpen;
       if (selectedUiElement == -2)
@@ -541,9 +592,19 @@ void MainWindow::RenderHierarchyWindow() {
       }
       if (canvasOpen) {
         for (int i = 0; i < (int)gameUi.elements.size(); ++i) {
-          PushID(i);
           const auto &element = gameUi.elements[i];
-          svgIcons.DrawIcon("assets/icons/svg/image.svg", 16);
+          if (!matchesHierFilter(element.id))
+            continue;
+          PushID(i);
+          const char *uiIconPath =
+              element.kind == ilmeee::UiKind::Text
+                  ? "assets/icons/svg/ui_text3d.svg"
+              : element.kind == ilmeee::UiKind::Image
+                  ? "assets/icons/svg/ext_image.svg"
+              : element.kind == ilmeee::UiKind::Joystick
+                  ? "assets/icons/svg/ui_game.svg"
+                  : "assets/icons/svg/ui_canvas.svg";
+          svgIcons.DrawIcon(uiIconPath, 15);
           ImGuiTreeNodeFlags uiFlags = nodeFlags | ImGuiTreeNodeFlags_Leaf |
                                      ImGuiTreeNodeFlags_NoTreePushOnOpen;
           if (selectedUiElement == i)
@@ -751,154 +812,141 @@ void MainWindow::RenderExplorerWindow(
     const HandlerProject::AssetFile &assetFolder,
                                       const string &assetPath,
                                       bool firstOpenProject) {
-  Begin("Explorer", nullptr, ImGuiWindowFlags_NoCollapse);
+  (void)assetFolder;
+  (void)assetPath;
+  Begin(ICON_UI_EXPLORER " Explorer###Explorer", nullptr,
+        ImGuiWindowFlags_NoCollapse);
   projectHandler.onFileClicked = [this](const HandlerProject::AssetFile &file) {
-    if (ilmeee::IsAnimationPath(file.fullPath) || ilmeee::IsAnimationControllerPath(file.fullPath)) OpenMotionPreview(file.fullPath);
+    if (ilmeee::IsAnimationPath(file.fullPath) ||
+        ilmeee::IsAnimationControllerPath(file.fullPath))
+      OpenMotionPreview(file.fullPath);
   };
   DEBUG_TRACE_PANEL("Explorer panel");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
-  HandleBackground(
-      pos, size); // panggil di sini!
-                  // ::Log("Asset Folder: " + assetFolder.fullPath +
-                  // "\nChildren: "+to_string(assetFolder.children.size()),
-                  // Debug::LogLevel::INFO);
-  if (firstOpenProject) {
-    BeginGroup();
+  HandleBackground(pos, size);
 
-    // Add toolbar above assets
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
-
-    // Refresh button
-    if (Button("Refresh")) {
+  if (!firstOpenProject) {
+    Spacing();
+    TextDisabled("  No project opened yet.");
+    SameLine();
+    if (SmallButton(ICON_UI_EXPLORER " Open Project...")) {
       projectHandler.isOpenedProject = true;
+      projectHandler.OpenFolder();
     }
-
-    // Tooltip for refresh button
-    if (IsItemHovered()) {
-      SetTooltip("Manually refresh asset tree");
-    }
-
-    SameLine();
-
-    // Add file watcher toggle button
-    bool watcherRunning = projectHandler.IsFileWatcherRunning();
-    if (Button(watcherRunning ? "Watching" : "Watch Off")) {
-      if (watcherRunning) {
-        projectHandler.StopFileWatcher();
-      } else {
-        projectHandler.StartFileWatcher();
-      }
-    }
-
-    // Tooltip for watcher button
-    if (IsItemHovered()) {
-      SetTooltip(watcherRunning ? "Auto-refresh is active"
-                                : "Turn on auto-refresh");
-    }
-
-    SameLine();
-
-    // Back button - disabled if in root directory
-    const std::filesystem::path rootPath =
-        std::filesystem::path(projectHandler.projectPath) / "assets";
-    const bool isInRootDirectory =
-        std::filesystem::path(projectHandler.currentDirectory)
-            .lexically_normal() == rootPath.lexically_normal();
-
-    // Disable button if in root directory
-    if (isInRootDirectory) {
-      PushStyleVar(ImGuiStyleVar_Alpha, GetStyle().Alpha * 0.5f);
-      PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
-      Button("Back");
-      PopStyleColor();
-      PopStyleVar();
-
-      if (IsItemHovered()) {
-        SetTooltip("Already in root directory");
-      }
-    } else {
-      if (Button("Back")) {
-        size_t lastSlash = projectHandler.currentDirectory.find_last_of("/\\");
-        if (lastSlash != string::npos) {
-          projectHandler.currentDirectory =
-              projectHandler.currentDirectory.substr(0, lastSlash);
-          projectHandler.selectedAsset =
-              nullptr; // Reset selection when navigating
-          projectHandler.fileExplorerSelectedPaths.clear();
-        }
-      }
-
-      if (IsItemHovered()) {
-        SetTooltip("Go back to parent folder");
-      }
-    }
-
-    SameLine();
-
-    // Add filter/search box
-    HandleSearch();
-
-    PopStyleColor(3);
-
-    // Get available content region
-    ImVec2 contentSize = GetContentRegionAvail();
-
-    // Left panel (Project tree)
-    BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
-    RenderMotionLibrary();
-    projectHandler.DrawAssetTree(projectRoot);
-    EndChild();
-
-    // Splitter
-    SameLine();
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 0.3f));
-    Button("##Splitter", ImVec2(4.0f, contentSize.y));
-    PopStyleColor();
-
-    // Handle splitter dragging
-    if (IsItemActive()) {
-      float delta = GetIO().MouseDelta.x;
-      if (explorerSplitPosition + delta >= MIN_PANEL_WIDTH &&
-          explorerSplitPosition + delta <= contentSize.x - MIN_PANEL_WIDTH) {
-        explorerSplitPosition += delta;
-      }
-    }
-
-    // Show resize cursor when hovering over splitter
-    if (IsItemHovered())
-      SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-    // Right panel (File explorer)
-    SameLine();
-    BeginChild("AssetRoot", ImVec2(0, 0), true);
-    // Fix: Get files directly from projectHandler instead of through
-    // selectedAsset
-    // ::Log("If You See it this is work in method RenderExplorerWindow",
-    // Debug::LogLevel::SUCCESS);
-    projectHandler.DrawFolderGridView();
-    EndChild();
-
-    EndGroup();
+    End();
+    return;
   }
+
+  BeginGroup();
+
+  // Top Unity-style Project Browser Toolbar
+  if (Button(ICON_UI_REFRESH " Refresh")) {
+    projectHandler.isOpenedProject = true;
+  }
+  if (IsItemHovered()) {
+    SetTooltip("Manually rescan project assets");
+  }
+
+  SameLine();
+
+  bool watcherRunning = projectHandler.IsFileWatcherRunning();
+  if (watcherRunning) {
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.34f, 0.24f, 0.90f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.16f, 0.44f, 0.31f, 0.95f));
+  }
+  if (Button(watcherRunning ? ICON_UI_EYE " Watching" : ICON_UI_EYE " Watch Off")) {
+    if (watcherRunning) {
+      projectHandler.StopFileWatcher();
+    } else {
+      projectHandler.StartFileWatcher();
+    }
+  }
+  if (watcherRunning) {
+    PopStyleColor(2);
+  }
+  if (IsItemHovered()) {
+    SetTooltip(watcherRunning ? "Auto-refresh file watcher is active"
+                              : "Enable auto-refresh file watcher");
+  }
+
+  SameLine();
+
+  const std::filesystem::path projRootPath =
+      std::filesystem::path(projectHandler.projectPath).lexically_normal();
+  const std::filesystem::path curDirPath =
+      std::filesystem::path(projectHandler.currentDirectory).lexically_normal();
+  const bool canGoUp =
+      !projectHandler.currentDirectory.empty() &&
+      curDirPath != projRootPath && curDirPath.has_parent_path() &&
+      curDirPath.parent_path() != curDirPath;
+
+  BeginDisabled(!canGoUp);
+  if (Button(ICON_UI_BACK " Up")) {
+    projectHandler.currentDirectory = curDirPath.parent_path().string();
+    projectHandler.selectedAsset = nullptr;
+    projectHandler.fileExplorerSelectedPaths.clear();
+  }
+  EndDisabled();
+  if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    SetTooltip(canGoUp ? "Navigate to parent folder"
+                       : "Already at project root");
+  }
+
+  SameLine();
+  HandleSearch();
+
+  ImVec2 contentSize = GetContentRegionAvail();
+
+  // Left panel (Two-column Unity Project Tree)
+  BeginChild("ProjectRoot", ImVec2(explorerSplitPosition, 0), true);
+  RenderMotionLibrary();
+  projectHandler.DrawAssetTree(projectRoot);
+  EndChild();
+
+  // Crisp draggable vertical splitter
+  SameLine(0, 3.0f);
+  PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.22f, 0.26f, 0.45f));
+  PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.23f, 0.51f, 0.96f, 0.75f));
+  PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.23f, 0.51f, 0.96f, 1.0f));
+  Button("##Splitter", ImVec2(3.0f, contentSize.y));
+  PopStyleColor(3);
+
+  if (IsItemActive()) {
+    float delta = GetIO().MouseDelta.x;
+    if (explorerSplitPosition + delta >= MIN_PANEL_WIDTH &&
+        explorerSplitPosition + delta <= contentSize.x - MIN_PANEL_WIDTH) {
+      explorerSplitPosition += delta;
+    }
+  }
+  if (IsItemHovered())
+    SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+  // Right panel (Breadcrumbs + Asset Card Grid)
+  SameLine(0, 3.0f);
+  BeginChild("AssetRoot", ImVec2(0, 0), true);
+  projectHandler.DrawFolderGridView();
+  EndChild();
+
+  EndGroup();
 
   End();
 }
 
 void MainWindow::RenderInspectorWindow() {
-  Begin("Inspector", nullptr, ImGuiWindowFlags_NoCollapse);
+  Begin(ICON_UI_INSPECTOR " Inspector###Inspector", nullptr,
+        ImGuiWindowFlags_NoCollapse);
   DEBUG_TRACE_PANEL("Inspector panel");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
 
-  Text("Selected Object");
-  Separator();
   if (selectedUiElement == -2 ||
       (selectedUiElement >= 0 &&
        selectedUiElement < (int)gameUi.elements.size())) {
+    svgIcons.DrawIcon("assets/icons/svg/ui_canvas.svg", 18);
+    TextUnformatted(selectedUiElement == -2 ? "UI Canvas" : "UI Element");
+    Separator();
     if (SceneStructureLocked()) BeginDisabled();
     RenderGameUiEditor();
     if (SceneStructureLocked()) EndDisabled();
@@ -908,68 +956,48 @@ void MainWindow::RenderInspectorWindow() {
 
   if (SceneStructureLocked()) BeginDisabled();
 
-  // if (isLoadScene)
-  // {
-  //     // Still Dummy Inspector Yeah
-  //     for (auto& obj : projectHandler.currentScene.objects) {
-  //             //
-  //             projectHandler.DrawIconFromImage("assets/images/fileicons/box.png");
-  //             // if (TreeNodeEx(obj.name.c_str())) {
-  //             //     TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
-  //             "Properties");
-  //             //     TreePop();
-  //             // }
-  //             // Use a temporary buffer for editing the name
-  //             char nameBuffer[256];
-  //             char spritePath[256];
-  //             strncpy(nameBuffer, obj.name.c_str(), sizeof(nameBuffer) - 1);
-  //             nameBuffer[sizeof(nameBuffer) - 1] = '\0';
-
-  //             for (int i = 0; i < obj.name.length(); i++) {
-  //                 PushID(i);
-  //                 if (InputText("##Name", nameBuffer,
-  //                 IM_ARRAYSIZE(nameBuffer))) {
-  //                     obj.name = nameBuffer;
-  //                 };
-  //                 PopID();
-  //                 if (CollapsingHeader("Transform",
-  //                 ImGuiTreeNodeFlags_DefaultOpen)) {
-  //                     // DragFloat3("Position", obj.x,obj.y,obj.width,
-  //                     0.1f);
-  //                     // DragFloat3("Rotation", obj.rotation, 0.1f);
-  //                     // DragFloat3("Scale", obj.scale, 0.1f);
-  //                 }
-  //                 PushID(i);
-  //                 if (CollapsingHeader("Sprite"),
-  //                 ImGuiTreeNodeFlags_DefaultOpen) {
-  //                     if (InputText("Sprite Path", spritePath,
-  //                     IM_ARRAYSIZE(spritePath))) {
-  //                         obj.spritePath = spritePath;
-  //                     }
-  //                 }
-  //                 PopID();
-  //             }
-  //         }
-  // }
-  // else {
-  // Find which loaded mesh (if any) corresponds to the selected name.
+  // Unity-style GameObject Header Card
   int meshIdx = SelectedMeshIndex();
   if (meshIdx >= 0) {
-    // Edit a copy; renaming on every keystroke would lose the selection.
+    bool hdrCam = sceneRenderer->IsMesh3DCamera((size_t)meshIdx);
+    bool hdrLight = sceneRenderer->IsMesh3DLight((size_t)meshIdx);
+    bool hdrText = sceneRenderer->meshes3d[(size_t)meshIdx].isWorldText;
+    const char *hdrIcon =
+        hdrCam     ? "assets/icons/svg/camera.svg"
+        : hdrLight ? "assets/icons/svg/ui_lighting.svg"
+        : hdrText  ? "assets/icons/svg/ui_text3d.svg"
+                   : "assets/icons/svg/ui_scene.svg";
+    const char *hdrTag =
+        hdrCam     ? "Camera"
+        : hdrLight ? "Light"
+        : hdrText  ? "3D Text"
+        : (sceneRenderer->GetMesh3DBoneCount((size_t)meshIdx) > 0)
+            ? "Skinned Mesh"
+            : "GameObject";
+
+    svgIcons.DrawIcon(hdrIcon, 20);
     static char nameEdit[64];
     static bool nameEditing = false;
     if (!nameEditing)
       std::snprintf(nameEdit, sizeof(nameEdit), "%s", objectName);
     BeginDisabled(SceneStructureLocked());
-    InputText("Name", nameEdit, sizeof(nameEdit));
+    SetNextItemWidth(GetContentRegionAvail().x - 86.0f);
+    InputText("##ObjNameHeader", nameEdit, sizeof(nameEdit));
     nameEditing = IsItemActive();
     if (IsItemDeactivatedAfterEdit())
-      RenameMesh((size_t)meshIdx, nameEdit); // empty/unchanged: reverts
+      RenameMesh((size_t)meshIdx, nameEdit);
     EndDisabled();
+    SameLine();
+    TextDisabled("%s", hdrTag);
   } else {
-    InputText("Name", objectName, IM_ARRAYSIZE(objectName));
+    svgIcons.DrawIcon("assets/icons/svg/ui_inspector.svg", 18);
+    TextDisabled("No object selected");
+    SetNextItemWidth(-1.0f);
+    InputTextWithHint("##ObjNameFallback", "Select or type object name...",
+                      objectName, IM_ARRAYSIZE(objectName));
     meshIdx = SelectedMeshIndex();
   }
+  Separator();
   const bool meshSelected = meshIdx >= 0;
 
   if (meshSelected) {
@@ -987,18 +1015,83 @@ void MainWindow::RenderInspectorWindow() {
     scale[2] = s.z;
   }
 
-  if (CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+  auto drawVec3AxisRow = [&](const char *rowLabel, float vals[3], float speed,
+                             float resetVal, float minV, float maxV) -> std::pair<bool, bool> {
+    bool valChanged = false;
+    bool deactivated = false;
+    PushID(rowLabel);
+
+    const float labelColW = 68.0f;
+    AlignTextToFramePadding();
+    TextUnformatted(rowLabel);
+    SameLine(labelColW);
+
+    const float totalAvail = std::max(90.0f, GetContentRegionAvail().x);
+    const float badgeW = 17.0f;
+    const float gap = 3.0f;
+    const float dragW =
+        std::max(28.0f, (totalAvail - (badgeW * 3.0f + gap * 5.0f)) / 3.0f);
+
+    static const char *kAxisNames[3] = {"X", "Y", "Z"};
+    static const ImVec4 kAxisColors[3] = {
+        ImVec4(0.78f, 0.20f, 0.22f, 1.0f), // X Red
+        ImVec4(0.18f, 0.62f, 0.28f, 1.0f), // Y Green
+        ImVec4(0.20f, 0.44f, 0.85f, 1.0f), // Z Blue
+    };
+
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, 4.0f));
+    for (int a = 0; a < 3; ++a) {
+      if (a > 0)
+        SameLine();
+      PushID(a);
+      PushStyleColor(ImGuiCol_Button, kAxisColors[a]);
+      PushStyleColor(ImGuiCol_ButtonHovered,
+                     ImVec4(std::min(1.0f, kAxisColors[a].x + 0.14f),
+                            std::min(1.0f, kAxisColors[a].y + 0.14f),
+                            std::min(1.0f, kAxisColors[a].z + 0.14f), 1.0f));
+      PushStyleColor(ImGuiCol_ButtonActive, kAxisColors[a]);
+      PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 4));
+      if (Button(kAxisNames[a], ImVec2(badgeW, GetFrameHeight()))) {
+        vals[a] = resetVal;
+        valChanged = true;
+        deactivated = true;
+      }
+      PopStyleVar();
+      PopStyleColor(3);
+      if (IsItemHovered())
+        SetTooltip("Reset %s.%s to %.2f", rowLabel, kAxisNames[a], resetVal);
+
+      SameLine(0, 1.0f);
+      SetNextItemWidth(dragW);
+      if (minV < maxV) {
+        valChanged |= DragFloat("##v", &vals[a], speed, minV, maxV, "%.3f");
+      } else {
+        valChanged |= DragFloat("##v", &vals[a], speed, 0.0f, 0.0f, "%.3f");
+      }
+      deactivated |= IsItemDeactivatedAfterEdit();
+      PopID();
+    }
+    PopStyleVar();
+    PopID();
+    return {valChanged, deactivated};
+  };
+
+  if (CollapsingHeader(ICON_UI_MOVE " Transform###Transform",
+                       ImGuiTreeNodeFlags_DefaultOpen)) {
     DEBUG_TRACE_ITEM("Inspector: Transform header");
     bool changed = false;
     bool editFinished = false;
-    changed |= DragFloat3("Position", position, 0.02f);
-    editFinished |= IsItemDeactivatedAfterEdit();
+    auto [cp, dp] = drawVec3AxisRow("Position", position, 0.02f, 0.0f, 0.0f, 0.0f);
+    changed |= cp;
+    editFinished |= dp;
     DEBUG_TRACE_ITEM("Inspector: Position drag");
-    changed |= DragFloat3("Rotation", rotation, 0.5f);
-    editFinished |= IsItemDeactivatedAfterEdit();
+    auto [cr, dr] = drawVec3AxisRow("Rotation", rotation, 0.5f, 0.0f, 0.0f, 0.0f);
+    changed |= cr;
+    editFinished |= dr;
     DEBUG_TRACE_ITEM("Inspector: Rotation drag");
-    changed |= DragFloat3("Scale", scale, 0.01f, 0.001f, 100.0f);
-    editFinished |= IsItemDeactivatedAfterEdit();
+    auto [cs, ds] = drawVec3AxisRow("Scale", scale, 0.01f, 1.0f, 0.001f, 100.0f);
+    changed |= cs;
+    editFinished |= ds;
     DEBUG_TRACE_ITEM("Inspector: Scale drag");
     if (meshSelected && changed) {
       sceneRenderer->SetMesh3DTransform(
@@ -1623,9 +1716,16 @@ void MainWindow::RenderInspectorWindow() {
 
   if (meshSelected) RenderNativeScriptInspector(static_cast<size_t>(meshIdx));
 
-  if (Button("Add Component", ImVec2(-1, 0))) {
+  Spacing();
+  Separator();
+  Spacing();
+  PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.36f, 0.65f, 0.90f));
+  PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.23f, 0.46f, 0.82f, 0.98f));
+  PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.26f, 0.54f, 0.98f, 1.00f));
+  if (Button(ICON_UI_PLUS " Add Component", ImVec2(-1, 28))) {
     OpenPopup("AddComponentPopup");
   }
+  PopStyleColor(3);
   DEBUG_TRACE_ITEM("Inspector: Add Component button");
 
   if (BeginPopup("AddComponentPopup")) {
@@ -1712,148 +1812,157 @@ void MainWindow::RenderInspectorWindow() {
 }
 
 void MainWindow::RenderSceneToolbarView(ImVec2 parentPos, ImVec2 parentSize) {
-  // Calculate toolbar position (top-left corner of scene window with some
-  // padding)
-  ImVec2 toolbarPos = ImVec2(parentPos.x + 10, parentPos.y + 30);
+  (void)parentSize;
+  ImVec2 toolbarPos = ImVec2(parentPos.x + 10.0f, parentPos.y + 34.0f);
 
-  // Set toolbar window properties
   SetNextWindowPos(toolbarPos, ImGuiCond_Always);
-  SetNextWindowBgAlpha(0.8f); // Semi-transparent background
+  SetNextWindowBgAlpha(0.88f);
 
-  // Toolbar window flags
   ImGuiWindowFlags toolbar_flags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-      // ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing;
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
+      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoDocking;
 
-  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
-  // Begin floating toolbar
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+  PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+  PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
   if (Begin("Scene Toolbar", nullptr, toolbar_flags)) {
-    DEBUG_TRACE_PANEL("Scene Toolbar (Reset/Zoom/Grid/Snap)");
-    // Transform tool: which gizmo the selected object shows (keys 1-4).
-    {
-      static const char *kTools[4] = {"Select", "Move", "Rotate", "Scale"};
-      const int cur = (int)sceneRenderer->GetEditMode();
-      for (int k = 0; k < 4; ++k) {
-        if (k > 0)
-          SameLine(0, 2);
-        const bool on = cur == k;
-        if (on)
-          PushStyleColor(ImGuiCol_Button, GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (Button(kTools[k]))
-          sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
-        if (on)
-          PopStyleColor();
-        if (IsItemHovered())
-          SetTooltip("%s tool (%d)%s", kTools[k], k + 1,
-                     k == 0 ? " - drag to move in screen plane"
-                            : " - Ctrl to snap");
+    DEBUG_TRACE_PANEL("Scene Toolbar (Compact Unity Overlay Pill)");
+
+    // Transform gizmo tools (keys 1-4)
+    static const char *kToolNames[4] = {"Select", "Move", "Rotate", "Scale"};
+    static const char *kToolIcons[4] = {
+        "assets/icons/svg/ui_select.svg",
+        "assets/icons/svg/ui_move.svg",
+        "assets/icons/svg/ui_rotate.svg",
+        "assets/icons/svg/ui_scale.svg",
+    };
+    const int cur = (int)sceneRenderer->GetEditMode();
+    for (int k = 0; k < 4; ++k) {
+      if (k > 0)
+        SameLine(0, 2);
+      const bool on = (cur == k);
+      ImVec4 bg = on ? ImVec4(0.22f, 0.50f, 0.95f, 0.95f)
+                     : ImVec4(0.16f, 0.18f, 0.22f, 0.70f);
+      ImVec4 tint = on ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
+                       : ImVec4(0.78f, 0.82f, 0.88f, 1.0f);
+      char btnId[24];
+      std::snprintf(btnId, sizeof(btnId), "##VpTool%d", k);
+      if (svgIcons.DrawIconButton(btnId, kToolIcons[k], 15, bg, tint)) {
+        sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
       }
+      if (IsItemHovered())
+        SetTooltip("%s (%d)%s", kToolNames[k], k + 1,
+                   k == 0 ? " - drag in screen plane" : " - Ctrl to snap");
     }
-    // Reset View Button
-    if (Button("Reset View")) {
+
+    SameLine(0, 6);
+    TextDisabled("|");
+    SameLine(0, 6);
+
+    // Grid visibility toggle
+    bool gridVis = sceneRenderer->IsGrid3DVisible();
+    if (gridVis) {
+      PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.42f, 0.76f, 0.85f));
+    }
+    if (Button(ICON_UI_GRID "##ToggleGrid")) {
+      sceneRenderer->SetGrid3DVisible(!gridVis);
+      RecordEditorHistory();
+    }
+    if (gridVis)
+      PopStyleColor();
+    if (IsItemHovered())
+      SetTooltip("Toggle 3D Grid (%s)", gridVis ? "Visible" : "Hidden");
+
+    // Snap toggle
+    SameLine(0, 3);
+    bool snapOn = sceneRenderer->IsSnapToGrid();
+    if (snapOn) {
+      PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.42f, 0.76f, 0.85f));
+    }
+    if (Button(ICON_UI_SNAP "##ToggleSnap")) {
+      sceneRenderer->SetSnapToGrid(!snapOn);
+      RecordEditorHistory();
+    }
+    if (snapOn)
+      PopStyleColor();
+    if (IsItemHovered())
+      SetTooltip("Snap to Grid (%s)", snapOn ? "On" : "Off");
+
+    // View mode selector
+    SameLine(0, 4);
+    static int viewMode = 1; // Default 3D
+    const char *viewModes[] = {"2D", "3D", "Wireframe"};
+    SetNextItemWidth(78);
+    Combo("##ViewMode", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
+
+    // Reset camera
+    SameLine(0, 4);
+    if (Button(ICON_UI_REFRESH "##ResetCam")) {
       ::Log("Resetting camera view", Debug::LogLevel::INFO);
       sceneRenderer->ResetCamera();
       RecordEditorHistory();
     }
+    if (IsItemHovered())
+      SetTooltip("Reset Scene Camera");
 
-    SameLine();
-
-    // Zoom controls
-    // static float zoom = sceneRenderer->zoom;
-    SetNextItemWidth(100);
-    if (SliderFloat("##Zoom", &sceneRenderer->zoom, 1.0f, 10.0f, "%.2fx")) {
-      sceneRenderer->SetCameraZoom(sceneRenderer->zoom);
+    // Compact Viewport Settings Popover (Zoom, Grid Size, Grid/BG Color)
+    SameLine(0, 3);
+    if (Button(ICON_UI_INSPECTOR "##SceneOverlayPrefs")) {
+      OpenPopup("SceneViewportSettingsPopup");
     }
-    if (IsItemDeactivatedAfterEdit())
-      RecordEditorHistory();
+    if (IsItemHovered())
+      SetTooltip("Scene Viewport Settings (Zoom, Grid, Background)");
 
-    SameLine();
-    Text("Zoom");
+    if (BeginPopup("SceneViewportSettingsPopup")) {
+      TextDisabled("Scene Viewport Settings");
+      Separator();
 
-    // New line for more controls
-    NewLine();
+      SetNextItemWidth(130);
+      if (SliderFloat("Camera Zoom", &sceneRenderer->zoom, 1.0f, 10.0f,
+                      "%.2fx")) {
+        sceneRenderer->SetCameraZoom(sceneRenderer->zoom);
+      }
+      if (IsItemDeactivatedAfterEdit())
+        RecordEditorHistory();
 
-    // Grid size control
-    static float gridSize = 50.0f;
-    gridSize = sceneRenderer->GetGridSize();
-    SetNextItemWidth(80);
-    if (DragFloat("##GridSize", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
-      sceneRenderer->SetGridSize(gridSize);
+      float gridSize = sceneRenderer->GetGridSize();
+      SetNextItemWidth(130);
+      if (DragFloat("Grid Size", &gridSize, 1.0f, 10.0f, 200.0f, "%.0f")) {
+        sceneRenderer->SetGridSize(gridSize);
+      }
+      if (IsItemDeactivatedAfterEdit())
+        RecordEditorHistory();
+
+      const glm::vec4 currentGridColor = sceneRenderer->GetGridColor();
+      float gridColor[3] = {currentGridColor.x, currentGridColor.y,
+                            currentGridColor.z};
+      if (ColorEdit3("Grid Color", gridColor, ImGuiColorEditFlags_NoInputs)) {
+        sceneRenderer->SetGridColor(gridColor[0], gridColor[1], gridColor[2],
+                                    1.0f);
+      }
+      if (IsItemDeactivatedAfterEdit())
+        RecordEditorHistory();
+
+      const glm::vec4 currentBackgroundColor =
+          sceneRenderer->GetBackgroundColor();
+      float bgColor[3] = {currentBackgroundColor.x, currentBackgroundColor.y,
+                          currentBackgroundColor.z};
+      if (ColorEdit3("Sky / Clear Color", bgColor,
+                     ImGuiColorEditFlags_NoInputs)) {
+        sceneRenderer->SetBackgroundColor(bgColor[0], bgColor[1], bgColor[2],
+                                          1.0f);
+      }
+      if (IsItemDeactivatedAfterEdit())
+        RecordEditorHistory();
+
+      EndPopup();
     }
-    if (IsItemDeactivatedAfterEdit())
-      RecordEditorHistory();
-
-    SameLine();
-    Text("Grid Size");
-
-    // Third line for color controls
-    NewLine();
-
-    // Grid color picker (compact)
-    static float gridColor[3] = {0.5f, 0.5f, 0.5f};
-    const glm::vec4 currentGridColor = sceneRenderer->GetGridColor();
-    gridColor[0] = currentGridColor.x;
-    gridColor[1] = currentGridColor.y;
-    gridColor[2] = currentGridColor.z;
-    SetNextItemWidth(60);
-    if (ColorEdit3("##GridColor", gridColor,
-                   ImGuiColorEditFlags_NoInputs |
-                       ImGuiColorEditFlags_NoLabel)) {
-      sceneRenderer->SetGridColor(gridColor[0], gridColor[1], gridColor[2],
-                                  1.0f);
-    }
-    if (IsItemDeactivatedAfterEdit())
-      RecordEditorHistory();
-
-    SameLine();
-    Text("Grid");
-
-    SameLine();
-
-    // Background color picker (compact)
-    static float bgColor[3] = {0.2f, 0.2f, 0.2f};
-    const glm::vec4 currentBackgroundColor =
-        sceneRenderer->GetBackgroundColor();
-    bgColor[0] = currentBackgroundColor.x;
-    bgColor[1] = currentBackgroundColor.y;
-    bgColor[2] = currentBackgroundColor.z;
-    SetNextItemWidth(60);
-    if (ColorEdit3("##BgColor", bgColor,
-                   ImGuiColorEditFlags_NoInputs |
-                       ImGuiColorEditFlags_NoLabel)) {
-      // if (sceneRenderer) {
-      sceneRenderer->SetBackgroundColor(bgColor[0], bgColor[1], bgColor[2],
-                                        1.0f); // You'll need to implement this
-                                               // }
-    }
-    if (IsItemDeactivatedAfterEdit())
-      RecordEditorHistory();
-
-    SameLine();
-    Text("Background");
-
-    // Snap to grid toggle
-    NewLine();
-    static bool snapToGrid = false;
-    snapToGrid = sceneRenderer->IsSnapToGrid();
-    if (Checkbox("Snap to Grid", &snapToGrid)) {
-      sceneRenderer->SetSnapToGrid(snapToGrid);
-      RecordEditorHistory();
-    }
-
-    SameLine();
-
-    // View mode selector
-    static int viewMode = 0;
-    const char *viewModes[] = {"2D", "3D", "Wireframe"};
-    SetNextItemWidth(80);
-    Combo("##ViewMode", &viewMode, viewModes, IM_ARRAYSIZE(viewModes));
   }
   End();
 
-  PopStyleVar(1);
+  PopStyleVar(3);
 }
 
 void MainWindow::EnsureSceneLoaded() {
@@ -1942,7 +2051,8 @@ void MainWindow::RenderSceneWindow() {
     SetNextWindowFocus();
     focusSceneTab = false;
   }
-  const bool sceneVisible = Begin("Scene", &showScene, window_flags);
+  const bool sceneVisible =
+      Begin(ICON_UI_SCENE " Scene###Scene", &showScene, window_flags);
   sceneDockId = GetWindowDockID();
   if (sceneVisible) {
     DEBUG_TRACE_PANEL("Scene viewport panel");
@@ -2123,9 +2233,12 @@ void MainWindow::RenderSceneWindow() {
               if (scale > 0.0f) {
                 const ImVec2 delta = GetIO().MouseDelta;
                 const bool right = element.anchor == ilmeee::UiAnchor::TopRight ||
-                                   element.anchor == ilmeee::UiAnchor::BottomRight;
+                                   element.anchor == ilmeee::UiAnchor::BottomRight ||
+                                   element.anchor == ilmeee::UiAnchor::CenterRight;
                 const bool bottom = element.anchor == ilmeee::UiAnchor::BottomLeft ||
-                                    element.anchor == ilmeee::UiAnchor::BottomRight;
+                                    element.anchor == ilmeee::UiAnchor::BottomRight ||
+                                    element.anchor == ilmeee::UiAnchor::BottomCenter ||
+                                    element.anchor == ilmeee::UiAnchor::StretchBottom;
                 element.x += (right ? -delta.x : delta.x) / scale;
                 element.y += (bottom ? -delta.y : delta.y) / scale;
               }
@@ -2545,14 +2658,17 @@ void MainWindow::RenderSceneWindow() {
                                  "UI Edit Mode  |  Drag elements, edit in Inspector");
     }
 
-    // Status bar dengan background semi-transparan
-    SetCursorPos(ImVec2(0, windowSize.y - 25));
-    // PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f));
-    BeginChild("StatusBar", ImVec2(windowSize.x, 25), false);
-    Text(" Scene View | FPS: %.1f | Zoom: %.2fx", GetIO().Framerate,
-         sceneRenderer->GetZoom());
+    // Sleek semi-transparent bottom viewport status bar
+    SetCursorPos(ImVec2(0, windowSize.y - 24));
+    PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.09f, 0.11f, 0.72f));
+    BeginChild("StatusBar", ImVec2(windowSize.x, 24), false);
+    SetCursorPosY(3.0f);
+    TextColored(ImVec4(0.76f, 0.80f, 0.86f, 1.0f),
+                "  Scene  •  %.1f FPS  •  Zoom %.2fx  •  Objects: %zu",
+                GetIO().Framerate, sceneRenderer->GetZoom(),
+                sceneRenderer->GetMesh3DCount());
     EndChild();
-    // PopStyleColor();
+    PopStyleColor();
   }
   End();
 
@@ -2569,7 +2685,8 @@ void MainWindow::RenderSceneWindow() {
       SetNextWindowFocus();
       focusGameTab = false;
     }
-    if (Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar)) {
+    if (Begin(ICON_UI_GAME " Game###Game", nullptr,
+              ImGuiWindowFlags_NoScrollbar)) {
       const bool inputFocused = IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
                                 && !GetIO().WantTextInput;
       if (builder.IsPlaying() && inputFocused)
@@ -2663,6 +2780,9 @@ void MainWindow::RenderGameUiEditor() {
     TextDisabled("Screen-space root for the game UI");
     DragFloat2("Reference size", &gameUi.referenceWidth, 1.0f, 1.0f, 8192.0f);
     if (IsItemDeactivatedAfterEdit()) RecordEditorHistory();
+    TextWrapped("Design in reference pixels. Elements scale uniformly; anchors "
+                "attach to the viewport edges. Use Stretch for panels that "
+                "should grow on wider or taller screens.");
   }
   if (selectedUiElement >= 0 &&
       selectedUiElement < (int)gameUi.elements.size()) {
@@ -2691,10 +2811,18 @@ void MainWindow::RenderGameUiEditor() {
     }
     int anchor = (int)e.anchor;
     if (Combo("Anchor", &anchor,
-              "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0")) {
-      e.anchor = (ilmeee::UiAnchor)anchor;
+              "Top Left\0Top Right\0Bottom Left\0Bottom Right\0Center\0"
+              "Top Center\0Bottom Center\0Center Left\0Center Right\0"
+              "Stretch Top\0Stretch Bottom\0Stretch Center\0Stretch Full\0")) {
+      ilmeee::SetUiElementAnchor(gameUi, e, (ilmeee::UiAnchor)anchor);
       RecordEditorHistory();
     }
+    if (IsItemHovered())
+      SetTooltip("Keeps the reference position when changed. Stretch adds the "
+                 "screen's extra space to Width (and Height for Stretch Full).");
+    if (e.anchor >= ilmeee::UiAnchor::StretchTop)
+      TextWrapped("Width/Height are the size at the Canvas reference resolution. "
+                  "Extra screen space is added automatically.");
     if (Checkbox("Visible", &e.visible)) RecordEditorHistory();
     if (IsItemHovered())
       SetTooltip("Hidden elements are skipped in Play; scripts and dialogs "
@@ -2919,83 +3047,128 @@ void MainWindow::HandleViewportInteraction(ImVec2 viewportPos,
 void MainWindow::RenderConsoleWindow() {
   if (!showConsole)
     return;
-  // Set window properties
-  Begin("Console", &showConsole, ImGuiWindowFlags_NoCollapse);
+  Begin(ICON_UI_CONSOLE " Console###Console", &showConsole,
+        ImGuiWindowFlags_NoCollapse);
   DEBUG_TRACE_PANEL("Console panel (output/build tabs)");
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
 
-  static int selectedTab = 0;
   BeginTabBar("ConsoleTabs");
 
   const ImGuiTabItemFlags outputTabFlags =
       focusOutputTab ? ImGuiTabItemFlags_SetSelected : 0;
   focusOutputTab = false;
-  if (BeginTabItem("Output", nullptr, outputTabFlags)) {
-    // Toolbar area
-    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
-    BeginChild("ConsoleToolbar", ImVec2(0, 30), false);
-
-    // Clear button with better styling
-    PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-    if (Button("Clear", ImVec2(60, 24))) {
-      ClearMessages();
-    }
-    PopStyleColor(2);
-
-    // Filter dropdown
-    SameLine();
-    const char *filters[] = {"All", "Info", "Warning", "Error"};
-    static int currentFilter = 0;
-    SetNextItemWidth(100);
-    Combo("##Filter", &currentFilter, filters, IM_ARRAYSIZE(filters));
-
-    // Search box
-    SameLine();
-    static char searchBuffer[128] = "";
-    SetNextItemWidth(-1); // Take remaining width
-    InputTextWithHint("##search", "Search in console...", searchBuffer,
-                      IM_ARRAYSIZE(searchBuffer));
-
-    EndChild();
-    PopStyleVar();
-
-    // Console output area
-    BeginChild("ConsoleOutput", ImVec2(0, -5), true);
-
-    // Style for console text
-    PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
-    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
-
+  if (BeginTabItem(ICON_UI_CONSOLE " Output###Output", nullptr,
+                   outputTabFlags)) {
     std::vector<std::string> logLines;
     {
       std::lock_guard<std::mutex> lock(messagesMutex);
       logLines = messages;
     }
+
+    int infoCount = 0, warnCount = 0, errCount = 0;
+    auto classifyLine = [](const std::string &l) -> int {
+      if (l.find("[ERROR]") != string::npos || l.find("[CRASH]") != string::npos ||
+          l.find("error:") != string::npos || l.find("Invalid ") != string::npos)
+        return 3;
+      if (l.find("[WARNING]") != string::npos || l.find("warning:") != string::npos)
+        return 2;
+      return 1;
+    };
+    for (const auto &l : logLines) {
+      int cls = classifyLine(l);
+      if (cls == 3)
+        ++errCount;
+      else if (cls == 2)
+        ++warnCount;
+      else
+        ++infoCount;
+    }
+
+    static int currentFilter = 0; // 0 All, 1 Info, 2 Warn, 3 Error
+    static char consoleSearch[128] = "";
+
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 4));
+    BeginChild("ConsoleToolbar", ImVec2(0, 28), false);
+
+    if (Button(ICON_UI_TRASH " Clear")) {
+      ClearMessages();
+    }
+
+    // Unity-style clickable severity badge counters
+    SameLine();
+    auto drawSeverityPill = [&](int filterVal, const char *iconGlyph, int cnt,
+                                const ImVec4 &activeCol, const char *tip) {
+      bool active = (currentFilter == filterVal);
+      if (active)
+        PushStyleColor(ImGuiCol_Button, activeCol);
+      char buf[48];
+      std::snprintf(buf, sizeof(buf), "%s %d##sev%d", iconGlyph, cnt, filterVal);
+      if (Button(buf)) {
+        currentFilter = active ? 0 : filterVal;
+      }
+      if (active)
+        PopStyleColor();
+      if (IsItemHovered())
+        SetTooltip("%s (click to toggle filter)", tip);
+    };
+
+    drawSeverityPill(1, ICON_UI_INFO, infoCount,
+                     ImVec4(0.18f, 0.36f, 0.62f, 0.90f), "Info messages");
+    SameLine(0, 4);
+    drawSeverityPill(2, ICON_UI_WARN, warnCount,
+                     ImVec4(0.55f, 0.38f, 0.10f, 0.92f), "Warnings");
+    SameLine(0, 4);
+    drawSeverityPill(3, ICON_UI_ERROR, errCount,
+                     ImVec4(0.58f, 0.16f, 0.18f, 0.92f), "Errors");
+
+    SameLine();
+    SetNextItemWidth(-1);
+    InputTextWithHint("##consoleSearch", ICON_UI_SEARCH " Search console...",
+                      consoleSearch, IM_ARRAYSIZE(consoleSearch));
+
+    EndChild();
+    PopStyleVar();
+
+    BeginChild("ConsoleOutput", ImVec2(0, -4), true);
+    PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
+
+    std::string queryLower = consoleSearch;
+    std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+
     int number = 1;
     const bool wasAtBottom = GetScrollY() >= GetScrollMaxY() - 4.0f;
     for (const auto &line : logLines) {
-      // Filter messages based on selected filter
-      if (currentFilter == 0 || // All
-          (currentFilter == 1 && line.find("[INFO]") != string::npos) ||
-          (currentFilter == 2 && line.find("[WARNING]") != string::npos) ||
-          (currentFilter == 3 && line.find("[ERROR]") != string::npos)) {
+      int cls = classifyLine(line);
+      if (currentFilter != 0 && cls != currentFilter)
+        continue;
 
-        // Search filter
-        if (strlen(searchBuffer) == 0 ||
-            line.find(searchBuffer) != string::npos) {
-          Text("[%d] %s", number++, line.c_str());
-        }
+      if (!queryLower.empty()) {
+        std::string lineLower = line;
+        std::transform(lineLower.begin(), lineLower.end(), lineLower.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        if (lineLower.find(queryLower) == string::npos)
+          continue;
       }
+
+      ImVec4 col = ImVec4(0.84f, 0.87f, 0.91f, 1.0f);
+      if (cls == 3)
+        col = ImVec4(0.98f, 0.42f, 0.42f, 1.0f);
+      else if (cls == 2)
+        col = ImVec4(0.98f, 0.78f, 0.32f, 1.0f);
+      else if (line.find("compiled") != string::npos ||
+               line.find("[SUCCESS]") != string::npos)
+        col = ImVec4(0.45f, 0.88f, 0.60f, 1.0f);
+
+      TextColored(col, "[%d] %s", number++, line.c_str());
     }
 
     if (wasAtBottom)
       SetScrollHereY(1.0f);
 
     PopStyleVar();
-    PopStyleColor();
     EndChild();
 
     EndTabItem();
@@ -3003,9 +3176,8 @@ void MainWindow::RenderConsoleWindow() {
 
   const ImGuiTabItemFlags buildTabFlags =
       focusBuildTab ? ImGuiTabItemFlags_SetSelected : 0;
-  focusBuildTab = false; // one-shot: a started build brings the tab forward
-  if (BeginTabItem("Build", nullptr, buildTabFlags)) {
-    selectedTab = 2;
+  focusBuildTab = false;
+  if (BeginTabItem(ICON_UI_BUILD " Build###Build", nullptr, buildTabFlags)) {
     RenderBuildTab();
     EndTabItem();
   }
@@ -3022,15 +3194,15 @@ void MainWindow::RenderMenuBar() {
       if (MenuItem("New Scene", "Ctrl+N")) {
         projectHandler.SaveNewScene();
       }
-      if (MenuItem("Open Project", "Ctrl+O")) {
+      if (MenuItem("Open Project...", "Ctrl+O")) {
         projectHandler.isOpenedProject = true;
         projectHandler.OpenFolder();
       }
-      if (MenuItem("Load Scene", "Ctrl+O")) {
-        // projectHandler.OpenScene();
+      if (MenuItem("Load Scene...", nullptr)) {
         RequestEngineSceneLoad();
       }
-      if (MenuItem("Save", "Ctrl+S")) {
+      Separator();
+      if (MenuItem(ICON_UI_SAVE " Save", "Ctrl+S")) {
         Save3DScene();
       }
       if (MenuItem("Save As...", "Ctrl+Shift+S")) {
@@ -3102,45 +3274,45 @@ void MainWindow::RenderMenuBar() {
         isBackgroundActived = true;
       }
 
-      // Tambahan pengaturan background opacity
       SliderFloat("Opacity", &volume, 0.1f, 1.0f);
       EndMenu();
     }
 
     if (BeginMenu("Windows")) {
-      MenuItem("Animation", nullptr, &showAnimation);
-      if (MenuItem("Explorer", nullptr, &showExplorer)) {
+      MenuItem(ICON_UI_HIERARCHY " Hierarchy", nullptr, &showHierarchy);
+      MenuItem(ICON_UI_SCENE " Scene", "Ctrl+1", &showScene);
+      MenuItem(ICON_UI_INSPECTOR " Inspector", nullptr, &showInspector);
+      MenuItem(ICON_UI_EXPLORER " Explorer", nullptr, &showExplorer);
+      MenuItem(ICON_UI_CONSOLE " Console", "Ctrl+2", &showConsole);
+      MenuItem(ICON_UI_ANIMATION " Animation", nullptr, &showAnimation);
+      MenuItem(ICON_UI_LIGHTING " Lighting", nullptr, &showLighting);
+      MenuItem(ICON_UI_DEVICE " Device Monitor", nullptr, &showDeviceMonitor);
+      panelManager.RenderWindowMenuItems();
+      Separator();
+      if (MenuItem("Reset Default Layout")) {
+        Ilmeee::EditorDockSpace::ResetLayout();
       }
-      if (MenuItem("Inspector", nullptr, &showInspector)) {
-      }
-      if (MenuItem("Scene", "Ctrl+1", &showScene)) {
-      }
-      if (MenuItem("Hierarchy", nullptr, &showHierarchy)) {
-        RenderHierarchyWindow();
-      }
-      if (MenuItem("Console", "Ctrl+2", &showConsole)) {
-      }
-      MenuItem("Device Monitor", nullptr, &showDeviceMonitor);
       EndMenu();
     }
 
     RenderLightingMenu();
 
-    // Status bar di menu kanan
+    // Right-side live status telemetry in menu bar
     if (deviceMonitor.Live(GetTime())) {
-      SetCursorPosX(GetWindowWidth() - 420);
+      SetCursorPosX(GetWindowWidth() - 360);
       const double fps = deviceMonitor.Samples().back().fps;
       TextColored(fps >= 55   ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
                   : fps >= 30 ? ImVec4(0.95f, 0.8f, 0.3f, 1.0f)
                               : ImVec4(1.0f, 0.4f, 0.3f, 1.0f),
-                  "%s: %.1f FPS", deviceMonitor.Target().c_str(), fps);
+                  ICON_UI_DEVICE " %s: %.1f FPS",
+                  deviceMonitor.Target().c_str(), fps);
       if (IsItemClicked())
         showDeviceMonitor = true;
       if (IsItemHovered())
-        SetTooltip("Running game (click for the Device Monitor)");
+        SetTooltip("Running game telemetry (click to open Device Monitor)");
     }
-    SetCursorPosX(GetWindowWidth() - 200);
-    Text("FPS: %.1f", GetIO().Framerate);
+    SetCursorPosX(GetWindowWidth() - 125);
+    TextDisabled("FPS: %.1f", GetIO().Framerate);
 
     EndMainMenuBar();
   }
@@ -3158,40 +3330,29 @@ void MainWindow::HandleBackground(const ImVec2 &windowPos,
 
   ImDrawList *drawList = GetWindowDrawList();
 
-  // Calculate image dimensions while maintaining aspect ratio
   float imageAspect = (float)backgroundTexture.Width / backgroundTexture.Height;
   float windowAspect = windowSize.x / windowSize.y;
 
-  // Calculate image size that maintains original aspect ratio
   float imageWidth, imageHeight;
   if (windowAspect > imageAspect) {
-    // Window is wider than image
     imageHeight = windowSize.y;
     imageWidth = imageHeight * imageAspect;
   } else {
-    // Window is taller than image
     imageWidth = windowSize.x;
     imageHeight = imageWidth / imageAspect;
   }
 
-  // Calculate position to center the image
   float imageX = windowPos.x + (windowSize.x - imageWidth) * 0.5f;
   float imageY = windowPos.y + (windowSize.y - imageHeight) * 0.5f;
 
-  // Extract Color
-  float r, g, b;
-  r = assets.r;
-  g = assets.g;
-  b = assets.b;
-  // ::Log("Dominant Color: " + to_string(r) + ", " + to_string(g) + ", " +
-  // to_string(b), Debug::LogLevel::INFO); First draw the dominant color
-  // background for the entire window
+  float r = assets.r;
+  float g = assets.g;
+  float b = assets.b;
   ImU32 fillColor = ColorConvertFloat4ToU32(ImVec4(r, g, b, volume));
   drawList->AddRectFilled(
       windowPos, ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
       fillColor);
 
-  // Then draw the actual image maintaining its aspect ratio
   drawList->AddImage((ImTextureID)(intptr_t)backgroundTexture.TextureID,
                      ImVec2(imageX, imageY),
                      ImVec2(imageX + imageWidth, imageY + imageHeight),
@@ -3200,104 +3361,120 @@ void MainWindow::HandleBackground(const ImVec2 &windowPos,
 }
 
 void MainWindow::HandleSearch() {
-  // Buffer pencarian dan container hasil pencarian.
   static char searchBuffer[128] = "";
   static vector<HandlerProject::AssetFile> searchResults;
 
-  // Atur lebar input sesuai jendela.
-  // PushItemWidth(-1);
-  // Menampilkan input text dengan hint. Menunggu Enter untuk trigger pencarian.
-  if (InputTextWithHint("##search", "Search assets...", searchBuffer,
-                        IM_ARRAYSIZE(searchBuffer))) {
+  // Keep searchBuffer synced if user cleared filter chip in grid header
+  if (projectHandler.currentFilter.empty() && searchBuffer[0] != '\0') {
+    searchBuffer[0] = '\0';
+    searchResults.clear();
+  }
+
+  const bool hasSearchText = searchBuffer[0] != '\0';
+  const float filterBtnWidth = 84.0f;
+  const float clearBtnWidth = hasSearchText ? 24.0f : 0.0f;
+  float searchWidth =
+      std::max(100.0f, GetContentRegionAvail().x - filterBtnWidth - clearBtnWidth - 8.0f);
+
+  SetNextItemWidth(searchWidth);
+  if (InputTextWithHint("##search", ICON_UI_SEARCH " Search assets...",
+                        searchBuffer, IM_ARRAYSIZE(searchBuffer))) {
     projectHandler.currentFilter = searchBuffer;
-    // Jika buffer tidak kosong, lakukan pencarian.
-    if (strlen(searchBuffer) > 0 || projectHandler.currentFilter != "") {
-      searchResults.clear();
-      // Asumsikan BuildAssetTree menghasilkan struktur asset
-      auto assetTree =
-          projectHandler.BuildAssetTree(projectHandler.projectPath);
-      projectHandler.SearchFileOrFolder(assetTree, searchBuffer, searchResults);
-    }
-    // Jika input dikosongkan, bersihkan hasil pencarian.
-    else {
-      searchResults.clear();
+    searchResults.clear();
+    if (searchBuffer[0] != '\0' && searchBuffer[0] != '.') {
+      projectHandler.SearchFileOrFolder(explorerTree, searchBuffer,
+                                        searchResults);
     }
   }
 
-  // Tombol tambahan untuk filter cepat
-  SameLine();
-  if (Button("Filter")) {
+  if (hasSearchText) {
+    SameLine(0, 3.0f);
+    if (Button("×##ClearAssetSearch", ImVec2(20, 0))) {
+      searchBuffer[0] = '\0';
+      projectHandler.currentFilter.clear();
+      searchResults.clear();
+    }
+    if (IsItemHovered())
+      SetTooltip("Clear search / filter");
+  }
+
+  SameLine(0, 4.0f);
+  if (Button(ICON_UI_FILTER " Filter")) {
     OpenPopup("FilterOptions");
-    // showingFilterPopup = true;
   }
 
-  // Popup filter
   if (BeginPopup("FilterOptions")) {
-    if (MenuItem("All Files")) {
-      projectHandler.currentFilter = "";
-      strcpy(searchBuffer, "");
-    }
-    if (MenuItem("Scripts (.cpp, .c)")) {
-      projectHandler.currentFilter = ".cpp .c";
-      strcpy(searchBuffer, ".cpp .c");
-    }
-    if (MenuItem("Models (.fbx, .obj)")) {
-      projectHandler.currentFilter = ".fbx .obj";
-      strcpy(searchBuffer, ".fbx .obj");
-    }
-    if (MenuItem("Images (.png, .jpg)")) {
-      projectHandler.currentFilter = ".png .jpg .jpeg";
-      strcpy(searchBuffer, ".png .jpg .jpeg");
-    }
-    EndPopup();
-    // showingFilterPopup = false;
-  }
-  // PopItemWidth();
-
-  // Jika ada hasil pencarian, tampilkan daftar hasil.
-  if (!searchResults.empty()) {
+    auto applyPreset = [&](const char *label, const char *exts) {
+      bool active = (projectHandler.currentFilter == exts);
+      if (MenuItem(label, nullptr, active)) {
+        projectHandler.currentFilter = exts;
+        std::snprintf(searchBuffer, sizeof(searchBuffer), "%s", exts);
+        searchResults.clear();
+      }
+    };
+    applyPreset("All Assets", "");
     Separator();
-    Text("Search Results:");
+    applyPreset("3D Models (.pmx, .fbx, .obj, .gltf, .glb)",
+                ".pmx .pmd .fbx .obj .gltf .glb .dae .stl");
+    applyPreset("Blender Files (.blend, .blend1)", ".blend .blend1 .blend2");
+    applyPreset("C++ & Scripts (.cpp, .hpp, .h, .c, .lua, .py)",
+                ".cpp .cc .cxx .c .hpp .h .lua .py .sh");
+    applyPreset("Shaders (.glsl, .vert, .frag, .spv)",
+                ".glsl .vert .frag .comp .spv .shader .hlsl");
+    applyPreset("Textures & Images (.png, .jpg, .webp, .tga)",
+                ".png .jpg .jpeg .webp .bmp .tga .hdr .psd .svg");
+    applyPreset("Audio (.wav, .mp3, .ogg, .flac)",
+                ".wav .mp3 .ogg .flac .m4a .opus");
+    applyPreset("Video (.mp4, .webm, .mkv, .avi)",
+                ".mp4 .webm .mkv .avi .mov");
+    applyPreset("Animations & Controllers (.vmd, .ilmeeeanim)",
+                ".vmd .ilmeeeanim .anim .bvh .ilmeeectrl");
+    applyPreset("Scenes & Prefabs (.ilmeeescene, .prefab)",
+                ".ilmeeescene .scene .unity .prefab");
+    applyPreset("Archives & Packages (.zip, .7z, .tar, .apk)",
+                ".zip .7z .rar .tar .gz .tgz .xz .apk .aab");
+    applyPreset("Configs & Docs (.json, .yaml, .txt, .md)",
+                ".json .toml .yaml .yml .ini .xml .txt .md");
+    EndPopup();
+  }
+
+  // Compact jump-to-asset results bar when searching across folders by name
+  if (!searchResults.empty()) {
+    BeginChild("##GlobalSearchMatches", ImVec2(0, 96), true);
+    TextDisabled("Project-wide matches (%zu) — click to locate:",
+                 searchResults.size());
     for (const auto &result : searchResults) {
-      // Buat label dengan menampilkan nama dan menandai direktori.
-      string label;
-      if (result.isDirectory)
-        label = "[DIR] " + result.name;
-      else
-        label = result.name;
-
-      // Tampilkan hasil sebagai selectable item.
-      if (Selectable(label.c_str())) {
-        // Jika yang dipilih adalah file, periksa ekstensi file.
-        if (!result.isDirectory) {
-          string extension;
-          size_t pos = result.name.find_last_of('.');
-          if (pos != string::npos)
-            extension = result.name.substr(pos);
-
-          if (extension == ".cpp" || extension == ".hpp" || extension == ".h" ||
-              extension == ".c" || extension == ".cc" || extension == ".cxx")
-            projectHandler.OpenFile(result.fullPath);
+      AssetIconInfo meta = SvgIconManager::ResolveAssetIcon(
+          result.fullPath, result.isDirectory, false);
+      svgIcons.DrawIcon(meta.svgPath == result.fullPath
+                            ? "assets/icons/svg/ext_image.svg"
+                            : meta.svgPath,
+                        14);
+      std::string rowLabel = result.name + "##sr_" + result.fullPath;
+      if (Selectable(rowLabel.c_str())) {
+        if (result.isDirectory) {
+          projectHandler.currentDirectory = result.fullPath;
+          projectHandler.fileExplorerSelectedPaths.clear();
+        } else {
+          projectHandler.currentDirectory =
+              std::filesystem::path(result.fullPath).parent_path().string();
+          projectHandler.fileExplorerSelectedPaths.clear();
+          projectHandler.fileExplorerSelectedPaths.insert(result.fullPath);
         }
       }
       if (IsItemHovered()) {
-        BeginTooltip();
-        Text("%s", result.fullPath.c_str());
-        EndTooltip();
+        SetTooltip("%s", result.fullPath.c_str());
       }
     }
-    // Jika input search dikosongkan, pastikan daftar hasil juga dikosongkan.
-    if (strlen(searchBuffer) == 0)
-      searchResults.clear();
+    EndChild();
   }
 }
 
 void MainWindow::RenderPlayMenu() {
   ImVec2 viewportSize = GetMainViewport()->Size;
-  float buttonHeight = 24.0f;
-  float toolbarHeight = buttonHeight + 8.0f;
+  const float toolbarHeight = 32.0f;
+  const float menuBarHeight = GetFrameHeight();
 
-  float menuBarHeight = GetFrameHeight();
   SetNextWindowPos(ImVec2(0, menuBarHeight));
   SetNextWindowSize(ImVec2(viewportSize.x, toolbarHeight));
 
@@ -3307,28 +3484,95 @@ void MainWindow::RenderPlayMenu() {
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
       ImGuiWindowFlags_NoNavFocus;
 
-  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+  PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
   PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-  PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
   PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-  PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
+  PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.105f, 0.114f, 0.133f, 1.0f));
 
   if (Begin("PlayControlsToolbar", nullptr, toolbar_flags)) {
-    int iconSize = 16;
-    float spacing = 4.0f;
-    float totalWidth = (iconSize + 8) * 3 + spacing * 2;
-    float startX = (viewportSize.x - totalWidth) * 0.5f;
+    const int iconSize = 15;
+    const float spacing = 3.0f;
 
-    SetCursorPosX(startX);
+    // ---- LEFT CLUSTER: Unity Transform Tools + Save + Grid/Snap ----
+    if (sceneRenderer) {
+      static const char *kToolNames[4] = {"Select", "Move", "Rotate", "Scale"};
+      static const char *kToolIcons[4] = {
+          "assets/icons/svg/ui_select.svg",
+          "assets/icons/svg/ui_move.svg",
+          "assets/icons/svg/ui_rotate.svg",
+          "assets/icons/svg/ui_scale.svg",
+      };
+      const int curMode = (int)sceneRenderer->GetEditMode();
+      for (int k = 0; k < 4; ++k) {
+        if (k > 0)
+          SameLine(0, 2.0f);
+        bool active = (curMode == k);
+        ImVec4 bg = active ? ImVec4(0.22f, 0.50f, 0.95f, 0.95f)
+                           : ImVec4(0.17f, 0.19f, 0.22f, 1.0f);
+        ImVec4 tint = active ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
+                             : ImVec4(0.78f, 0.82f, 0.88f, 1.0f);
+        char tid[24];
+        std::snprintf(tid, sizeof(tid), "##MainTool%d", k);
+        if (svgIcons.DrawIconButton(tid, kToolIcons[k], iconSize, bg, tint)) {
+          sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
+        }
+        if (IsItemHovered())
+          SetTooltip("%s Tool (%d)", kToolNames[k], k + 1);
+      }
 
-    // Play / Resume button
+      SameLine(0, 8.0f);
+      if (svgIcons.DrawIconButton("##MainSave", "assets/icons/svg/ui_save.svg",
+                                  iconSize, ImVec4(0.17f, 0.19f, 0.22f, 1.0f),
+                                  ImVec4(0.82f, 0.86f, 0.92f, 1.0f))) {
+        Save3DScene();
+      }
+      if (IsItemHovered())
+        SetTooltip("Save Scene (Ctrl+S)");
+
+      SameLine(0, 4.0f);
+      bool gVis = sceneRenderer->IsGrid3DVisible();
+      if (svgIcons.DrawIconButton(
+              "##MainGrid", "assets/icons/svg/ui_grid.svg", iconSize,
+              gVis ? ImVec4(0.18f, 0.38f, 0.68f, 0.90f)
+                   : ImVec4(0.17f, 0.19f, 0.22f, 1.0f),
+              ImVec4(0.90f, 0.92f, 0.96f, 1.0f))) {
+        sceneRenderer->SetGrid3DVisible(!gVis);
+        RecordEditorHistory();
+      }
+      if (IsItemHovered())
+        SetTooltip("Toggle 3D Grid");
+
+      SameLine(0, 3.0f);
+      bool sOn = sceneRenderer->IsSnapToGrid();
+      if (svgIcons.DrawIconButton(
+              "##MainSnap", "assets/icons/svg/ui_snap.svg", iconSize,
+              sOn ? ImVec4(0.18f, 0.38f, 0.68f, 0.90f)
+                  : ImVec4(0.17f, 0.19f, 0.22f, 1.0f),
+              ImVec4(0.90f, 0.92f, 0.96f, 1.0f))) {
+        sceneRenderer->SetSnapToGrid(!sOn);
+        RecordEditorHistory();
+      }
+      if (IsItemHovered())
+        SetTooltip("Snap to Grid");
+    }
+
+    // ---- CENTER CLUSTER: Play / Pause / Stop Transport ----
+    const float transportWidth = (iconSize + 14.0f) * 3.0f + spacing * 2.0f;
+    const float centerX = (viewportSize.x - transportWidth) * 0.5f;
+    if (centerX > GetCursorPosX() + 12.0f) {
+      SameLine(centerX);
+    } else {
+      SameLine(0, 12.0f);
+    }
+
     bool isPlaying = builder.IsPlaying();
     bool isPaused = builder.IsPaused();
 
-    ImVec4 playBg = isPlaying ? ImVec4(0.15f, 0.45f, 0.15f, 1.0f)
-                              : ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
-    ImVec4 playTint = isPlaying ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
-                                : ImVec4(0.7f, 0.9f, 0.7f, 1.0f);
+    ImVec4 playBg = isPlaying ? ImVec4(0.16f, 0.46f, 0.24f, 1.0f)
+                              : ImVec4(0.18f, 0.20f, 0.24f, 1.0f);
+    ImVec4 playTint = isPlaying ? ImVec4(0.45f, 1.0f, 0.58f, 1.0f)
+                                : ImVec4(0.82f, 0.92f, 0.84f, 1.0f);
 
     BeginDisabled(builder.IsStopped() && nativeScripts.IsCompiling());
     if (svgIcons.DrawIconButton("##Play", "assets/icons/svg/play.svg", iconSize,
@@ -3347,14 +3591,14 @@ void MainWindow::RenderPlayMenu() {
     }
     EndDisabled();
     if (IsItemHovered())
-      SetTooltip(nativeScripts.IsCompiling() ? "Waiting for script compilation" : "Play (Ctrl+P)");
+      SetTooltip(nativeScripts.IsCompiling() ? "Waiting for script compilation"
+                                             : "Play (Ctrl+P)");
 
-    // Pause button
     SameLine(0, spacing);
-    ImVec4 pauseBg = isPaused ? ImVec4(0.45f, 0.40f, 0.12f, 1.0f)
-                              : ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
-    ImVec4 pauseTint = isPaused ? ImVec4(1.0f, 0.9f, 0.3f, 1.0f)
-                                : ImVec4(0.9f, 0.9f, 0.6f, 1.0f);
+    ImVec4 pauseBg = isPaused ? ImVec4(0.50f, 0.38f, 0.12f, 1.0f)
+                              : ImVec4(0.18f, 0.20f, 0.24f, 1.0f);
+    ImVec4 pauseTint = isPaused ? ImVec4(1.0f, 0.88f, 0.32f, 1.0f)
+                                : ImVec4(0.86f, 0.88f, 0.90f, 1.0f);
 
     if (svgIcons.DrawIconButton("##Pause", "assets/icons/svg/pause.svg",
                                 iconSize, pauseBg, pauseTint)) {
@@ -3366,22 +3610,64 @@ void MainWindow::RenderPlayMenu() {
     if (IsItemHovered())
       SetTooltip("Pause (Ctrl+Shift+P)");
 
-    // Stop button
     SameLine(0, spacing);
     bool isStopped = builder.IsStopped();
-    ImVec4 stopBg = ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
-    ImVec4 stopTint = isStopped ? ImVec4(0.5f, 0.5f, 0.5f, 1.0f)
-                                : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+    ImVec4 stopBg = ImVec4(0.18f, 0.20f, 0.24f, 1.0f);
+    ImVec4 stopTint = isStopped ? ImVec4(0.48f, 0.52f, 0.58f, 1.0f)
+                                : ImVec4(0.98f, 0.42f, 0.42f, 1.0f);
 
     if (svgIcons.DrawIconButton("##Stop", "assets/icons/svg/stop.svg", iconSize,
                                 stopBg, stopTint)) {
-      if (!builder.IsStopped()) PushMessage("[INFO] Game stopped");
+      if (!builder.IsStopped())
+        PushMessage("[INFO] Game stopped");
       nativeScripts.Stop();
       builder.Stop();
       focusSceneTab = true;
     }
     if (IsItemHovered())
       SetTooltip("Stop (Ctrl+Q)");
+
+    // ---- RIGHT CLUSTER: Build Target + Build & Run + Lighting ----
+    const float rightClusterW = 240.0f;
+    const float rightX = viewportSize.x - rightClusterW;
+    if (rightX > GetCursorPosX() + 12.0f) {
+      SameLine(rightX);
+    } else {
+      SameLine(0, 12.0f);
+    }
+
+    const bool isAndroidTarget =
+        (gameBuildTarget == ilmeee::BuildTarget::Android);
+    if (Button(isAndroidTarget ? ICON_UI_DEVICE " Android"
+                               : ICON_UI_GAME " Linux")) {
+      gameBuildTarget = isAndroidTarget ? ilmeee::BuildTarget::Linux
+                                        : ilmeee::BuildTarget::Android;
+    }
+    if (IsItemHovered())
+      SetTooltip("Active Build Target (click to switch Linux / Android)");
+
+    SameLine(0, 4.0f);
+    const bool building = gameBuildRunning.load();
+    BeginDisabled(building || projectHandler.projectPath.empty());
+    PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.38f, 0.68f, 0.92f));
+    PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.48f, 0.84f, 0.98f));
+    if (Button(building ? ICON_UI_BUILD " Building..."
+                        : ICON_UI_BUILD " Build & Run")) {
+      StartGameBuild(true);
+    }
+    PopStyleColor(2);
+    EndDisabled();
+    if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      SetTooltip(projectHandler.projectPath.empty()
+                     ? "Open a project first to Build & Run"
+                     : "Save scene, build target binary/APK, and launch");
+
+    SameLine(0, 4.0f);
+    if (Button(ICON_UI_LIGHTING "##ToolbarLighting")) {
+      showLighting = !showLighting;
+    }
+    if (IsItemHovered())
+      SetTooltip("Toggle Lighting Panel");
 
     // Keyboard shortcuts
     if (GetIO().KeyCtrl && !GetIO().KeyShift &&
