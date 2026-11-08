@@ -61,7 +61,7 @@ std::string ProjectUiImagePath(const std::string &project,
 std::string ProjectMediaPath(const std::string &project,
                              const std::string &source) {
   namespace fs = std::filesystem;
-  if (project.empty())
+  if (source.empty() || ilmeee::IsMediaUrl(source) || project.empty())
     return source;
   std::error_code ec;
   const fs::path root = fs::weakly_canonical(project, ec);
@@ -1568,11 +1568,11 @@ void MainWindow::RenderInspectorWindow() {
   }
 
   // Clip picker shared by Audio Source and Video Player: Browse, drop from
-  // the Explorer, Clear. Stores project-relative paths when possible.
+  // the Explorer, paste URL/path, Clear. Stores project-relative paths when possible.
   const auto clipField = [&](const char *id, std::string &clip, bool video) {
     bool changed = false;
     PushID(id);
-    TextWrapped("Clip: %s", clip.empty() ? "(none - drop a file here)"
+    TextWrapped("Clip: %s", clip.empty() ? "(none - drop file or enter URL)"
                                          : clip.c_str());
     if (BeginDragDropTarget()) {
       if (const ImGuiPayload *pl = AcceptDragDropPayload("ASSET_PATH")) {
@@ -1587,6 +1587,29 @@ void MainWindow::RenderInspectorWindow() {
         }
       }
       EndDragDropTarget();
+    }
+    char urlBuf[1024];
+    std::snprintf(urlBuf, sizeof(urlBuf), "%s", clip.c_str());
+    SetNextItemWidth(-1.0f);
+    if (InputTextWithHint("##clipUrl",
+                          video ? "https://... or path (.mp4/.mkv/.webm/.mov/.avi)"
+                                : "https://... or path (.wav/.ogg/.mp3/.flac/.m4a/.aac/.opus)",
+                          urlBuf, sizeof(urlBuf),
+                          ImGuiInputTextFlags_EnterReturnsTrue)) {
+      std::string entered(urlBuf);
+      if (entered.empty()) {
+        clip.clear();
+        changed = true;
+      } else if (video ? ilmeee::IsVideoClipPath(entered)
+                       : ilmeee::IsAudioClipPath(entered)) {
+        clip = ilmeee::IsMediaUrl(entered)
+                   ? entered
+                   : ProjectMediaPath(projectHandler.projectPath, entered);
+        changed = true;
+      } else {
+        PushMessage(std::string("[WARNING] Not a supported ") +
+                    (video ? "video" : "audio") + " path or URL: " + entered);
+      }
     }
     if (Button("Browse...")) {
       NFD_Init();
@@ -1650,8 +1673,7 @@ void MainWindow::RenderInspectorWindow() {
         TextDisabled("Heard from the game camera: full volume inside Min,");
         TextDisabled("fading to silent at Max, panned left/right.");
       }
-      TextDisabled(".wav/.ogg play everywhere; other formats need FFmpeg");
-      TextDisabled("(not available in Android builds).");
+      TextDisabled("Local, external, or http(s):// stream URL (not converted on Android).");
       if (record)
         RecordEditorHistory();
     }

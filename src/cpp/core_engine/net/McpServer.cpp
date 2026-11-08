@@ -105,15 +105,64 @@ json ToolList() {
                       {"index"})}},
        {{"name", "create_object"},
         {"description",
-         "Create a primitive in the stopped editor scene; records Undo."},
+         "Create a primitive, 3D model (.pmx/.fbx/.obj), audio source, video "
+         "screen, light, camera, or 3D text in the stopped editor scene; "
+         "records Undo. For kind=\"model\", provide path (project-relative or "
+         "external .pmx/.fbx/.obj file; see list_assets). For "
+         "kind=\"audio_source\" or \"screen\", path optionally assigns the "
+         "initial audio/video clip (local, external, or http(s):// stream URL)."},
         {"inputSchema",
          ObjectSchema(
              {{"kind",
                {{"type", "string"},
-                {"enum", {"cube", "sphere", "plane", "light", "camera", "text_3d"}}}},
+                {"enum", {"cube", "sphere", "plane", "light", "camera",
+                          "audio_source", "screen", "text_3d", "model"}}}},
+              {"path",
+               {{"type", "string"},
+                {"description",
+                 "Model file path (.pmx/.fbx/.obj) when kind=\"model\", or "
+                 "optional media clip path / http(s):// URL for audio_source "
+                 "and screen."}}},
+              {"name",
+               {{"type", "string"},
+                {"description", "Optional display name for the spawned object."}}},
               {"position", vec3},
+              {"rotation", vec3},
+              {"scale", vec3},
               {"parent", {{"type", "integer"}, {"minimum", 0}}}},
              {"kind"})}},
+       {{"name", "list_assets"},
+        {"description",
+         "List asset files in the open project (models, audio, video, images, "
+         "animations, controllers, scripts) so they can be spawned or bound "
+         "into the scene."},
+        {"inputSchema",
+         ObjectSchema(
+             {{"category",
+               {{"type", "string"},
+                {"enum", {"all", "model", "audio", "video", "image",
+                          "animation", "script"}}}},
+              {"contains",
+               {{"type", "string"},
+                {"description",
+                 "Optional case-insensitive substring filter on the path."}}}})}},
+       {{"name", "set_surface_texture"},
+        {"description",
+         "Bind an image texture (.png/.jpg/.jpeg/.bmp/.tga/.gif/.psd) to a "
+         "surface (submesh) of a 3D scene object in the stopped editor, or "
+         "pass texture=\"\" to clear it; records Undo."},
+        {"inputSchema",
+         ObjectSchema(
+             {{"index", {{"type", "integer"}, {"minimum", 0}}},
+              {"surface",
+               {{"type", "integer"},
+                {"minimum", 0},
+                {"description", "Submesh index (see surfaces in get_object)."}}},
+              {"texture",
+               {{"type", "string"},
+                {"description",
+                 "Project-relative or external image path, or \"\" to clear."}}}},
+             {"index", "surface", "texture"})}},
        {{"name", "set_transform"},
         {"description", "Set local position, Euler rotation in degrees, or "
                         "scale; records Undo."},
@@ -193,16 +242,35 @@ json ToolList() {
                         "position/size are reference pixels [x, y]; image is "
                         "a project-relative path (Image picture or Button "
                         "sprite, \"\" clears); action \"Interact\" makes a "
-                        "button talk to the nearest Dialog."},
+                        "button talk to the nearest Dialog; anchor sets the "
+                        "screen pin; color and background are [r,g,b,a] 0..1."},
         {"inputSchema",
          ObjectSchema({{"name", {{"type", "string"}}},
                        {"text", {{"type", "string"}}},
                        {"action", {{"type", "string"}}},
                        {"image", {{"type", "string"}}},
+                       {"anchor",
+                        {{"type", "string"},
+                         {"enum", {"top_left", "top_right", "bottom_left",
+                                   "bottom_right", "center", "top_center",
+                                   "bottom_center", "center_left",
+                                   "center_right", "stretch_top",
+                                   "stretch_bottom", "stretch_center",
+                                   "stretch_full", "stretch"}}}},
                        {"visible", {{"type", "boolean"}}},
                        {"position", vec2},
                        {"size", vec2},
-                       {"fontSize", {{"type", "number"}, {"minimum", 1}}}},
+                       {"fontSize", {{"type", "number"}, {"minimum", 1}}},
+                       {"color",
+                        {{"type", "array"},
+                         {"items", {{"type", "number"}}},
+                         {"minItems", 3},
+                         {"maxItems", 4}}},
+                       {"background",
+                        {{"type", "array"},
+                         {"items", {{"type", "number"}}},
+                         {"minItems", 3},
+                         {"maxItems", 4}}}},
                       {"name"})}},
        {{"name", "get_dialog"},
         {"description", "Get the Dialog component of a scene object: "
@@ -315,8 +383,8 @@ json ToolList() {
       "movement {movable, script (movement script name, default \"WASD XZ\"), speed, camera (camera object index, -1 = Game view), cameraStyle (none|third_person|first_person|side_scroller|top_down), distance, height, moveJoystick, lookJoystick (UI joystick names)}; "
       "physics {useGravity, isKinematic, mass, drag, gravityY} (auto-adds a fitted collider if none); "
       "collider {shape (box|sphere|capsule), center [x,y,z], size [x,y,z] (box), radius, height (capsule), isTrigger, friction 0..1, bounciness 0..1, fit (true = size to the mesh; new colliders fit by default)} - collider alone = static, + physics = dynamic/kinematic, + movement = character; "
-      "audio_source {clip, volume, loop, playOnStart, spatial, minDistance, maxDistance}; "
-      "video_player {clip, loop, playOnStart, volume, unlit, surface}; "
+      "audio_source {clip (project-relative, external path, or http(s):// stream URL), volume, loop, playOnStart, spatial, minDistance, maxDistance}; "
+      "video_player {clip (project-relative, external path, or http(s):// stream URL; internet URLs are streamed directly and not transcoded on Android), loop, playOnStart, volume, unlit, surface}; "
       "script {source (.cpp path or class name, required; create/edit with create_script/edit_script), enabled, values {field: value}; GameObject fields take an object index, a UI element name or null}; "
       "dialog/animation/spring_bones take the same fields as set_dialog/set_animation/set_spring_bones (animation needs clip or controller; spring_bones defaults to auto setup).",
       ObjectSchema({{"index", index}, {"type", componentType},
@@ -367,6 +435,103 @@ json ToolList() {
                     {"duration", {{"type", "number"}, {"minimum", 0.2}, {"maximum", 60}}},
                     {"intensity", {{"type", "number"}, {"minimum", 0}, {"maximum", 3}}},
                     {"name", {{"type", "string"}}}, {"ops", ops}, {"overwrite", {{"type", "boolean"}}}}, {"path", "index", "type"}));
+  add("download_asset", "Download a 3D model (.pmx/.fbx/.obj), model archive (.zip/.tar.gz/.tgz/.tar.xz/.tar), texture, audio, video or animation asset from an http(s):// URL into the project's assets/ directory. Archives are safely extracted when extract=true (default) and scanned for 3D models and textures. Set spawn=true to immediately place the downloaded/extracted 3D model into the stopped editor scene.",
+      ObjectSchema({{"url", {{"type", "string"}, {"minLength", 8}, {"description", "http:// or https:// URL of the asset or archive to download"}}},
+                    {"destination", {{"type", "string"}, {"description", "Optional project-relative path under assets/ (file path or target directory)"}}},
+                    {"extract", {{"type", "boolean"}, {"description", "Auto-extract .zip/.tar.gz/.tgz/.tar.xz/.tar archives (default true)"}}},
+                    {"overwrite", {{"type", "boolean"}, {"description", "Overwrite existing destination file/folder (default false)"}}},
+                    {"spawn", {{"type", "boolean"}, {"description", "Immediately spawn the downloaded/extracted 3D model into the scene"}}},
+                    {"name", {{"type", "string"}, {"description", "Optional scene object name when spawn=true"}}},
+                    {"position", vec3},
+                    {"rotation", vec3},
+                    {"scale", vec3},
+                    {"parent", index}}, {"url"}));
+  add("delete_object", "Delete a 3D scene object and its child hierarchy in the stopped editor; records Undo. Refuses to delete the last camera in the scene.",
+      ObjectSchema({{"index", index}}, {"index"}));
+  add("set_object_properties", "Rename or reparent a 3D scene object, or edit type-specific properties for Light (lightType, color, intensity, range, spotAngle, gamma), Camera (projection, fov, orthoSize, near, far), and 3D Text (text, textSize, textColor, alignment, visible) in the stopped editor; records Undo.",
+      ObjectSchema({{"index", index},
+                    {"name", {{"type", "string"}, {"minLength", 1}}},
+                    {"parent", {{"type", "integer"}, {"minimum", -1}, {"description", "New parent object index, or -1 to unparent to root"}}},
+                    {"keepWorld", {{"type", "boolean"}, {"description", "Preserve world transform when reparenting (default true)"}}},
+                    {"lightType", {{"type", "string"}, {"enum", {"directional", "point", "spot"}}}},
+                    {"color", vec3},
+                    {"intensity", {{"type", "number"}, {"minimum", 0}}},
+                    {"range", {{"type", "number"}, {"minimum", 0.1}}},
+                    {"spotAngle", {{"type", "number"}, {"minimum", 1}, {"maximum", 89}}},
+                    {"gamma", {{"type", "number"}, {"minimum", 0.1}, {"maximum", 5}}},
+                    {"projection", {{"type", "string"}, {"enum", {"perspective", "orthographic"}}}},
+                    {"fov", {{"type", "number"}, {"minimum", 10}, {"maximum", 170}}},
+                    {"orthoSize", {{"type", "number"}, {"minimum", 0.1}}},
+                    {"near", {{"type", "number"}, {"minimum", 0.001}}},
+                    {"far", {{"type", "number"}, {"minimum", 1}}},
+                    {"text", {{"type", "string"}}},
+                    {"textSize", {{"type", "number"}, {"minimum", 0.05}, {"maximum", 50}}},
+                    {"textColor", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 3}, {"maxItems", 4}}},
+                    {"alignment", {{"type", "string"}, {"enum", {"left", "center", "right"}}}},
+                    {"visible", {{"type", "boolean"}}}}, {"index"}));
+  add("get_scene_environment", "Get the scene background color, directional sun light (direction, color, intensity, visible), 3D grid visibility, and Toon/NPR cel-shading settings.",
+      ObjectSchema());
+  add("set_scene_environment", "Configure the scene background color, directional sun light, 3D grid visibility, and Toon/NPR cel-shading preset or parameters in the stopped editor; records Undo.",
+      ObjectSchema({{"backgroundColor", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 3}, {"maxItems", 4}}},
+                    {"sunDirection", vec3},
+                    {"sunColor", vec3},
+                    {"sunIntensity", {{"type", "number"}, {"minimum", 0}, {"maximum", 20}}},
+                    {"sunVisible", {{"type", "boolean"}}},
+                    {"gridVisible", {{"type", "boolean"}}},
+                    {"nprPreset", {{"type", "string"}, {"enum", {"anime_cel", "soft_toon", "comic_ink"}}}},
+                    {"npr", ObjectSchema({{"enabled", {{"type", "boolean"}}},
+                                          {"bands", {{"type", "integer"}, {"minimum", 2}, {"maximum", 5}}},
+                                          {"softness", {{"type", "number"}, {"minimum", 0}, {"maximum", 0.5}}},
+                                          {"shadowColor", vec3},
+                                          {"rim", {{"type", "boolean"}}},
+                                          {"rimColor", vec3},
+                                          {"rimWidth", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                                          {"rimStrength", {{"type", "number"}, {"minimum", 0}, {"maximum", 2}}},
+                                          {"specular", {{"type", "boolean"}}},
+                                          {"specularSize", {{"type", "number"}, {"minimum", 0}, {"maximum", 0.5}}},
+                                          {"specularStrength", {{"type", "number"}, {"minimum", 0}, {"maximum", 2}}},
+                                          {"outline", {{"type", "boolean"}}},
+                                          {"outlineColor", vec3},
+                                          {"outlineWidth", {{"type", "number"}, {"minimum", 0}, {"maximum", 10}}}})}}));
+  const json rgba = {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 3}, {"maxItems", 4}};
+  const json uiAnchor = {{"type", "string"}, {"enum", {"top_left", "top_right", "bottom_left", "bottom_right", "center", "top_center", "bottom_center", "center_left", "center_right", "stretch_top", "stretch_bottom", "stretch_center", "stretch_full", "stretch"}}};
+  add("create_ui_element", "Create a Game UI Canvas element (text, image, button, or joystick) in the stopped editor, automatically enabling the Canvas if not yet created. Call save_scene to persist.",
+      ObjectSchema({{"type", {{"type", "string"}, {"enum", {"text", "image", "button", "joystick"}}}},
+                    {"name", {{"type", "string"}}},
+                    {"text", {{"type", "string"}}},
+                    {"action", {{"type", "string"}}},
+                    {"image", {{"type", "string"}}},
+                    {"anchor", uiAnchor},
+                    {"position", vec2},
+                    {"size", vec2},
+                    {"fontSize", {{"type", "number"}, {"minimum", 1}}},
+                    {"color", rgba},
+                    {"background", rgba},
+                    {"visible", {{"type", "boolean"}}}}, {"type"}));
+  add("delete_ui_element", "Delete a Game UI Canvas element by name, or pass clearCanvas=true to remove the entire Canvas in the stopped editor. Call save_scene to persist.",
+      ObjectSchema({{"name", {{"type", "string"}}},
+                    {"clearCanvas", {{"type", "boolean"}}}}));
+  add("create_animation_controller", "Create and save a .ilmeeecontroller locomotion state machine (Idle / Walk / Run clips with speed thresholds and blend duration) in the stopped editor, and optionally attach it to a skinned scene object.",
+      ObjectSchema({{"path", {{"type", "string"}, {"minLength", 1}, {"description", "Project-relative output path (.ilmeeecontroller)"}}},
+                    {"idle", {{"type", "string"}, {"description", "Project-relative .ilmeeeanim or .vmd clip for Idle"}}},
+                    {"walk", {{"type", "string"}, {"description", "Project-relative .ilmeeeanim or .vmd clip for Walk"}}},
+                    {"run", {{"type", "string"}, {"description", "Project-relative .ilmeeeanim or .vmd clip for Run"}}},
+                    {"walkSpeed", {{"type", "number"}, {"minimum", 0.01}, {"maximum", 100}}},
+                    {"runSpeed", {{"type", "number"}, {"minimum", 0.01}, {"maximum", 100}}},
+                    {"idleThreshold", {{"type", "number"}, {"minimum", 0}, {"maximum", 10}}},
+                    {"transition", {{"type", "number"}, {"minimum", 0}, {"maximum", 5}}},
+                    {"inPlace", {{"type", "boolean"}}},
+                    {"rootBone", {{"type", "string"}}},
+                    {"overwrite", {{"type", "boolean"}}},
+                    {"attachTo", index}}, {"path"}));
+  add("set_play_mode", "Start, pause, resume, or stop Play mode in the editor so AI agents can test gameplay, physics, scripts, dialogs, and animations live.",
+      ObjectSchema({{"state", {{"type", "string"}, {"enum", {"play", "pause", "stop"}}}}}, {"state"}));
+  add("build_game", "Trigger a standalone Linux or Android APK game build for the active project (stopped editor). Use get_game_log and get_device_stats to monitor when run=true.",
+      ObjectSchema({{"target", {{"type", "string"}, {"enum", {"linux", "android"}}}},
+                    {"run", {{"type", "boolean"}, {"description", "Launch on desktop or connected Android device when build finishes (default false)"}}},
+                    {"portable", {{"type", "boolean"}, {"description", "Bundle portable runtime libraries on Linux"}}},
+                    {"includeUnusedAssets", {{"type", "boolean"}, {"description", "Package all project assets even if not referenced by scenes"}}},
+                    {"androidMaxVideoHeight", {{"type", "integer"}, {"enum", {0, 720, 1080}}, {"description", "Max local video height on Android (0 = original); internet stream URLs are never transcoded"}}}}));
   return tools;
 }
 
@@ -525,7 +690,8 @@ bool McpServer::Start(int port, std::string token, std::string &error,
             return Response(503);
           queue_.push_back(pending);
         }
-        if (future.wait_for(std::chrono::seconds(8)) !=
+        const int waitSec = (name == "download_asset") ? 120 : 8;
+        if (future.wait_for(std::chrono::seconds(waitSec)) !=
             std::future_status::ready) {
           pending->cancelled = true;
           return Response(

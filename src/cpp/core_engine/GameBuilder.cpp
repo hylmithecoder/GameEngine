@@ -35,6 +35,19 @@ bool IsWithin(const fs::path &p, const fs::path &dir) {
   return !rel.empty() && *rel.begin() != "..";
 }
 
+bool IsStreamUrl(const std::string &path) {
+  auto startsWithIgnoreCase = [&](const char *prefix, size_t len) {
+    if (path.size() <= len)
+      return false;
+    for (size_t i = 0; i < len; ++i)
+      if (std::tolower((unsigned char)path[i]) != prefix[i])
+        return false;
+    return !std::isspace((unsigned char)path[len]) && path[len] != '/';
+  };
+  return startsWithIgnoreCase("http://", 7) ||
+         startsWithIgnoreCase("https://", 8);
+}
+
 fs::path Canonical(const fs::path &p) {
   std::error_code ec;
   fs::path c = fs::weakly_canonical(p, ec);
@@ -165,7 +178,7 @@ public:
   // (assets/external/<externalDir>/).
   std::string Relocate(const std::string &ref, bool isModel,
                        const char *externalDir = "textures") {
-    if (ref.empty())
+    if (ref.empty() || IsStreamUrl(ref))
       return ref;
     fs::path p(ref);
     fs::path abs = Canonical(p.is_absolute() ? p : root_ / p);
@@ -303,7 +316,7 @@ public:
         if (!e.animation.clip.empty())
           e.animation.clip = Relocate(e.animation.clip, false, "animations");
         if (!e.animation.controller.empty()) e.animation.controller = CopyController(e.animation.controller);
-        if (!e.video.clip.empty()) {
+        if (!e.video.clip.empty() && !IsStreamUrl(e.video.clip)) {
           const fs::path original = Canonical(
               fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)
                                                    : root_ / e.video.clip);

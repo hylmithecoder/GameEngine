@@ -2,6 +2,7 @@
 
 #include "../../../include/core_engine/AndroidMedia.hpp"
 #include "../../../include/core_engine/AudioEngine.hpp"
+#include "../../../include/core_engine/MediaComponents.hpp"
 #include <SDL3/SDL.h>
 #include <fcntl.h>
 #include <media/NdkMediaCodec.h>
@@ -30,6 +31,15 @@ Extractor::~Extractor() {
 }
 
 bool Extractor::Open(const std::string &path, std::string *error) {
+  if (IsMediaUrl(path)) {
+    ex_ = AMediaExtractor_new();
+    if (!ex_ || AMediaExtractor_setDataSource(ex_, path.c_str()) != AMEDIA_OK) {
+      if (error)
+        *error = "cannot open stream URL";
+      return false;
+    }
+    return true;
+  }
   fd_ = open(path.c_str(), O_RDONLY | O_CLOEXEC);
   struct stat st {};
   if (fd_ < 0 || fstat(fd_, &st) != 0) {

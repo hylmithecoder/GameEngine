@@ -8,8 +8,13 @@
 #include <functional>
 #include <cmath>
 #include <limits>
+#include <spawn.h>
 #include <sstream>
+#include <sys/wait.h>
 #include <type_traits>
+#include <unistd.h>
+
+extern char **environ;
 
 namespace {
 using json = ilmeee::net::json;
@@ -96,6 +101,130 @@ const char *UiTypeName(ilmeee::UiKind kind) {
   case ilmeee::UiKind::Joystick: return "joystick";
   }
   return "text";
+}
+
+const char *UiAnchorName(ilmeee::UiAnchor anchor) {
+  switch (anchor) {
+  case ilmeee::UiAnchor::TopLeft: return "top_left";
+  case ilmeee::UiAnchor::TopRight: return "top_right";
+  case ilmeee::UiAnchor::BottomLeft: return "bottom_left";
+  case ilmeee::UiAnchor::BottomRight: return "bottom_right";
+  case ilmeee::UiAnchor::Center: return "center";
+  case ilmeee::UiAnchor::TopCenter: return "top_center";
+  case ilmeee::UiAnchor::BottomCenter: return "bottom_center";
+  case ilmeee::UiAnchor::CenterLeft: return "center_left";
+  case ilmeee::UiAnchor::CenterRight: return "center_right";
+  case ilmeee::UiAnchor::StretchTop: return "stretch_top";
+  case ilmeee::UiAnchor::StretchBottom: return "stretch_bottom";
+  case ilmeee::UiAnchor::StretchCenter: return "stretch_center";
+  case ilmeee::UiAnchor::StretchFull: return "stretch_full";
+  }
+  return "top_left";
+}
+
+bool ParseUiAnchor(const std::string &s, ilmeee::UiAnchor &out) {
+  if (s == "top_left") { out = ilmeee::UiAnchor::TopLeft; return true; }
+  if (s == "top_right") { out = ilmeee::UiAnchor::TopRight; return true; }
+  if (s == "bottom_left") { out = ilmeee::UiAnchor::BottomLeft; return true; }
+  if (s == "bottom_right") { out = ilmeee::UiAnchor::BottomRight; return true; }
+  if (s == "center") { out = ilmeee::UiAnchor::Center; return true; }
+  if (s == "top_center") { out = ilmeee::UiAnchor::TopCenter; return true; }
+  if (s == "bottom_center") { out = ilmeee::UiAnchor::BottomCenter; return true; }
+  if (s == "center_left") { out = ilmeee::UiAnchor::CenterLeft; return true; }
+  if (s == "center_right") { out = ilmeee::UiAnchor::CenterRight; return true; }
+  if (s == "stretch_top") { out = ilmeee::UiAnchor::StretchTop; return true; }
+  if (s == "stretch_bottom") { out = ilmeee::UiAnchor::StretchBottom; return true; }
+  if (s == "stretch_center") { out = ilmeee::UiAnchor::StretchCenter; return true; }
+  if (s == "stretch_full" || s == "stretch") { out = ilmeee::UiAnchor::StretchFull; return true; }
+  return false;
+}
+
+bool Color4(const json &args, const char *key, ImVec4 &out) {
+  auto it = args.find(key);
+  if (it == args.end())
+    return true;
+  if (!it->is_array() || (it->size() != 3 && it->size() != 4))
+    return false;
+  float v[4] = {out.x, out.y, out.z, 1.0f};
+  for (size_t k = 0; k < it->size(); ++k) {
+    if (!(*it)[k].is_number())
+      return false;
+    const double d = (*it)[k].get<double>();
+    if (!std::isfinite(d))
+      return false;
+    v[k] = std::clamp(static_cast<float>(d), 0.0f, 1.0f);
+  }
+  out = ImVec4(v[0], v[1], v[2], v[3]);
+  return true;
+}
+
+bool RunProcessCapture(const std::vector<std::string> &argv, std::string &output,
+                       int &exitCode) {
+  output.clear();
+  exitCode = -1;
+  if (argv.empty())
+    return false;
+  int pipefd[2];
+  if (pipe(pipefd) != 0)
+    return false;
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+  posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+  posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+  std::vector<char *> cargs;
+  cargs.reserve(argv.size() + 1);
+  for (const auto &s : argv)
+    cargs.push_back(const_cast<char *>(s.c_str()));
+  cargs.push_back(nullptr);
+  pid_t pid = -1;
+  const int rc = posix_spawnp(&pid, argv[0].c_str(), &actions, nullptr,
+                              cargs.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(pipefd[1]);
+  if (rc != 0) {
+    close(pipefd[0]);
+    return false;
+  }
+  char buf[4096];
+  ssize_t n;
+  while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+    if (output.size() < 512 * 1024)
+      output.append(buf, static_cast<size_t>(n));
+  }
+  close(pipefd[0]);
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0)
+    return false;
+  if (WIFEXITED(status)) {
+    exitCode = WEXITSTATUS(status);
+    return exitCode == 0;
+  }
+  return false;
+}
+
+bool SafeArchiveEntries(const std::string &listing, std::string &badEntry) {
+  std::istringstream ss(listing);
+  std::string line;
+  while (std::getline(ss, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    if (line.empty())
+      continue;
+    if (line[0] == '/' || line[0] == '\\' || line.find('\\') != std::string::npos) {
+      badEntry = line;
+      return false;
+    }
+    std::filesystem::path p(line);
+    for (const auto &part : p) {
+      if (part == "..") {
+        badEntry = line;
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 const char *TriggerName(ilmeee::DialogTrigger trigger) {
@@ -337,6 +466,317 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"totalBuffered", log.size()},
             {"lines", std::move(out)}};
   }
+  if (name == "list_assets") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    std::string category = "all", contains;
+    if (!Optional(args, "category", category) ||
+        !Optional(args, "contains", contains))
+      return Error("Invalid argument type");
+    if (category != "all" && category != "model" && category != "audio" &&
+        category != "video" && category != "image" &&
+        category != "animation" && category != "script")
+      return Error("category must be all, model, audio, video, image, animation or script");
+    std::string containsLower = contains;
+    std::transform(containsLower.begin(), containsLower.end(),
+                   containsLower.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    const std::filesystem::path root(projectHandler.projectPath);
+    std::error_code ec;
+    json assets = json::array();
+    auto classify = [](const std::string &ext) -> const char * {
+      if (ext == ".pmx" || ext == ".fbx" || ext == ".obj")
+        return "model";
+      if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac" ||
+          ext == ".m4a" || ext == ".aac" || ext == ".opus")
+        return "audio";
+      if (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" ||
+          ext == ".avi" || ext == ".m3u8")
+        return "video";
+      if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
+          ext == ".tga" || ext == ".gif" || ext == ".psd")
+        return "image";
+      if (ext == ".ilmeeeanim" || ext == ".vmd" || ext == ".ilmeeecontroller")
+        return "animation";
+      if (ext == ".cpp" || ext == ".hpp")
+        return "script";
+      return nullptr;
+    };
+    for (auto it = std::filesystem::recursive_directory_iterator(
+             root, std::filesystem::directory_options::skip_permission_denied,
+             ec);
+         !ec && it != std::filesystem::recursive_directory_iterator();
+         it.increment(ec)) {
+      const auto fname = it->path().filename().string();
+      if (it->is_directory(ec)) {
+        if (fname == "build" || fname == ".git" ||
+            fname == ".native-script-build")
+          it.disable_recursion_pending();
+        continue;
+      }
+      if (!it->is_regular_file(ec))
+        continue;
+      std::string ext = it->path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return (char)std::tolower(c); });
+      const char *cat = classify(ext);
+      if (!cat)
+        continue;
+      if (category != "all" && category != cat)
+        continue;
+      const std::string rel =
+          it->path().lexically_relative(root).generic_string();
+      if (!containsLower.empty()) {
+        std::string relLower = rel;
+        std::transform(relLower.begin(), relLower.end(), relLower.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        if (relLower.find(containsLower) == std::string::npos)
+          continue;
+      }
+      assets.push_back(
+          {{"path", rel}, {"category", cat}, {"extension", ext}});
+    }
+    return {{"projectPath", projectHandler.projectPath},
+            {"assets", std::move(assets)}};
+  }
+  if (name == "download_asset") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad = UnknownKey(
+            args, {"url", "destination", "extract", "overwrite", "spawn",
+                   "name", "position", "rotation", "scale", "parent"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    std::string url, destination, spawnName;
+    bool extract = true, overwrite = false, spawn = false;
+    if (!Optional(args, "url", url) ||
+        !Optional(args, "destination", destination) ||
+        !Optional(args, "extract", extract) ||
+        !Optional(args, "overwrite", overwrite) ||
+        !Optional(args, "spawn", spawn) ||
+        !Optional(args, "name", spawnName))
+      return Error("Invalid argument type");
+    if (!ilmeee::IsMediaUrl(url))
+      return Error("url must start with http:// or https://");
+    for (unsigned char c : url) {
+      if (c <= 0x20 || c == 0x7f)
+        return Error("url must not contain spaces or control characters");
+    }
+    if (spawn) {
+      if (!sceneRenderer)
+        return Error("Scene is not ready");
+      if (SceneStructureLocked())
+        return Error("Stop play mode before spawning downloaded models into the scene");
+    }
+
+    auto urlFilename = [](const std::string &u) -> std::string {
+      const auto schemePos = u.find("://");
+      const auto pathStart = u.find('/', schemePos == std::string::npos ? 0 : schemePos + 3);
+      if (pathStart == std::string::npos)
+        return "asset.bin";
+      const auto endPos = u.find_first_of("?#", pathStart);
+      std::string urlPath = u.substr(
+          pathStart, endPos == std::string::npos ? std::string::npos : endPos - pathStart);
+      std::string fname = std::filesystem::path(urlPath).filename().string();
+      // Sanitize characters outside safe filename set.
+      std::string clean;
+      for (unsigned char c : fname) {
+        if (std::isalnum(c) || c == '.' || c == '_' || c == '-')
+          clean.push_back((char)c);
+        else
+          clean.push_back('_');
+      }
+      while (!clean.empty() && clean.front() == '.')
+        clean.erase(clean.begin());
+      return clean.empty() ? "asset.bin" : clean;
+    };
+
+    const std::string defaultFile = urlFilename(url);
+    auto lowerStr = [](std::string s) {
+      std::transform(s.begin(), s.end(), s.begin(),
+                     [](unsigned char c) { return (char)std::tolower(c); });
+      return s;
+    };
+    const std::string lowerFile = lowerStr(defaultFile);
+    auto isArchiveName = [&](const std::string &n) {
+      const std::string l = lowerStr(n);
+      auto endsWith = [&](const char *suf) {
+        const size_t len = std::strlen(suf);
+        return l.size() >= len && l.compare(l.size() - len, len, suf) == 0;
+      };
+      return endsWith(".zip") || endsWith(".tar.gz") || endsWith(".tgz") ||
+             endsWith(".tar.xz") || endsWith(".tar");
+    };
+
+    const std::filesystem::path root =
+        std::filesystem::path(projectHandler.projectPath).lexically_normal();
+    const std::filesystem::path assetsRoot = (root / "assets").lexically_normal();
+    std::filesystem::path targetPath;
+    if (destination.empty()) {
+      const std::string ext = lowerStr(std::filesystem::path(defaultFile).extension().string());
+      std::string subdir = "downloads";
+      if (ext == ".pmx" || ext == ".fbx" || ext == ".obj" || isArchiveName(defaultFile))
+        subdir = "models";
+      else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
+               ext == ".tga" || ext == ".gif" || ext == ".psd")
+        subdir = "textures";
+      else if (ilmeee::IsAudioClipPath(defaultFile))
+        subdir = "audio";
+      else if (ilmeee::IsVideoClipPath(defaultFile))
+        subdir = "video";
+      else if (ext == ".ilmeeeanim" || ext == ".vmd" || ext == ".ilmeeecontroller")
+        subdir = "animations";
+      targetPath = assetsRoot / subdir / defaultFile;
+    } else {
+      std::filesystem::path rel(destination);
+      if (rel.is_absolute())
+        return Error("destination must be a project-relative path under assets/");
+      // Prepend assets/ if caller gave e.g. "models/city.obj".
+      std::string generic = rel.generic_string();
+      if (generic != "assets" && generic.rfind("assets/", 0) != 0)
+        rel = std::filesystem::path("assets") / rel;
+      targetPath = (root / rel).lexically_normal();
+      std::error_code ec;
+      if ((!generic.empty() && generic.back() == '/') ||
+          std::filesystem::is_directory(targetPath, ec) ||
+          targetPath.extension().empty()) {
+        targetPath = (targetPath / defaultFile).lexically_normal();
+      }
+    }
+
+    // Verify targetPath stays strictly under <project>/assets/.
+    const std::string relToAssets =
+        targetPath.lexically_relative(assetsRoot).generic_string();
+    if (relToAssets.empty() || relToAssets == "." ||
+        relToAssets.rfind("..", 0) == 0)
+      return Error("destination must stay inside the project's assets/ directory");
+
+    std::error_code ec;
+    if (std::filesystem::exists(targetPath, ec) && !overwrite)
+      return Error("Destination already exists: " +
+                   targetPath.lexically_relative(root).generic_string() +
+                   " (pass overwrite=true to replace)");
+    std::filesystem::create_directories(targetPath.parent_path(), ec);
+    if (ec || std::filesystem::is_symlink(targetPath.parent_path(), ec))
+      return Error("Could not create destination directory");
+
+    std::string curlOut;
+    int curlCode = -1;
+    if (!RunProcessCapture({"curl", "-fL", "-sS", "--max-time", "90",
+                            "--max-filesize", "536870912", "-o",
+                            targetPath.string(), "--", url},
+                           curlOut, curlCode)) {
+      std::filesystem::remove(targetPath, ec);
+      return Error("Download failed (curl exit " + std::to_string(curlCode) +
+                   "): " + (curlOut.empty() ? url : curlOut));
+    }
+
+    const auto downloadedBytes = std::filesystem::file_size(targetPath, ec);
+    const std::string relDownloaded =
+        targetPath.lexically_relative(root).generic_string();
+
+    json extractedFiles = json::array();
+    json discoveredModels = json::array();
+    json discoveredTextures = json::array();
+    bool wasExtracted = false;
+
+    const std::string targetName = targetPath.filename().string();
+    if (extract && isArchiveName(targetName)) {
+      const bool isZip = lowerStr(targetPath.extension().string()) == ".zip";
+      std::string listOut;
+      int listCode = -1;
+      const bool listed =
+          isZip ? RunProcessCapture({"unzip", "-Z1", "--", targetPath.string()},
+                                    listOut, listCode)
+                : RunProcessCapture({"tar", "-tf", targetPath.string()},
+                                    listOut, listCode);
+      if (!listed)
+        return Error("Failed to inspect downloaded archive: " + listOut);
+      std::string badEntry;
+      if (!SafeArchiveEntries(listOut, badEntry)) {
+        std::filesystem::remove(targetPath, ec);
+        return Error("Refusing to extract archive with unsafe path entry: " +
+                     badEntry);
+      }
+      // Extract into a subdirectory named after the archive stem (or parent if destination was specific).
+      std::string stem = targetPath.stem().string();
+      if (lowerStr(std::filesystem::path(stem).extension().string()) == ".tar")
+        stem = std::filesystem::path(stem).stem().string();
+      const std::filesystem::path extractDir =
+          (targetPath.parent_path() / stem).lexically_normal();
+      std::filesystem::create_directories(extractDir, ec);
+      std::string extOut;
+      int extCode = -1;
+      const bool extracted =
+          isZip ? RunProcessCapture({"unzip", "-q", "-o", "--",
+                                     targetPath.string(), "-d",
+                                     extractDir.string()},
+                                    extOut, extCode)
+                : RunProcessCapture({"tar", "-xf", targetPath.string(), "-C",
+                                     extractDir.string()},
+                                    extOut, extCode);
+      if (!extracted)
+        return Error("Archive extraction failed: " + extOut);
+      wasExtracted = true;
+      for (auto it = std::filesystem::recursive_directory_iterator(
+               extractDir,
+               std::filesystem::directory_options::skip_permission_denied, ec);
+           !ec && it != std::filesystem::recursive_directory_iterator();
+           it.increment(ec)) {
+        if (!it->is_regular_file(ec))
+          continue;
+        const std::string rel =
+            it->path().lexically_relative(root).generic_string();
+        extractedFiles.push_back(rel);
+        const std::string ext = lowerStr(it->path().extension().string());
+        if (ext == ".pmx" || ext == ".fbx" || ext == ".obj")
+          discoveredModels.push_back(rel);
+        else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                 ext == ".bmp" || ext == ".tga" || ext == ".gif" ||
+                 ext == ".psd")
+          discoveredTextures.push_back(rel);
+      }
+    } else {
+      const std::string ext = lowerStr(targetPath.extension().string());
+      if (ext == ".pmx" || ext == ".fbx" || ext == ".obj")
+        discoveredModels.push_back(relDownloaded);
+      else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+               ext == ".bmp" || ext == ".tga" || ext == ".gif" ||
+               ext == ".psd")
+        discoveredTextures.push_back(relDownloaded);
+    }
+
+    // Refresh Explorer asset tree so newly downloaded files appear immediately.
+    projectHandler.rootAsset =
+        projectHandler.BuildAssetTree(projectHandler.projectPath);
+
+    json out = {{"ok", true},
+                {"url", url},
+                {"path", relDownloaded},
+                {"bytes", ec ? 0 : downloadedBytes},
+                {"extracted", wasExtracted},
+                {"extractedFiles", std::move(extractedFiles)},
+                {"models", discoveredModels},
+                {"textures", std::move(discoveredTextures)}};
+
+    if (spawn) {
+      if (discoveredModels.empty())
+        return Error("Asset downloaded to " + relDownloaded +
+                     ", but no .pmx/.fbx/.obj 3D model was found to spawn");
+      json spawnArgs = {{"kind", "model"},
+                        {"path", discoveredModels.front().get<std::string>()}};
+      if (!spawnName.empty())
+        spawnArgs["name"] = spawnName;
+      for (const char *k : {"position", "rotation", "scale", "parent"})
+        if (args.contains(k))
+          spawnArgs[k] = args[k];
+      json spawned = HandleMcpTool("create_object", spawnArgs);
+      if (spawned.contains("error"))
+        return spawned;
+      out["spawned"] = std::move(spawned);
+    }
+    return out;
+  }
   if (name == "list_ui_elements") {
     LoadGameUiForProject();
     json elements = json::array();
@@ -345,9 +785,13 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
       elements.push_back({{"index", i},
                           {"name", e.id},
                           {"type", UiTypeName(e.kind)},
+                          {"anchor", UiAnchorName(e.anchor)},
                           {"visible", e.visible},
                           {"position", json::array({e.x, e.y})},
                           {"size", json::array({e.width, e.height})},
+                          {"fontSize", e.fontSize},
+                          {"color", json::array({e.color.x, e.color.y, e.color.z, e.color.w})},
+                          {"background", json::array({e.background.x, e.background.y, e.background.z, e.background.w})},
                           {"text", e.text},
                           {"action", e.action},
                           {"image", e.imagePath}});
@@ -423,6 +867,7 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
   };
   auto object = [&](size_t i) -> json {
     std::string kind = "mesh";
+    std::string modelPath;
     if (sceneRenderer->IsMesh3DLight(i))
       kind = "light";
     else if (sceneRenderer->IsMesh3DCamera(i))
@@ -441,25 +886,71 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
         kind = "screen";
       else if (path == "<primitive:text>")
         kind = "text_3d";
+      else if (!path.empty())
+        modelPath = ProjectMediaPath(projectHandler.projectPath, path);
     }
-    return {{"index", i},
-            {"name", sceneRenderer->GetMesh3DName(i)},
-            {"kind", kind},
-            {"parent", sceneRenderer->GetMesh3DParent(i)},
-            {"position", Array(sceneRenderer->GetMesh3DPosition(i))},
-            {"rotation", Array(sceneRenderer->GetMesh3DRotation(i))},
-            {"scale", Array(sceneRenderer->GetMesh3DScale(i))},
-            {"hasDialog", sceneRenderer->meshes3d[i].dialog.enabled},
-            {"bones", sceneRenderer->meshes3d[i].skeleton.size()},
-            {"animation", {{"enabled", sceneRenderer->meshes3d[i].animation.enabled},
-                            {"clip", sceneRenderer->meshes3d[i].animation.clip},
-                            {"controller", sceneRenderer->meshes3d[i].animation.controller},
-                            {"loop", sceneRenderer->meshes3d[i].animation.loop},
-                            {"speed", sceneRenderer->meshes3d[i].animation.speed},
-                            {"time", sceneRenderer->meshes3d[i].animationTime},
-                            {"error", sceneRenderer->meshes3d[i].animationError}}},
-            {"springBones", sceneRenderer->meshes3d[i].springBones.enabled},
-            {"components", AttachedComponents(sceneRenderer->meshes3d[i])}};
+    json surfaces = json::array();
+    const uint32_t subCount = sceneRenderer->GetMesh3DSubmeshCount(i);
+    for (uint32_t s = 0; s < subCount; ++s) {
+      std::string tex = sceneRenderer->GetMesh3DSubmeshTexture(i, s);
+      if (!tex.empty() && std::filesystem::path(tex).is_absolute())
+        tex = ProjectMediaPath(projectHandler.projectPath, tex);
+      surfaces.push_back({{"index", s},
+                          {"name", sceneRenderer->GetMesh3DSubmeshName(i, s)},
+                          {"texture", std::move(tex)}});
+    }
+    glm::vec3 bMin(-0.5f), bMax(0.5f);
+    sceneRenderer->GetMesh3DLocalBounds(i, bMin, bMax);
+    json out = {{"index", i},
+                {"name", sceneRenderer->GetMesh3DName(i)},
+                {"kind", kind},
+                {"parent", sceneRenderer->GetMesh3DParent(i)},
+                {"position", Array(sceneRenderer->GetMesh3DPosition(i))},
+                {"rotation", Array(sceneRenderer->GetMesh3DRotation(i))},
+                {"scale", Array(sceneRenderer->GetMesh3DScale(i))},
+                {"bounds", {{"min", Array(bMin)},
+                            {"max", Array(bMax)},
+                            {"size", Array(bMax - bMin)}}},
+                {"hasDialog", sceneRenderer->meshes3d[i].dialog.enabled},
+                {"bones", sceneRenderer->meshes3d[i].skeleton.size()},
+                {"surfaces", std::move(surfaces)},
+                {"animation", {{"enabled", sceneRenderer->meshes3d[i].animation.enabled},
+                               {"clip", sceneRenderer->meshes3d[i].animation.clip},
+                               {"controller", sceneRenderer->meshes3d[i].animation.controller},
+                               {"loop", sceneRenderer->meshes3d[i].animation.loop},
+                               {"speed", sceneRenderer->meshes3d[i].animation.speed},
+                               {"time", sceneRenderer->meshes3d[i].animationTime},
+                               {"error", sceneRenderer->meshes3d[i].animationError}}},
+                {"springBones", sceneRenderer->meshes3d[i].springBones.enabled},
+                {"components", AttachedComponents(sceneRenderer->meshes3d[i])}};
+    if (!modelPath.empty())
+      out["path"] = std::move(modelPath);
+    if (sceneRenderer->IsMesh3DLight(i)) {
+      const int lt = sceneRenderer->GetMesh3DLightType(i);
+      const char *ltName = (lt == 0) ? "directional" : (lt == 2) ? "spot" : "point";
+      out["light"] = {{"type", ltName},
+                      {"color", Array(sceneRenderer->GetMesh3DLightColor(i))},
+                      {"intensity", sceneRenderer->GetMesh3DLightIntensity(i)},
+                      {"range", sceneRenderer->GetMesh3DLightRange(i)},
+                      {"spotAngle", sceneRenderer->GetMesh3DLightSpotAngle(i)},
+                      {"gamma", sceneRenderer->GetMesh3DLightGamma(i)}};
+    } else if (sceneRenderer->IsMesh3DCamera(i)) {
+      const int cp = sceneRenderer->GetMesh3DCameraProjection(i);
+      out["camera"] = {{"projection", cp == 1 ? "orthographic" : "perspective"},
+                       {"fov", sceneRenderer->GetMesh3DCameraFov(i)},
+                       {"orthoSize", sceneRenderer->GetMesh3DCameraOrthoSize(i)},
+                       {"near", sceneRenderer->GetMesh3DCameraNear(i)},
+                       {"far", sceneRenderer->GetMesh3DCameraFar(i)}};
+    } else if (sceneRenderer->meshes3d[i].isWorldText) {
+      const auto &wt = sceneRenderer->meshes3d[i].worldText;
+      const char *align = (wt.alignment == 0) ? "left" : (wt.alignment == 2) ? "right" : "center";
+      out["text3d"] = {{"text", wt.text},
+                       {"size", wt.size},
+                       {"color", json::array({wt.color.r, wt.color.g, wt.color.b, wt.color.a})},
+                       {"alignment", align},
+                       {"visible", wt.visible}};
+    }
+    return out;
   };
   const auto springJson = [&](size_t i) {
     const auto &mesh = sceneRenderer->meshes3d[i];
@@ -609,6 +1100,76 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
                    "the Console");
     return dialogJson(i);
   }
+  const auto envJson = [&]() -> json {
+    const glm::vec4 bg = sceneRenderer->GetBackgroundColor();
+    const auto &npr = sceneRenderer->GetNpr();
+    return {{"backgroundColor", json::array({bg.r, bg.g, bg.b, bg.a})},
+            {"sunDirection", Array(sceneRenderer->sunLight.direction)},
+            {"sunColor", Array(sceneRenderer->sunLight.color)},
+            {"sunIntensity", sceneRenderer->sunLight.intensity},
+            {"sunVisible", sceneRenderer->IsSunVisible()},
+            {"gridVisible", sceneRenderer->IsGrid3DVisible()},
+            {"npr",
+             {{"enabled", npr.enabled},
+              {"bands", npr.bands},
+              {"softness", npr.softness},
+              {"shadowColor", Array(npr.shadowColor)},
+              {"rim", npr.rim},
+              {"rimColor", Array(npr.rimColor)},
+              {"rimWidth", npr.rimWidth},
+              {"rimStrength", npr.rimStrength},
+              {"specular", npr.specular},
+              {"specularSize", npr.specularSize},
+              {"specularStrength", npr.specularStrength},
+              {"outline", npr.outline},
+              {"outlineColor", Array(npr.outlineColor)},
+              {"outlineWidth", npr.outlineWidth}}}};
+  };
+  if (name == "get_scene_environment")
+    return envJson();
+  if (name == "set_play_mode") {
+    std::string state;
+    if (!Optional(args, "state", state) || state.empty())
+      return Error("state is required (play, pause or stop)");
+    if (state == "play") {
+      if (builder.IsStopped()) {
+        if (nativeScripts.IsCompiling())
+          return Error("Scripts are still compiling; wait and retry");
+        builder.Play();
+        focusGameTab = true;
+        showConsole = true;
+        focusOutputTab = true;
+        PushMessage("[INFO] Game started via MCP");
+      } else if (builder.IsPaused()) {
+        builder.Resume();
+        focusGameTab = true;
+        PushMessage("[INFO] Game resumed via MCP");
+      }
+    } else if (state == "pause") {
+      if (builder.IsPlaying()) {
+        builder.Pause();
+        PushMessage("[INFO] Game paused via MCP");
+      } else if (builder.IsStopped()) {
+        return Error("Game is stopped; start Play mode first");
+      }
+    } else if (state == "stop") {
+      if (!builder.IsStopped()) {
+        nativeScripts.Stop();
+        builder.Stop();
+        focusSceneTab = true;
+        PushMessage("[INFO] Game stopped via MCP");
+      }
+    } else {
+      return Error("state must be play, pause or stop");
+    }
+    const char *cur = builder.IsPlaying()  ? "play"
+                      : builder.IsPaused() ? "pause"
+                                           : "stop";
+    return {{"state", cur},
+            {"playing", builder.IsPlaying()},
+            {"paused", builder.IsPaused()},
+            {"stopped", builder.IsStopped()}};
+  }
   if (SceneStructureLocked())
     return Error("Stop play mode before editing the scene");
   if (name == "create_script") {
@@ -745,6 +1306,136 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     out["ok"] = compiled.ok && nativeScripts.Ready(relSource);
     return out;
   }
+  if (name == "create_ui_element") {
+    LoadGameUiForProject();
+    std::string typeStr, customName;
+    if (!Optional(args, "type", typeStr) || typeStr.empty() ||
+        !Optional(args, "name", customName))
+      return Error("type is required (text, image, button or joystick)");
+    if (!hasGameUiCanvas) {
+      hasGameUiCanvas = true;
+      gameUi.elements.clear();
+    }
+    ilmeee::UiElement e;
+    std::string baseName = "Text";
+    if (typeStr == "text") {
+      e.kind = ilmeee::UiKind::Text;
+      e.text = "New Text";
+      e.width = 240.0f;
+      e.height = 44.0f;
+      baseName = "Text";
+    } else if (typeStr == "image") {
+      e.kind = ilmeee::UiKind::Image;
+      e.width = 160.0f;
+      e.height = 160.0f;
+      baseName = "Image";
+    } else if (typeStr == "button") {
+      e.kind = ilmeee::UiKind::Button;
+      e.text = "Button";
+      e.width = 180.0f;
+      e.height = 48.0f;
+      baseName = "Button";
+    } else if (typeStr == "joystick") {
+      e.kind = ilmeee::UiKind::Joystick;
+      e.anchor = ilmeee::UiAnchor::BottomLeft;
+      e.x = 40.0f;
+      e.y = -40.0f;
+      e.width = 160.0f;
+      e.height = 160.0f;
+      baseName = "Joystick";
+    } else {
+      return Error("type must be text, image, button or joystick");
+    }
+    const std::string desired = customName.empty() ? baseName : customName;
+    auto taken = [&](const std::string &id) {
+      for (const auto &item : gameUi.elements)
+        if (item.id == id)
+          return true;
+      return false;
+    };
+    std::string uniqueId = desired;
+    for (int n = 1; taken(uniqueId); ++n)
+      uniqueId = desired + " " + std::to_string(n);
+    e.id = uniqueId;
+    std::string anchorStr;
+    float fontSize = e.fontSize;
+    if (!Optional(args, "text", e.text) ||
+        !Optional(args, "action", e.action) ||
+        !Optional(args, "image", e.imagePath) ||
+        !Optional(args, "anchor", anchorStr) ||
+        !Optional(args, "visible", e.visible) ||
+        !Optional(args, "fontSize", fontSize) ||
+        !Vec2(args, "position", e.x, e.y) ||
+        !Vec2(args, "size", e.width, e.height) ||
+        !Color4(args, "color", e.color) ||
+        !Color4(args, "background", e.background))
+      return Error("Invalid argument type");
+    if (!anchorStr.empty() && !ParseUiAnchor(anchorStr, e.anchor))
+      return Error("Invalid anchor value");
+    if (e.width < 1 || e.height < 1 || fontSize < 1 || fontSize > 512)
+      return Error("size must be >= 1 and fontSize 1..512");
+    e.fontSize = fontSize;
+    if (!e.imagePath.empty() && std::filesystem::path(e.imagePath).is_absolute())
+      e.imagePath = ProjectMediaPath(projectHandler.projectPath, e.imagePath);
+    gameUi.elements.push_back(e);
+    selectedUiElement = static_cast<int>(gameUi.elements.size()) - 1;
+    RecordEditorHistory();
+    return {{"index", gameUi.elements.size() - 1},
+            {"name", e.id},
+            {"type", UiTypeName(e.kind)},
+            {"anchor", UiAnchorName(e.anchor)},
+            {"visible", e.visible},
+            {"position", json::array({e.x, e.y})},
+            {"size", json::array({e.width, e.height})},
+            {"fontSize", e.fontSize},
+            {"color", json::array({e.color.x, e.color.y, e.color.z, e.color.w})},
+            {"background", json::array({e.background.x, e.background.y, e.background.z, e.background.w})},
+            {"text", e.text},
+            {"action", e.action},
+            {"image", e.imagePath},
+            {"saved", false},
+            {"note", "Call save_scene to keep the change"}};
+  }
+  if (name == "delete_ui_element") {
+    LoadGameUiForProject();
+    bool clearCanvas = false;
+    std::string elementName;
+    if (!Optional(args, "clearCanvas", clearCanvas) ||
+        !Optional(args, "name", elementName))
+      return Error("Invalid argument type");
+    if (clearCanvas) {
+      gameUi.elements.clear();
+      hasGameUiCanvas = false;
+      selectedUiElement = -1;
+      for (auto &mesh : sceneRenderer->meshes3d) {
+        mesh.dialog.box = 0;
+        mesh.dialog.text = 0;
+        mesh.dialog.speaker = 0;
+        mesh.dialog.prompt = 0;
+      }
+      RecordEditorHistory();
+      return {{"clearedCanvas", true}, {"saved", false}};
+    }
+    if (elementName.empty())
+      return Error("Provide name or clearCanvas=true");
+    auto it = std::find_if(gameUi.elements.begin(), gameUi.elements.end(),
+                           [&](const auto &e) { return e.id == elementName; });
+    if (it == gameUi.elements.end())
+      return Error("No UI element named " + elementName);
+    const uint64_t removedId = it->objectId;
+    gameUi.elements.erase(it);
+    selectedUiElement = -1;
+    for (auto &mesh : sceneRenderer->meshes3d) {
+      if (mesh.dialog.box == removedId) mesh.dialog.box = 0;
+      if (mesh.dialog.text == removedId) mesh.dialog.text = 0;
+      if (mesh.dialog.speaker == removedId) mesh.dialog.speaker = 0;
+      if (mesh.dialog.prompt == removedId) mesh.dialog.prompt = 0;
+    }
+    RecordEditorHistory();
+    return {{"deleted", elementName},
+            {"remainingElements", gameUi.elements.size()},
+            {"saved", false}};
+  }
   if (name == "set_ui_element") {
     LoadGameUiForProject();
     std::string elementName;
@@ -756,13 +1447,26 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
       return Error("No UI element named " + elementName);
     ilmeee::UiElement e = *it;
     float fontSize = e.fontSize;
+    std::string anchorStr;
     if (!Optional(args, "text", e.text) || !Optional(args, "action", e.action) ||
         !Optional(args, "image", e.imagePath) ||
+        !Optional(args, "anchor", anchorStr) ||
         !Optional(args, "visible", e.visible) ||
         !Optional(args, "fontSize", fontSize) ||
         !Vec2(args, "position", e.x, e.y) ||
-        !Vec2(args, "size", e.width, e.height))
+        !Vec2(args, "size", e.width, e.height) ||
+        !Color4(args, "color", e.color) ||
+        !Color4(args, "background", e.background))
       return Error("Invalid argument type");
+    if (!anchorStr.empty()) {
+      ilmeee::UiAnchor nextAnchor = e.anchor;
+      if (!ParseUiAnchor(anchorStr, nextAnchor))
+        return Error("Invalid anchor value");
+      if (!args.contains("position"))
+        ilmeee::SetUiElementAnchor(gameUi, e, nextAnchor);
+      else
+        e.anchor = nextAnchor;
+    }
     if (e.width < 1 || e.height < 1 || fontSize < 1 || fontSize > 512)
       return Error("size must be >= 1 and fontSize 1..512");
     e.fontSize = fontSize;
@@ -771,6 +1475,7 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     if (std::filesystem::path(e.imagePath).is_absolute())
       e.imagePath = ProjectMediaPath(projectHandler.projectPath, e.imagePath);
     *it = std::move(e);
+    RecordEditorHistory();
     return {{"name", it->id}, {"saved", false},
             {"note", "Call save_scene to keep the change"}};
   }
@@ -839,6 +1544,74 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     if (!args.contains("kind") || !args["kind"].is_string())
       return Error("kind is required");
     const std::string kind = args["kind"].get<std::string>();
+    std::string rawPath, customName;
+    if (!Optional(args, "path", rawPath) || !Optional(args, "name", customName))
+      return Error("Invalid argument type");
+    glm::vec3 position(0.0f), rotation(0.0f), scale(1.0f);
+    if (!Vec3(args, "position", position) ||
+        !Vec3(args, "rotation", rotation) || !Vec3(args, "scale", scale))
+      return Error("Invalid transform vector");
+    if (scale.x <= 0 || scale.y <= 0 || scale.z <= 0)
+      return Error("Scale values must be positive");
+    int parent = -1;
+    if (args.contains("parent")) {
+      size_t p;
+      if (!Index(args, "parent", count, p) ||
+          p > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return Error("Invalid parent index");
+      parent = static_cast<int>(p);
+    }
+    auto ensureUniqueName = [&](std::string desired) {
+      if (desired.empty())
+        return;
+      auto taken = [&](const std::string &s, size_t skip) {
+        for (size_t k = 0; k < sceneRenderer->GetMesh3DCount(); ++k)
+          if (k != skip && sceneRenderer->GetMesh3DName(k) == s)
+            return true;
+        return false;
+      };
+      const size_t idx = sceneRenderer->GetMesh3DCount() - 1;
+      std::string unique = desired;
+      for (int n = 1; taken(unique, idx); ++n)
+        unique = desired + " " + std::to_string(n);
+      sceneRenderer->meshes3d[idx].displayName = unique;
+      std::snprintf(objectName, sizeof(objectName), "%s", unique.c_str());
+    };
+
+    if (kind == "model") {
+      if (rawPath.empty())
+        return Error("path (.pmx/.fbx/.obj) is required when kind is \"model\"");
+      std::filesystem::path resolved(rawPath);
+      if (resolved.is_relative() && !projectHandler.projectPath.empty())
+        resolved = std::filesystem::path(projectHandler.projectPath) / resolved;
+      std::error_code ec;
+      if (!std::filesystem::is_regular_file(resolved, ec))
+        return Error("Model file not found: " + rawPath);
+      std::string ext = resolved.extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return (char)std::tolower(c); });
+      if (ext != ".pmx" && ext != ".fbx" && ext != ".obj")
+        return Error("Model path must be .pmx, .fbx, or .obj");
+      const bool ok =
+          (ext == ".pmx")   ? sceneRenderer->LoadPMXMesh(resolved.string())
+          : (ext == ".fbx") ? sceneRenderer->LoadFbxMesh(resolved.string())
+                            : sceneRenderer->LoadObjMesh(resolved.string());
+      if (!ok || sceneRenderer->GetMesh3DCount() <= count)
+        return Error("Failed to load model: " + rawPath);
+      const size_t createdIdx = sceneRenderer->GetMesh3DCount() - 1;
+      sceneRenderer->SetMesh3DTransform(createdIdx, position, rotation, scale);
+      if (parent >= 0)
+        sceneRenderer->SetMesh3DParent(createdIdx, parent, false);
+      sceneRenderer->SetMesh3DDebugSource(createdIdx, __FILE__, __LINE__);
+      if (!customName.empty())
+        ensureUniqueName(customName);
+      else
+        ensureUniqueName(sceneRenderer->GetMesh3DName(createdIdx));
+      selectedUiElement = -1;
+      RecordEditorHistory();
+      return object(createdIdx);
+    }
+
     int kindIndex = -1;
     if (kind == "cube")
       kindIndex = 0;
@@ -850,25 +1623,80 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
       kindIndex = 3;
     else if (kind == "camera")
       kindIndex = 4;
+    else if (kind == "audio_source")
+      kindIndex = 5;
+    else if (kind == "screen")
+      kindIndex = 6;
     else if (kind == "text_3d")
       kindIndex = 7;
     if (kindIndex < 0)
       return Error("Unsupported object kind");
-    glm::vec3 position(0.0f);
-    if (!Vec3(args, "position", position))
-      return Error("Invalid position");
-    int parent = -1;
-    if (args.contains("parent")) {
-      size_t p;
-      if (!Index(args, "parent", count, p) ||
-          p > static_cast<size_t>(std::numeric_limits<int>::max()))
-        return Error("Invalid parent index");
-      parent = static_cast<int>(p);
+    if (!rawPath.empty()) {
+      if (kind == "audio_source" && !ilmeee::IsAudioClipPath(rawPath))
+        return Error("path for audio_source must be a supported audio file or http(s):// stream URL");
+      if (kind == "screen" && !ilmeee::IsVideoClipPath(rawPath))
+        return Error("path for screen must be a supported video file or http(s):// stream URL");
     }
     const int created = SpawnSceneObject(kindIndex, parent, position);
     if (created < 0)
       return Error("Could not create object");
-    return object(static_cast<size_t>(created));
+    const size_t createdIdx = static_cast<size_t>(created);
+    if (args.contains("rotation") || args.contains("scale")) {
+      const glm::vec3 pos = sceneRenderer->GetMesh3DPosition(createdIdx);
+      const glm::vec3 rot = args.contains("rotation")
+                                ? rotation
+                                : sceneRenderer->GetMesh3DRotation(createdIdx);
+      sceneRenderer->SetMesh3DTransform(createdIdx, pos, rot, scale);
+    }
+    if (!customName.empty())
+      ensureUniqueName(customName);
+    if (!rawPath.empty()) {
+      const std::string clip =
+          ilmeee::IsMediaUrl(rawPath)
+              ? rawPath
+              : ProjectMediaPath(projectHandler.projectPath, rawPath);
+      if (kind == "audio_source") {
+        sceneRenderer->meshes3d[createdIdx].audio.enabled = true;
+        sceneRenderer->meshes3d[createdIdx].audio.clip = clip;
+      } else if (kind == "screen") {
+        sceneRenderer->meshes3d[createdIdx].video.enabled = true;
+        sceneRenderer->meshes3d[createdIdx].video.clip = clip;
+      }
+    }
+    if (args.contains("rotation") || args.contains("scale") ||
+        !customName.empty() || !rawPath.empty())
+      RecordEditorHistory();
+    return object(createdIdx);
+  }
+  if (name == "set_surface_texture") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    const uint32_t subCount = sceneRenderer->GetMesh3DSubmeshCount(i);
+    if (subCount == 0)
+      return Error("This object has no textureable surfaces");
+    size_t surface;
+    if (!Index(args, "surface", subCount, surface))
+      return Error("Invalid surface index");
+    std::string texPath;
+    if (!Optional(args, "texture", texPath) || !args.contains("texture"))
+      return Error("texture is required");
+    if (texPath.empty()) {
+      sceneRenderer->ClearMesh3DSubmeshTexture(i, (uint32_t)surface);
+      RecordEditorHistory();
+      return object(i);
+    }
+    std::filesystem::path resolved(texPath);
+    if (resolved.is_relative() && !projectHandler.projectPath.empty())
+      resolved = std::filesystem::path(projectHandler.projectPath) / resolved;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(resolved, ec))
+      return Error("Texture file not found: " + texPath);
+    if (!sceneRenderer->BindMesh3DSubmeshTexture(i, (uint32_t)surface,
+                                                 resolved.string()))
+      return Error("Failed to bind texture: " + texPath);
+    RecordEditorHistory();
+    return object(i);
   }
   if (name == "set_transform") {
     size_t i;
@@ -1005,6 +1833,378 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"controller", animation.controller}, {"loop", animation.loop},
             {"speed", animation.speed}, {"saved", false},
             {"note", "Plays in Play mode; call save_scene to keep it"}};
+  }
+  if (name == "delete_object") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    if (DeletingRemovesLastCamera(i))
+      return Error("Scene must keep at least one camera.");
+    const std::string deletedName = sceneRenderer->GetMesh3DName(i);
+    DeleteSceneObject(i);
+    return {{"deleted", true},
+            {"index", i},
+            {"name", deletedName},
+            {"remainingObjects", sceneRenderer->GetMesh3DCount()},
+            {"saved", false}};
+  }
+  if (name == "set_object_properties") {
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    if (const std::string bad = UnknownKey(
+            args, {"index", "name", "parent", "keepWorld", "lightType", "color",
+                   "intensity", "range", "spotAngle", "gamma", "projection",
+                   "fov", "orthoSize", "near", "far", "text", "textSize",
+                   "textColor", "alignment", "visible"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    bool changed = false;
+    if (args.contains("name")) {
+      std::string newName;
+      if (!Optional(args, "name", newName) || newName.empty())
+        return Error("name must be a non-empty string");
+      if (RenameMesh(i, newName))
+        changed = true;
+    }
+    if (args.contains("parent")) {
+      if (!args["parent"].is_number_integer())
+        return Error("parent must be an integer (-1 or object index)");
+      const auto p = args["parent"].get<std::int64_t>();
+      if (p < -1 || p >= static_cast<std::int64_t>(count))
+        return Error("parent must be -1 (root) or a valid object index");
+      bool keepWorld = true;
+      if (!Optional(args, "keepWorld", keepWorld))
+        return Error("keepWorld must be a boolean");
+      if (!sceneRenderer->SetMesh3DParent(i, static_cast<int>(p), keepWorld))
+        return Error("Invalid parent assignment (cannot parent an object to itself or its descendant)");
+      changed = true;
+    }
+
+    if (args.contains("lightType") || args.contains("color") ||
+        args.contains("intensity") || args.contains("range") ||
+        args.contains("spotAngle") || args.contains("gamma")) {
+      if (!sceneRenderer->IsMesh3DLight(i))
+        return Error("Light properties require a Light object");
+      std::string lightType;
+      glm::vec3 color = sceneRenderer->GetMesh3DLightColor(i);
+      float intensity = sceneRenderer->GetMesh3DLightIntensity(i);
+      float range = sceneRenderer->GetMesh3DLightRange(i);
+      float spotAngle = sceneRenderer->GetMesh3DLightSpotAngle(i);
+      float gamma = sceneRenderer->GetMesh3DLightGamma(i);
+      if (!Optional(args, "lightType", lightType) ||
+          !Vec3(args, "color", color) ||
+          !Optional(args, "intensity", intensity) ||
+          !Optional(args, "range", range) ||
+          !Optional(args, "spotAngle", spotAngle) ||
+          !Optional(args, "gamma", gamma))
+        return Error("Invalid light property value");
+      if (!lightType.empty()) {
+        if (lightType == "directional")
+          sceneRenderer->SetMesh3DLightType(i, 0);
+        else if (lightType == "point")
+          sceneRenderer->SetMesh3DLightType(i, 1);
+        else if (lightType == "spot")
+          sceneRenderer->SetMesh3DLightType(i, 2);
+        else
+          return Error("lightType must be directional, point or spot");
+      }
+      sceneRenderer->SetMesh3DLightColor(i, glm::clamp(color, 0.0f, 10.0f));
+      sceneRenderer->SetMesh3DLightIntensity(i, std::clamp(intensity, 0.0f, 100.0f));
+      sceneRenderer->SetMesh3DLightRange(i, std::clamp(range, 0.1f, 1000.0f));
+      sceneRenderer->SetMesh3DLightSpotAngle(i, std::clamp(spotAngle, 1.0f, 89.0f));
+      sceneRenderer->SetMesh3DLightGamma(i, std::clamp(gamma, 0.1f, 5.0f));
+      changed = true;
+    }
+
+    if (args.contains("projection") || args.contains("fov") ||
+        args.contains("orthoSize") || args.contains("near") ||
+        args.contains("far")) {
+      if (!sceneRenderer->IsMesh3DCamera(i))
+        return Error("Camera properties require a Camera object");
+      std::string projection;
+      float fov = sceneRenderer->GetMesh3DCameraFov(i);
+      float orthoSize = sceneRenderer->GetMesh3DCameraOrthoSize(i);
+      float nearPlane = sceneRenderer->GetMesh3DCameraNear(i);
+      float farPlane = sceneRenderer->GetMesh3DCameraFar(i);
+      if (!Optional(args, "projection", projection) ||
+          !Optional(args, "fov", fov) ||
+          !Optional(args, "orthoSize", orthoSize) ||
+          !Optional(args, "near", nearPlane) ||
+          !Optional(args, "far", farPlane))
+        return Error("Invalid camera property value");
+      if (!projection.empty()) {
+        if (projection == "perspective")
+          sceneRenderer->SetMesh3DCameraProjection(i, 0);
+        else if (projection == "orthographic")
+          sceneRenderer->SetMesh3DCameraProjection(i, 1);
+        else
+          return Error("projection must be perspective or orthographic");
+      }
+      if (nearPlane <= 0.0f || farPlane <= nearPlane)
+        return Error("require 0 < near < far");
+      sceneRenderer->SetMesh3DCameraFov(i, std::clamp(fov, 10.0f, 170.0f));
+      sceneRenderer->SetMesh3DCameraOrthoSize(i, std::clamp(orthoSize, 0.1f, 1000.0f));
+      sceneRenderer->SetMesh3DCameraNear(i, nearPlane);
+      sceneRenderer->SetMesh3DCameraFar(i, farPlane);
+      changed = true;
+    }
+
+    if (args.contains("text") || args.contains("textSize") ||
+        args.contains("textColor") || args.contains("alignment") ||
+        args.contains("visible")) {
+      if (!sceneRenderer->meshes3d[i].isWorldText)
+        return Error("3D text properties require a text_3d object");
+      auto &wt = sceneRenderer->meshes3d[i].worldText;
+      std::string alignStr;
+      ImVec4 col(wt.color.r, wt.color.g, wt.color.b, wt.color.a);
+      if (!Optional(args, "text", wt.text) ||
+          !Optional(args, "textSize", wt.size) ||
+          !Color4(args, "textColor", col) ||
+          !Optional(args, "alignment", alignStr) ||
+          !Optional(args, "visible", wt.visible))
+        return Error("Invalid 3D text property value");
+      if (!alignStr.empty()) {
+        if (alignStr == "left")
+          wt.alignment = 0;
+        else if (alignStr == "center")
+          wt.alignment = 1;
+        else if (alignStr == "right")
+          wt.alignment = 2;
+        else
+          return Error("alignment must be left, center or right");
+      }
+      wt.size = std::clamp(wt.size, 0.05f, 50.0f);
+      wt.color = glm::vec4(col.x, col.y, col.z, col.w);
+      changed = true;
+    }
+
+    if (changed)
+      RecordEditorHistory();
+    return object(i);
+  }
+  if (name == "set_scene_environment") {
+    if (const std::string bad = UnknownKey(
+            args, {"backgroundColor", "sunDirection", "sunColor", "sunIntensity",
+                   "sunVisible", "gridVisible", "nprPreset", "npr"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    if (args.contains("backgroundColor")) {
+      const glm::vec4 cur = sceneRenderer->GetBackgroundColor();
+      ImVec4 bg(cur.r, cur.g, cur.b, cur.a);
+      if (!Color4(args, "backgroundColor", bg))
+        return Error("backgroundColor must be [r, g, b] or [r, g, b, a] in 0..1");
+      sceneRenderer->SetBackgroundColor(bg.x, bg.y, bg.z, bg.w);
+    }
+    if (args.contains("sunDirection")) {
+      glm::vec3 dir = sceneRenderer->sunLight.direction;
+      if (!Vec3(args, "sunDirection", dir))
+        return Error("Invalid sunDirection");
+      sceneRenderer->sunLight.direction = dir;
+    }
+    if (args.contains("sunColor")) {
+      glm::vec3 col = sceneRenderer->sunLight.color;
+      if (!Vec3(args, "sunColor", col))
+        return Error("Invalid sunColor");
+      sceneRenderer->sunLight.color = glm::clamp(col, 0.0f, 10.0f);
+    }
+    if (args.contains("sunIntensity")) {
+      float intensity = sceneRenderer->sunLight.intensity;
+      if (!Optional(args, "sunIntensity", intensity) || intensity < 0.0f ||
+          intensity > 20.0f)
+        return Error("sunIntensity must be 0..20");
+      sceneRenderer->sunLight.intensity = intensity;
+    }
+    if (args.contains("sunVisible")) {
+      bool vis = sceneRenderer->IsSunVisible();
+      if (!Optional(args, "sunVisible", vis))
+        return Error("sunVisible must be a boolean");
+      sceneRenderer->SetSunVisible(vis);
+    }
+    if (args.contains("gridVisible")) {
+      bool grid = sceneRenderer->IsGrid3DVisible();
+      if (!Optional(args, "gridVisible", grid))
+        return Error("gridVisible must be a boolean");
+      sceneRenderer->SetGrid3DVisible(grid);
+    }
+    ilmeee::NprSettings npr = sceneRenderer->GetNpr();
+    bool nprChanged = false;
+    if (args.contains("nprPreset")) {
+      std::string preset;
+      if (!Optional(args, "nprPreset", preset))
+        return Error("nprPreset must be a string");
+      if (preset == "anime_cel") {
+        npr = ilmeee::NprSettings{};
+        npr.enabled = true;
+      } else if (preset == "soft_toon") {
+        npr = ilmeee::NprSettings{};
+        npr.enabled = true;
+        npr.bands = 3;
+        npr.softness = 0.2f;
+        npr.shadowColor = {0.70f, 0.68f, 0.78f};
+        npr.rimWidth = 0.3f;
+        npr.rimStrength = 0.35f;
+        npr.specular = false;
+        npr.outlineColor = {0.25f, 0.20f, 0.22f};
+        npr.outlineWidth = 1.0f;
+      } else if (preset == "comic_ink") {
+        npr = ilmeee::NprSettings{};
+        npr.enabled = true;
+        npr.softness = 0.0f;
+        npr.shadowColor = {0.35f, 0.35f, 0.40f};
+        npr.rim = false;
+        npr.specularSize = 0.03f;
+        npr.specularStrength = 0.8f;
+        npr.outlineColor = {0.0f, 0.0f, 0.0f};
+        npr.outlineWidth = 3.0f;
+      } else {
+        return Error("nprPreset must be anime_cel, soft_toon or comic_ink");
+      }
+      nprChanged = true;
+    }
+    if (auto it = args.find("npr"); it != args.end()) {
+      if (!it->is_object())
+        return Error("npr must be an object");
+      const json &n = *it;
+      int bands = npr.bands;
+      if (!Optional(n, "enabled", npr.enabled) ||
+          !Optional(n, "bands", bands) ||
+          !Optional(n, "softness", npr.softness) ||
+          !Vec3(n, "shadowColor", npr.shadowColor) ||
+          !Optional(n, "rim", npr.rim) ||
+          !Vec3(n, "rimColor", npr.rimColor) ||
+          !Optional(n, "rimWidth", npr.rimWidth) ||
+          !Optional(n, "rimStrength", npr.rimStrength) ||
+          !Optional(n, "specular", npr.specular) ||
+          !Optional(n, "specularSize", npr.specularSize) ||
+          !Optional(n, "specularStrength", npr.specularStrength) ||
+          !Optional(n, "outline", npr.outline) ||
+          !Vec3(n, "outlineColor", npr.outlineColor) ||
+          !Optional(n, "outlineWidth", npr.outlineWidth))
+        return Error("Invalid npr field type");
+      npr.bands = bands;
+      npr.Clamp();
+      nprChanged = true;
+    }
+    if (nprChanged)
+      sceneRenderer->SetNpr(npr);
+    RecordEditorHistory();
+    return envJson();
+  }
+  if (name == "create_animation_controller") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad = UnknownKey(
+            args, {"path", "idle", "walk", "run", "walkSpeed", "runSpeed",
+                   "idleThreshold", "transition", "inPlace", "rootBone",
+                   "overwrite", "attachTo"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    std::string rawPath;
+    bool overwrite = false;
+    if (!Optional(args, "path", rawPath) || rawPath.empty() ||
+        !Optional(args, "overwrite", overwrite))
+      return Error("path is required");
+    if (std::filesystem::path(rawPath).extension().empty())
+      rawPath += ".ilmeeecontroller";
+    std::string absPath, relPath, err;
+    if (!ilmeee::ResolveAnimationAsset(projectHandler.projectPath, rawPath, true,
+                                       absPath, relPath, err))
+      return Error(err);
+    if (!ilmeee::IsAnimationControllerPath(absPath))
+      return Error("Controller path must end with .ilmeeecontroller");
+    std::error_code ec;
+    if (std::filesystem::exists(absPath, ec) && !overwrite)
+      return Error("Controller already exists: " + relPath +
+                   " (pass overwrite=true to replace)");
+    size_t attachIdx = 0;
+    const bool hasAttach = args.contains("attachTo");
+    if (hasAttach) {
+      if (!Index(args, "attachTo", count, attachIdx))
+        return Error("Invalid attachTo object index");
+      if (sceneRenderer->meshes3d[attachIdx].skeleton.empty())
+        return Error("attachTo target must be a skinned (PMX) model with bones");
+    }
+    ilmeee::AnimationController ctrl;
+    if (!Optional(args, "idle", ctrl.idle) ||
+        !Optional(args, "walk", ctrl.walk) ||
+        !Optional(args, "run", ctrl.run) ||
+        !Optional(args, "walkSpeed", ctrl.walkSpeed) ||
+        !Optional(args, "runSpeed", ctrl.runSpeed) ||
+        !Optional(args, "idleThreshold", ctrl.idleThreshold) ||
+        !Optional(args, "transition", ctrl.transition) ||
+        !Optional(args, "inPlace", ctrl.inPlace) ||
+        !Optional(args, "rootBone", ctrl.rootBone))
+      return Error("Invalid animation controller field");
+    for (std::string *clip : {&ctrl.idle, &ctrl.walk, &ctrl.run}) {
+      if (clip->empty())
+        continue;
+      std::string cAbs, cRel, cErr;
+      if (!ilmeee::ResolveAnimationAsset(projectHandler.projectPath, *clip,
+                                         false, cAbs, cRel, cErr))
+        return Error(cErr);
+      if (!ilmeee::IsAnimationPath(cAbs))
+        return Error("Controller clip must be .ilmeeeanim or .vmd: " + *clip);
+      *clip = cRel;
+    }
+    if (!ilmeee::SaveAnimationController(absPath, ctrl, err))
+      return Error(err.empty() ? "Could not save animation controller" : err);
+    projectHandler.rootAsset =
+        projectHandler.BuildAssetTree(projectHandler.projectPath);
+    if (hasAttach) {
+      auto &mesh = sceneRenderer->meshes3d[attachIdx];
+      mesh.animation.controller = relPath;
+      mesh.animation.enabled = true;
+      mesh.loadedAnimationPath.clear();
+      mesh.animationError.clear();
+      mesh.animationTime = 0;
+      mesh.locomotion = {};
+      RecordEditorHistory();
+    }
+    return {{"ok", true},
+            {"path", relPath},
+            {"idle", ctrl.idle},
+            {"walk", ctrl.walk},
+            {"run", ctrl.run},
+            {"walkSpeed", ctrl.walkSpeed},
+            {"runSpeed", ctrl.runSpeed},
+            {"attachedTo", hasAttach ? json(attachIdx) : json(nullptr)}};
+  }
+  if (name == "build_game") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (gameBuildRunning.load())
+      return Error("A game build is already running");
+    std::string target =
+        (gameBuildTarget == ilmeee::BuildTarget::Android) ? "android" : "linux";
+    bool runWhenDone = false;
+    bool portable = gameBuildPortable;
+    bool includeUnused = gameBuildIncludeUnused;
+    int maxVideoHeight = gameBuildAndroidVideoHeight;
+    if (!Optional(args, "target", target) ||
+        !Optional(args, "run", runWhenDone) ||
+        !Optional(args, "portable", portable) ||
+        !Optional(args, "includeUnusedAssets", includeUnused) ||
+        !Optional(args, "androidMaxVideoHeight", maxVideoHeight))
+      return Error("Invalid build_game argument");
+    if (target == "linux")
+      gameBuildTarget = ilmeee::BuildTarget::Linux;
+    else if (target == "android")
+      gameBuildTarget = ilmeee::BuildTarget::Android;
+    else
+      return Error("target must be linux or android");
+    if (maxVideoHeight != 0 && maxVideoHeight != 720 && maxVideoHeight != 1080)
+      return Error("androidMaxVideoHeight must be 0, 720 or 1080");
+    gameBuildPortable = portable;
+    gameBuildIncludeUnused = includeUnused;
+    gameBuildAndroidVideoHeight = maxVideoHeight;
+    StartGameBuild(runWhenDone);
+    return {{"started", gameBuildRunning.load()},
+            {"target", target},
+            {"runWhenDone", runWhenDone},
+            {"portable", gameBuildPortable},
+            {"includeUnusedAssets", gameBuildIncludeUnused},
+            {"androidMaxVideoHeight", gameBuildAndroidVideoHeight}};
   }
   if (name == "save_scene") {
     if (projectHandler.projectPath.empty())
@@ -1400,11 +2600,11 @@ ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
         !Optional(props, "maxDistance", a.maxDistance))
       return Error("Invalid audio_source property type");
     if (!a.clip.empty() && !ilmeee::IsAudioClipPath(a.clip))
-      return Error("clip must be .wav/.ogg/.mp3/.flac/.m4a/.aac/.opus");
+      return Error("clip must be .wav/.ogg/.mp3/.flac/.m4a/.aac/.opus or an http(s):// stream URL");
     if (a.volume < 0 || a.volume > 2 || a.minDistance < 0 || a.maxDistance <= a.minDistance ||
         a.maxDistance > 1000)
       return Error("volume must be 0..2 and 0 <= minDistance < maxDistance <= 1000");
-    if (std::filesystem::path(a.clip).is_absolute())
+    if (!ilmeee::IsMediaUrl(a.clip) && std::filesystem::path(a.clip).is_absolute())
       a.clip = ProjectMediaPath(projectHandler.projectPath, a.clip);
     a.enabled = true;
     mesh.audio = std::move(a);
@@ -1428,9 +2628,9 @@ ilmeee::net::json MainWindow::HandleMcpComponentTool(const std::string &name,
         return Error("surface must be -1 (all) or a submesh index");
     }
     if (!v.clip.empty() && !ilmeee::IsVideoClipPath(v.clip))
-      return Error("clip must be .mp4/.mkv/.webm/.mov/.avi");
+      return Error("clip must be .mp4/.mkv/.webm/.mov/.avi/.m3u8 or an http(s):// stream URL");
     if (v.volume < 0 || v.volume > 2) return Error("volume must be 0..2");
-    if (std::filesystem::path(v.clip).is_absolute())
+    if (!ilmeee::IsMediaUrl(v.clip) && std::filesystem::path(v.clip).is_absolute())
       v.clip = ProjectMediaPath(projectHandler.projectPath, v.clip);
     v.enabled = true;
     mesh.video = std::move(v);

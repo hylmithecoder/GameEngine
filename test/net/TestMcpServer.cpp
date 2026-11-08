@@ -77,8 +77,13 @@ int main() {
   auto list = Post(port, Modern(4, "tools/list"), "test-secret", true);
   assert(list->statusCode == 200);
   const auto tools = json::parse(list->body)["result"]["tools"];
-  assert(tools.size() == 29);
-  for (const char *name : {"list_components", "add_component", "remove_component",
+  assert(tools.size() == 41);
+  for (const char *name : {"list_assets", "set_surface_texture",
+                           "download_asset", "delete_object", "set_object_properties",
+                           "get_scene_environment", "set_scene_environment",
+                           "create_ui_element", "delete_ui_element",
+                           "create_animation_controller", "set_play_mode", "build_game",
+                           "list_components", "add_component", "remove_component",
                            "list_scripts", "get_script", "create_script", "edit_script",
                            "get_skeleton", "get_animation", "create_animation",
                            "edit_animation", "generate_animation", "sample_animation"}) {

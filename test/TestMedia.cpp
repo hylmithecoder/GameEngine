@@ -58,12 +58,23 @@ int main(int argc, char **argv) {
   const fs::path dir = fs::temp_directory_path() / "ilmeee-media-test";
   fs::create_directories(dir);
 
-  // 1. Extension checks.
+  // 1. Extension and URL checks.
   CHECK(IsAudioClipPath("a/b/Rain.OGG"));
   CHECK(IsAudioClipPath("x.wav"));
   CHECK(!IsAudioClipPath("x.mp4"));
   CHECK(IsVideoClipPath("intro.MP4"));
   CHECK(!IsVideoClipPath("intro.png"));
+  CHECK(IsMediaUrl("https://cdn.example.com/audio/bgm.mp3?token=123"));
+  CHECK(IsMediaUrl("http://stream.example.com:8000/live"));
+  CHECK(!IsMediaUrl("/home/user/bgm.mp3"));
+  CHECK(!IsMediaUrl("assets/audio/bgm.mp3"));
+  CHECK(IsAudioClipPath("https://cdn.example.com/audio/bgm.mp3?token=123"));
+  CHECK(IsAudioClipPath("http://stream.example.com:8000/live"));
+  CHECK(!IsAudioClipPath("https://cdn.example.com/video/intro.mp4?token=123"));
+  CHECK(IsVideoClipPath("https://cdn.example.com/video/intro.mp4?token=123#t=2"));
+  CHECK(IsVideoClipPath("https://cdn.example.com/live/playlist.m3u8"));
+  CHECK(IsVideoClipPath("https://stream.example.com/video_feed"));
+  CHECK(!IsVideoClipPath("https://cdn.example.com/audio/bgm.ogg"));
 
   // 2. PCM ring keeps order and reports what is left.
   {

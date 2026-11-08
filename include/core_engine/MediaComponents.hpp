@@ -39,7 +39,8 @@ struct VideoPlayerComponent {
 };
 
 // Lower-case extension checks shared by the editor (drag & drop, file
-// pickers) and the runtime.
+// pickers) and the runtime. Also supports http:// and https:// stream URLs.
+bool IsMediaUrl(const std::string &path);
 bool IsAudioClipPath(const std::string &path);
 bool IsVideoClipPath(const std::string &path);
 

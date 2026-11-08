@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     android:installLocation="auto">
 
+    <!-- Network access for streaming audio/video from internet URLs. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- The renderer is Vulkan-only. -->
     <uses-feature android:name="android.hardware.vulkan.version"
         android:version="0x400003" android:required="true" />
@@ -13,6 +16,7 @@
     <application android:label="@string/app_name"
         android:icon="@drawable/ic_launcher"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
         android:hardwareAccelerated="true">
 

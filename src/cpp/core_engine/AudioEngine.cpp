@@ -27,10 +27,35 @@ extern "C" {
 
 namespace ilmeee {
 
+bool IsMediaUrl(const std::string &path) {
+  auto startsWithIgnoreCase = [&](const char *prefix, size_t len) {
+    if (path.size() <= len)
+      return false;
+    for (size_t i = 0; i < len; ++i)
+      if (std::tolower((unsigned char)path[i]) != prefix[i])
+        return false;
+    return !std::isspace((unsigned char)path[len]) && path[len] != '/';
+  };
+  return startsWithIgnoreCase("http://", 7) ||
+         startsWithIgnoreCase("https://", 8);
+}
+
 namespace {
 
 std::string LowerExt(const std::string &path) {
-  std::string ext = std::filesystem::path(path).extension().string();
+  std::string clean = path;
+  if (IsMediaUrl(clean)) {
+    const size_t q = clean.find_first_of("?#");
+    if (q != std::string::npos)
+      clean.erase(q);
+    const size_t schemeEnd = clean.find("://");
+    const size_t pathStart =
+        schemeEnd == std::string::npos ? 0 : clean.find('/', schemeEnd + 3);
+    if (pathStart == std::string::npos)
+      return {};
+    clean = clean.substr(pathStart);
+  }
+  std::string ext = std::filesystem::path(clean).extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(),
                  [](unsigned char c) { return (char)std::tolower(c); });
   return ext;
@@ -162,15 +187,27 @@ bool IsAudioClipPath(const std::string &path) {
   static const char *kExt[] = {".wav", ".ogg", ".mp3", ".flac",
                                ".m4a", ".aac", ".opus"};
   const std::string ext = LowerExt(path);
-  return std::any_of(std::begin(kExt), std::end(kExt),
-                     [&](const char *e) { return ext == e; });
+  if (std::any_of(std::begin(kExt), std::end(kExt),
+                  [&](const char *e) { return ext == e; }))
+    return true;
+  if (IsMediaUrl(path)) {
+    // Allow direct stream URLs that have no file extension (e.g. /stream or ?id=...),
+    // while still rejecting explicit video/image extensions.
+    return ext.empty();
+  }
+  return false;
 }
 
 bool IsVideoClipPath(const std::string &path) {
-  static const char *kExt[] = {".mp4", ".mkv", ".webm", ".mov", ".avi"};
+  static const char *kExt[] = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m3u8"};
   const std::string ext = LowerExt(path);
-  return std::any_of(std::begin(kExt), std::end(kExt),
-                     [&](const char *e) { return ext == e; });
+  if (std::any_of(std::begin(kExt), std::end(kExt),
+                  [&](const char *e) { return ext == e; }))
+    return true;
+  if (IsMediaUrl(path)) {
+    return ext.empty();
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,10 +294,11 @@ AudioEngine::LoadClip(const std::string &path, std::string *error) {
     return it->second;
   auto clip = std::make_shared<AudioClip>();
   const std::string ext = LowerExt(path);
+  const bool isUrl = IsMediaUrl(path);
   bool ok = false;
-  if (ext == ".wav")
+  if (!isUrl && ext == ".wav")
     ok = DecodeWav(path, *clip, error);
-  else if (ext == ".ogg")
+  else if (!isUrl && ext == ".ogg")
     ok = DecodeOgg(path, *clip, error);
   else {
 #if defined(ILMEEE_HAS_FFMPEG)
@@ -269,7 +307,8 @@ AudioEngine::LoadClip(const std::string &path, std::string *error) {
     ok = android_media::DecodeAudioFile(path, clip->samples, error);
 #else
     if (error)
-      *error = ext + " needs FFmpeg, which this build lacks (use .wav/.ogg)";
+      *error = (isUrl ? "URL audio" : ext) +
+               std::string(" needs FFmpeg, which this build lacks (use local .wav/.ogg)");
 #endif
   }
   if (!ok)

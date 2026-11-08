@@ -7,8 +7,8 @@
 namespace ilmeee {
 
 std::string MediaSystem::ResolvePath(const std::string &clip) const {
-  if (clip.empty())
-    return {};
+  if (clip.empty() || IsMediaUrl(clip))
+    return clip;
   const std::filesystem::path p(clip);
   return p.is_absolute() || root_.empty() ? clip : (root_ / p).string();
 }

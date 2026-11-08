@@ -128,6 +128,14 @@ int main() {
   worldText.parent = 0;
   worldText.worldText.text = "Wise";
   scene.entities.push_back(worldText);
+  SceneEntity remoteMedia;
+  remoteMedia.name = "Remote Stream";
+  remoteMedia.kind = PrimitiveKind::Screen;
+  remoteMedia.audio.enabled = true;
+  remoteMedia.audio.clip = "https://cdn.example.com/audio/theme.ogg?token=1";
+  remoteMedia.video.enabled = true;
+  remoteMedia.video.clip = "https://cdn.example.com/video/stream.mp4?hd=1";
+  scene.entities.push_back(remoteMedia);
   fs::create_directories(project / "scenes");
   CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
 
@@ -206,8 +214,10 @@ int main() {
   CHECK(built.entities[7].kind == PrimitiveKind::UiImage);
   CHECK(built.entities[7].parent == 6);
   CHECK(built.entities[7].uiImagePath == "assets/logo.png");
-  CHECK(built.entities.back().kind == PrimitiveKind::WorldText);
-  CHECK(built.entities.back().worldText.text == "Wise" && built.entities.back().parent == 0);
+  CHECK(built.entities[10].kind == PrimitiveKind::WorldText);
+  CHECK(built.entities[10].worldText.text == "Wise" && built.entities[10].parent == 0);
+  CHECK(built.entities.back().audio.clip == "https://cdn.example.com/audio/theme.ogg?token=1");
+  CHECK(built.entities.back().video.clip == "https://cdn.example.com/video/stream.mp4?hd=1");
   // Every model/texture path is now relative and exists inside the game.
   auto present = [&](const std::string &p) {
     return fs::path(p).is_relative() && fs::exists(out / p);
@@ -393,6 +403,12 @@ int main() {
       };
       CHECK(probe(game / "assets/videos/intro.mp4") == "h264,720\n");
       CHECK(probe(clip) == "h264,1080\n"); // the project keeps its file
+      IlmeeeScene androidBuiltScene;
+      CHECK(LoadScene((game / "scenes/main.ilmeeescene").string(), androidBuiltScene));
+      CHECK(androidBuiltScene.entities.back().audio.clip ==
+            "https://cdn.example.com/audio/theme.ogg?token=1");
+      CHECK(androidBuiltScene.entities.back().video.clip ==
+            "https://cdn.example.com/video/stream.mp4?hd=1");
       log.clear();
       r = BuildGame(a, logger);
       CHECK(r.ok && r.videosTranscoded == 1);
