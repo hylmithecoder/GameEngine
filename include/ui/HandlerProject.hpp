@@ -176,6 +176,9 @@ public:
   AssetFile *selectedAsset;
   // Callback untuk menangani klik file
   function<void(const AssetFile &)> onFileClicked;
+  // Items of the Explorer's "Create > Data Asset" submenu (set by MainWindow,
+  // which knows the compiled ScriptableObject classes). Argument: folder.
+  function<void(const string &)> renderCreateDataAssetMenu;
   // Favorit folder
   vector<string> favoriteFolders;
   string currentFilter = "";

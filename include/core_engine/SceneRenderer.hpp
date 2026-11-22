@@ -4,6 +4,8 @@
 #include "MovementScript.hpp"
 #include "NativeScriptTypes.hpp"
 #include "NprSettings.hpp"
+#include "BloomPass.hpp"
+#include "BloomSettings.hpp"
 #include "PMXLoader.hpp"
 #include "Physics.hpp"
 #include "Scene.hpp"
@@ -469,8 +471,15 @@ private:
                    const glm::mat4 &proj3d, WorldView viewKind);
   // Begin `target`'s render pass at w x h, clear to the background colour,
   // run `record`, then submit and wait.
+  // `bloom`: run the bloom post-process on `target` after the pass.
   void SubmitOffscreenPass(const Offscreen &target, int w, int h,
-                           const std::function<void(VkCommandBuffer)> &record);
+                           const std::function<void(VkCommandBuffer)> &record,
+                           bool bloom = false);
+  // Bloom (BloomPass.hpp), applied to Game views (and Scene view on request).
+  ilmeee::BloomSettings bloom;
+  ilmeee::BloomPass bloomPass;
+  bool bloomInitTried = false;
+  void EnsureBloomPass();
   // Compute the player camera's view/proj for the given aspect ratio.
   // Returns false if there is no camera object in the scene.
   bool ComputePlayerCameraMatrices(float aspect, glm::mat4 &view,
@@ -551,7 +560,12 @@ public:
   bool SetMesh3DParent(size_t child, int parent, bool keepWorld = true);
   // Removes the mesh and its whole subtree, freeing GPU resources, and
   // renumbers the remaining parent links. Returns how many were removed.
-  size_t RemoveMesh3D(size_t i);
+  // `remapOut` (optional) receives old index -> new index, -1 = removed.
+  size_t RemoveMesh3D(size_t i, std::vector<int> *remapOut = nullptr);
+  // Puts the meshes in the order `order` lists them (old indices, each
+  // exactly once); parent and rig-camera links follow. False (no change)
+  // when `order` is not a permutation.
+  bool ReorderMeshes3D(const std::vector<size_t> &order);
   // Parent chain composed, without autoFit (what children inherit).
   glm::mat4 GetMesh3DWorldTRS(size_t i) const;
   // What mesh `i` is drawn and picked with: world TRS * autoFit.
@@ -689,6 +703,16 @@ public:
     return glm::vec4(gridColor.x, gridColor.y, gridColor.z, gridColor.w);
   }
   // Scene-wide toon lighting (saved in the scene, applied to every 3D view).
+  // Scene-wide bloom (saved in the scene). Game view, Game tab and player;
+  // the editor Scene view only with bloom.sceneView.
+  const ilmeee::BloomSettings &GetBloom() const { return bloom; }
+  void SetBloom(const ilmeee::BloomSettings &settings) {
+    bloom = settings;
+    bloom.Clamp();
+  }
+  // False when the bloom shaders/pipelines could not be created (true
+  // until the first attempt, which happens on the first bloomed frame).
+  bool BloomAvailable() const { return !bloomInitTried || bloomPass.Ready(); }
   const ilmeee::NprSettings &GetNpr() const { return npr; }
   void SetNpr(const ilmeee::NprSettings &settings) {
     npr = settings;

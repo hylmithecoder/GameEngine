@@ -48,11 +48,26 @@ public:
   void Poll();
   bool IsCompiling() const;
   bool Ready(const std::string &source) const;
+  // The source's class is a ScriptableObject (data asset), not a Component.
+  bool IsAsset(const std::string &source) const;
+  // Compiled ScriptableObject sources, sorted.
+  std::vector<std::string> AssetClasses() const;
+  // Folder AssetRef paths are relative to; default: the configured project.
+  // The player sets its game folder here.
+  void SetAssetRoot(const std::filesystem::path &root);
   std::vector<std::string> Sources() const;
   std::string Diagnostics(const std::string &source) const;
   std::vector<ScriptValue> Properties(const NativeScriptBinding &binding) const;
   bool Load(const CompiledScript &script, std::string &error);
   void Start(script::HostApi host, const std::vector<ScriptOwner> &owners);
+  // Objects spawned during Play: their scripts Awake + OnEnable now and
+  // Start at the end of the current Update (or right away outside it).
+  void Attach(const std::vector<ScriptOwner> &owners);
+  // Objects destroyed during Play: their scripts get OnDisable + OnDestroy
+  // now, stop receiving calls, and are freed at the end of the Update.
+  void Detach(const std::vector<uint64_t> &ownerIds);
+  // Live (not destroyed) script instances; for tests and diagnostics.
+  size_t InstanceCount() const;
   void DispatchPhysicsEvents(
       const std::vector<std::pair<uint64_t, uint64_t>> &triggers,
       const std::vector<std::pair<uint64_t, uint64_t>> &collisions);
@@ -63,6 +78,13 @@ public:
 private:
   struct Module;
   struct Instance;
+  struct LoadedAsset;
+  static const ScriptableObject *ResolveAsset(void *self, const char *path,
+                                              const char *className);
+  std::filesystem::path assetRoot_;
+  // Loaded on first AssetRef::Get() during Play; cleared by Stop().
+  std::unordered_map<std::string, std::unique_ptr<LoadedAsset>> assets_;
+  std::set<std::string> failedAssets_; // warned once per Play
   ScriptCompileOptions options_;
   std::future<std::vector<CompiledScript>> job_;
   std::string jobProject_;
@@ -72,7 +94,14 @@ private:
   std::chrono::steady_clock::time_point lastScan_{};
   std::unordered_map<std::string, std::shared_ptr<Module>> modules_;
   std::unordered_map<std::string, std::string> errors_;
+  std::unique_ptr<Instance> CreateInstance(uint64_t owner,
+                                           const NativeScriptBinding &binding);
+  void FlushLifecycle();
   std::vector<std::unique_ptr<Instance>> instances_;
+  // Attached during Play, waiting for Start (instances_ may be iterating).
+  std::vector<std::unique_ptr<Instance>> spawned_;
+  bool updating_ = false;
+  std::set<uint64_t> detached_; // destroyed this Play: never (re)created
   std::set<std::pair<uint64_t, uint64_t>> activeTriggers_;
   std::set<std::pair<uint64_t, uint64_t>> activeCollisions_;
   script::HostApi host_;

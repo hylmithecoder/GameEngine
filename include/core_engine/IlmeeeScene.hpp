@@ -65,6 +65,12 @@
 //      Collider: uint32 flags (1 enabled, 2 isTrigger), uint32 shape
 //      (0 box, 1 sphere, 2 capsule), vec3 center, vec3 size,
 //      float32 radius, height, friction, bounciness --
+//   -- v1.19 additional UI anchor/stretch modes --
+//   -- v1.20 script values may have type 6 (Asset: a .ilmeeeasset path in
+//      the string field), also as List element type --
+//   -- v1.21 after NPR, bloom: uint32 flags (1 enabled, 2 sceneView),
+//      float32 threshold, softKnee, intensity, radius, vec3 tint,
+//      uint32 iterations --
 //
 // Why a custom binary container instead of JSON: scenes will get big
 // (lots of meshes, transforms, hierarchy, per-instance overrides), and
@@ -80,6 +86,7 @@
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
 #include "NprSettings.hpp"
+#include "BloomSettings.hpp"
 #include "NativeScriptTypes.hpp"
 #include "Physics.hpp"
 #include "SkeletalAnimation.hpp"
@@ -98,7 +105,7 @@ namespace ilmeee {
 // Newest minor version this code reads and writes. A newer file is refused:
 // its extra per-entity fields would be misread as the next entity (garbage
 // counts → huge allocations), e.g. an old Android player with a new scene.
-constexpr uint16_t kSceneFormatMinor = 19; // additional UI anchor/stretch modes
+constexpr uint16_t kSceneFormatMinor = 21; // v1.21: bloom settings
 
 enum class PrimitiveKind : uint8_t {
   ExternalObj = 0,
@@ -200,6 +207,7 @@ struct IlmeeeScene {
   // v1.4. Default matches SceneRenderer's, so older files look unchanged.
   glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
   NprSettings npr; // v1.15; default off, so older files look unchanged
+  BloomSettings bloom; // v1.21; default off
 };
 
 namespace detail {
@@ -280,14 +288,48 @@ inline bool ReadScriptScalar(std::ifstream &f, ScriptValue &value) {
     if (!ReadF32(f, component)) return false;
   return ReadString(f, value.string);
 }
+// One named script value (v1.14+ layout), shared with .ilmeeeasset files.
+inline void WriteScriptValue(std::ofstream &f, const ScriptValue &value) {
+  WriteString(f, value.name);
+  WriteU32(f, static_cast<uint32_t>(value.type));
+  WriteScriptScalar(f, value);
+  const auto items = std::min(value.items.size(), kMaxScriptListItems);
+  WriteU32(f, static_cast<uint32_t>(value.elementType));
+  WriteU32(f, static_cast<uint32_t>(items));
+  for (size_t i = 0; i < items; ++i)
+    WriteScriptScalar(f, value.items[i]);
+}
+// `newest`: the highest type the file's version may contain.
+inline bool ReadScriptValue(std::ifstream &f, ScriptValue &value,
+                            ScriptValueType newest) {
+  uint32_t type = 0, element = 0, items = 0;
+  if (!ReadString(f, value.name) || !ReadU32(f, type) ||
+      type > static_cast<uint32_t>(newest))
+    return false;
+  value.type = static_cast<ScriptValueType>(type);
+  if (!ReadScriptScalar(f, value) || !ReadU32(f, element) ||
+      element == static_cast<uint32_t>(ScriptValueType::List) ||
+      element > static_cast<uint32_t>(newest) || !ReadU32(f, items) ||
+      items > kMaxScriptListItems)
+    return false;
+  value.elementType = static_cast<ScriptValueType>(element);
+  value.items.resize(items);
+  for (auto &item : value.items) {
+    item.type = value.elementType;
+    if (!ReadScriptScalar(f, item)) return false;
+  }
+  return true;
+}
 
 } // namespace detail
 
-inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
+namespace detail {
+// Scenes ('ILMS') and prefabs ('ILMP') share one body layout.
+inline bool SaveSceneContainer(const std::string &path,
+                               const IlmeeeScene &scene, const char *magic) {
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f.is_open())
     return false;
-  const char magic[4] = {'I', 'L', 'M', 'S'};
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
   detail::WriteU16(f, kSceneFormatMinor); // minor
@@ -375,17 +417,9 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
       detail::WriteString(f, script.className);
       detail::WriteU32(f, script.enabled ? 1 : 0);
       detail::WriteU32(f, static_cast<uint32_t>(script.values.size()));
-      for (const auto &value : script.values) {
-        detail::WriteString(f, value.name);
-        detail::WriteU32(f, static_cast<uint32_t>(value.type));
-        // Version 1.10: Vec3 fields; 1.14: strings and lists.
-        detail::WriteScriptScalar(f, value);
-        const auto items = std::min(value.items.size(), kMaxScriptListItems);
-        detail::WriteU32(f, static_cast<uint32_t>(value.elementType));
-        detail::WriteU32(f, static_cast<uint32_t>(items));
-        for (size_t i = 0; i < items; ++i)
-          detail::WriteScriptScalar(f, value.items[i]);
-      }
+      // Version 1.10: Vec3 fields; 1.14: strings and lists; 1.20: assets.
+      for (const auto &value : script.values)
+        detail::WriteScriptValue(f, value);
     }
     // Version 1.11: UI visibility and the Dialog component.
     detail::WriteU32(f, e.uiVisible ? 1u : 0u);
@@ -470,17 +504,28 @@ inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   detail::WriteF32(f, npr.specularStrength);
   detail::WriteVec3(f, npr.outlineColor);
   detail::WriteF32(f, npr.outlineWidth);
+
+  // Version 1.21: bloom
+  const BloomSettings &bloom = scene.bloom;
+  detail::WriteU32(f, bloom.PackFlags());
+  detail::WriteF32(f, bloom.threshold);
+  detail::WriteF32(f, bloom.softKnee);
+  detail::WriteF32(f, bloom.intensity);
+  detail::WriteF32(f, bloom.radius);
+  detail::WriteVec3(f, bloom.tint);
+  detail::WriteU32(f, (uint32_t)bloom.iterations);
   return f.good();
 }
 
-inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
+inline bool LoadSceneContainer(const std::string &path, IlmeeeScene &out,
+                               const char *expectedMagic) {
   std::ifstream f(path, std::ios::binary);
   if (!f.is_open())
     return false;
   char magic[4];
   if (!f.read(magic, 4))
     return false;
-  if (std::memcmp(magic, "ILMS", 4) != 0)
+  if (std::memcmp(magic, expectedMagic, 4) != 0)
     return false;
   uint16_t major = 0, minor = 0;
   if (!detail::ReadU16(f, major) || !detail::ReadU16(f, minor))
@@ -626,26 +671,17 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
         script.enabled = enabled != 0;
         for (uint32_t v = 0; v < values; ++v) {
           ScriptValue value;
-          uint32_t type = 0;
-          const auto newest = minor >= 14   ? ScriptValueType::List
+          const auto newest = minor >= 20   ? ScriptValueType::Asset
+                              : minor >= 14 ? ScriptValueType::List
                               : minor >= 10 ? ScriptValueType::Vec3
                                             : ScriptValueType::Object;
-          if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
-              type > static_cast<uint32_t>(newest)) return false;
-          value.type = static_cast<ScriptValueType>(type);
           if (minor >= 14) {
-            uint32_t element = 0, items = 0;
-            if (!detail::ReadScriptScalar(f, value) || !detail::ReadU32(f, element) ||
-                element >= static_cast<uint32_t>(ScriptValueType::List) ||
-                !detail::ReadU32(f, items) || items > kMaxScriptListItems) return false;
-            value.elementType = static_cast<ScriptValueType>(element);
-            value.items.resize(items);
-            for (auto &item : value.items) {
-              item.type = value.elementType;
-              if (!detail::ReadScriptScalar(f, item)) return false;
-            }
+            if (!detail::ReadScriptValue(f, value, newest)) return false;
           } else {
-            uint32_t boolean = 0;
+            uint32_t type = 0, boolean = 0;
+            if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
+                type > static_cast<uint32_t>(newest)) return false;
+            value.type = static_cast<ScriptValueType>(type);
             if (!detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
                 !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
             value.boolean = boolean != 0;
@@ -780,6 +816,7 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
         return false;
   }
   out.npr = NprSettings();
+  out.bloom = BloomSettings();
   if (minor >= 15) {
     NprSettings &npr = out.npr;
     uint32_t flags = 0, bands = 0;
@@ -797,6 +834,19 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
     npr.UnpackFlags(flags);
     npr.bands = (int)std::min<uint32_t>(bands, 5);
     npr.Clamp();
+  }
+  if (minor >= 21) {
+    BloomSettings &bloom = out.bloom;
+    uint32_t flags = 0, iterations = 0;
+    if (!detail::ReadU32(f, flags) || !detail::ReadF32(f, bloom.threshold) ||
+        !detail::ReadF32(f, bloom.softKnee) ||
+        !detail::ReadF32(f, bloom.intensity) ||
+        !detail::ReadF32(f, bloom.radius) || !detail::ReadVec3(f, bloom.tint) ||
+        !detail::ReadU32(f, iterations))
+      return false;
+    bloom.UnpackFlags(flags);
+    bloom.iterations = (int)std::min<uint32_t>(iterations, 64);
+    bloom.Clamp();
   }
 
   // A link that points outside the file, at itself, or into a loop would
@@ -827,6 +877,15 @@ inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
     }
   }
   return true;
+}
+
+} // namespace detail
+
+inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
+  return detail::SaveSceneContainer(path, scene, "ILMS");
+}
+inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
+  return detail::LoadSceneContainer(path, out, "ILMS");
 }
 
 // Default scene used the first time a project is opened: one Cube at

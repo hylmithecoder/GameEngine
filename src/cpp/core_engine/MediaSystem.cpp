@@ -1,4 +1,5 @@
 #include "../../../include/core_engine/MediaSystem.hpp"
+#include "../../../include/core_engine/MeshRemap.hpp"
 #include "../../../include/core_engine/Debugger.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include <algorithm>
@@ -89,6 +90,54 @@ void MediaSystem::Start(SceneRenderer &renderer) {
   }
   audioRequests_.clear();
   UpdateAudioGains(renderer);
+}
+
+void MediaSystem::OnMeshesSpawned(SceneRenderer &renderer,
+                                  const std::vector<size_t> &meshes) {
+  if (state_ == State::Stopped)
+    return; // Start() handles everything that exists when Play begins
+  for (const size_t mesh : meshes) {
+    if (mesh >= renderer.GetMesh3DCount() ||
+        !renderer.meshes3d[mesh].audio.playOnStart)
+      continue;
+    if (sources_.size() <= mesh)
+      sources_.resize(mesh + 1, 0);
+    if (!sources_[mesh])
+      sources_[mesh] = StartAudio(renderer, mesh);
+  }
+  UpdateAudioGains(renderer);
+}
+
+void MediaSystem::RemapMeshes(SceneRenderer &renderer,
+                              const std::vector<int> &remap) {
+  std::vector<VoiceId> sources;
+  for (size_t i = 0; i < sources_.size(); ++i) {
+    const int to = RemapMeshIndex(remap, i);
+    if (to < 0) {
+      if (sources_[i])
+        audio_.StopVoice(sources_[i]);
+      continue;
+    }
+    if (sources.size() <= (size_t)to)
+      sources.resize((size_t)to + 1, 0);
+    sources[(size_t)to] = sources_[i];
+  }
+  sources_ = std::move(sources);
+  std::vector<VideoSlot> videos;
+  for (size_t i = 0; i < videos_.size(); ++i) {
+    const int to = RemapMeshIndex(remap, i);
+    if (to < 0) {
+      ResetVideo(renderer, videos_[i]);
+      continue;
+    }
+    while (videos.size() <= (size_t)to) {
+      videos.emplace_back();
+      videos.back().playing = state_ != State::Stopped;
+    }
+    videos[(size_t)to] = std::move(videos_[i]);
+  }
+  videos_ = std::move(videos);
+  RemapMeshKeys(audioRequests_, remap);
 }
 
 VoiceId MediaSystem::StartAudio(SceneRenderer &renderer, size_t mesh) {

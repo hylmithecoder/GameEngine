@@ -2,6 +2,7 @@
 // result back (positions, character ground). See Physics.hpp for roles.
 #include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/Physics.hpp"
+#include "../../../include/core_engine/MeshRemap.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,13 @@ bool DrivenByMovementScript(const SceneRenderer::Mesh3D &mesh) {
   return mesh.movable && !mesh.movementScript.empty();
 }
 } // namespace
+
+void PhysicsSystem::RemapMeshes(const std::vector<int> &remap) {
+  RemapMeshKeys(velocities_, remap);
+  RemapMeshKeys(pendingForces_, remap);
+  RemapMeshKeys(grounded_, remap);
+  world_.RemapOwners(remap);
+}
 
 void PhysicsSystem::Reset() {
   world_.bodies.clear();

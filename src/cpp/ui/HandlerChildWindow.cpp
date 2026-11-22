@@ -2,6 +2,7 @@
 #include "../../../include/core_engine/IlmeeeScene.hpp"
 #include "../../../include/core_engine/MovementScript.hpp"
 #include "../../../include/core_engine/InspectMode.hpp"
+#include "../../../include/core_engine/Prefab.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/core_engine/core_editor/EditorDockSpace.hpp"
@@ -355,10 +356,11 @@ void MainWindow::RenderHierarchyWindow() {
   enum class Op {
     None, Spawn, Delete, Reparent,
     SpawnCanvas, DeleteCanvas, SpawnUiText, SpawnUiImage, SpawnUiButton, SpawnUiJoystick,
-    DeleteUi, MoveUi
+    DeleteUi, MoveUi, CreatePrefab, SpawnPrefab
   };
   Op op = Op::None;
   int opIndex = -1, opParent = -1, opKind = 0;
+  std::string opPath; // SpawnPrefab
   const bool locked = SceneStructureLocked();
 
   auto createMenu = [&](int parent) {
@@ -439,6 +441,15 @@ void MainWindow::RenderHierarchyWindow() {
         opIndex = *(const int *)pl->Data;
         opParent = newParent;
       }
+      // A prefab from the Explorer spawns as a child of this item.
+      const ImGuiPayload *peek = GetDragDropPayload();
+      if (!locked && peek && peek->IsDataType("ASSET_PATH") &&
+          ilmeee::IsPrefabPath((const char *)peek->Data))
+        if (const ImGuiPayload *pl = AcceptDragDropPayload("ASSET_PATH")) {
+          op = Op::SpawnPrefab;
+          opPath = (const char *)pl->Data;
+          opParent = newParent;
+        }
       EndDragDropTarget();
     };
 
@@ -508,6 +519,13 @@ void MainWindow::RenderHierarchyWindow() {
           opIndex = (int)i;
           opParent = -1;
         }
+        if (MenuItem("Create Prefab", nullptr, false, !locked)) {
+          op = Op::CreatePrefab;
+          opIndex = (int)i;
+        }
+        if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+          SetTooltip("Save this object and its children to assets/prefabs/\n"
+                     "(or drag it onto a folder in the Explorer)");
         Separator();
         bool lastCam = DeletingRemovesLastCamera(i);
         if (MenuItem("Delete", "Del", false, !locked && !lastCam)) {
@@ -724,6 +742,18 @@ void MainWindow::RenderHierarchyWindow() {
     if (sceneRenderer->SetMesh3DParent((size_t)opIndex, opParent, true))
       RecordEditorHistory();
     break;
+  case Op::CreatePrefab:
+    CreatePrefabFromObject((size_t)opIndex);
+    break;
+  case Op::SpawnPrefab:
+    // Under a parent: at its origin; at the root: where the prefab was made.
+    if (opParent >= 0) {
+      const glm::vec3 origin(0.0f);
+      SpawnPrefabAsset(opPath, opParent, &origin);
+    } else {
+      SpawnPrefabAsset(opPath, -1);
+    }
+    break;
   case Op::None:
     break;
   case Op::SpawnCanvas:
@@ -816,6 +846,9 @@ void MainWindow::RenderExplorerWindow(
   (void)assetPath;
   Begin(ICON_UI_EXPLORER " Explorer###Explorer", nullptr,
         ImGuiWindowFlags_NoCollapse);
+  projectHandler.renderCreateDataAssetMenu = [this](const std::string &folder) {
+    RenderCreateDataAssetMenu(folder);
+  };
   projectHandler.onFileClicked = [this](const HandlerProject::AssetFile &file) {
     if (ilmeee::IsAnimationPath(file.fullPath) ||
         ilmeee::IsAnimationControllerPath(file.fullPath))
@@ -927,6 +960,13 @@ void MainWindow::RenderExplorerWindow(
   BeginChild("AssetRoot", ImVec2(0, 0), true);
   projectHandler.DrawFolderGridView();
   EndChild();
+  // Hierarchy object dropped on the folder view: save it as a prefab there.
+  if (!SceneStructureLocked() && BeginDragDropTarget()) {
+    if (const ImGuiPayload *pl = AcceptDragDropPayload("ILMEEE_MESH"))
+      CreatePrefabFromObject((size_t)*(const int *)pl->Data,
+                             projectHandler.currentDirectory);
+    EndDragDropTarget();
+  }
 
   EndGroup();
 
@@ -940,6 +980,12 @@ void MainWindow::RenderInspectorWindow() {
   ImVec2 pos = GetWindowPos();
   ImVec2 size = GetWindowSize();
   HandleBackground(pos, size);
+
+  if (UpdateInspectedDataAsset()) {
+    RenderDataAssetInspector();
+    End();
+    return;
+  }
 
   if (selectedUiElement == -2 ||
       (selectedUiElement >= 0 &&
@@ -2376,6 +2422,7 @@ void MainWindow::RenderSceneWindow() {
                ext == ".psd");
           const bool isVideo = ilmeee::IsVideoClipPath(assetPath);
           const bool isAudio = ilmeee::IsAudioClipPath(assetPath);
+          const bool isPrefab = ilmeee::IsPrefabPath(assetPath);
           // Ground point under the drop (or a few units ahead of the camera).
           const auto dropPoint = [&]() {
             glm::vec3 world(0.0f);
@@ -2387,7 +2434,12 @@ void MainWindow::RenderSceneWindow() {
             return world;
           };
 
-          if (isModel) {
+          if (isPrefab) {
+            const glm::vec3 at = dropPoint();
+            if (SpawnPrefabAsset(assetPath, -1, &at) >= 0)
+              projectHandler.ShowNotification("Prefab added", fname,
+                                              ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+          } else if (isModel) {
             bool ok = (ext == ".pmx")   ? sceneRenderer->LoadPMXMesh(assetPath)
                       : (ext == ".fbx") ? sceneRenderer->LoadFbxMesh(assetPath)
                                         : sceneRenderer->LoadObjMesh(assetPath);
@@ -3780,113 +3832,7 @@ bool MainWindow::Save3DSceneToPath(const std::string &targetPath) {
   const std::string activeProject = projectHandler.projectPath;
   namespace fs = std::filesystem;
 
-  ilmeee::IlmeeeScene scene;
-  scene.backgroundColor = sceneRenderer->GetBackgroundColor();
-  scene.npr = sceneRenderer->GetNpr();
-  for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i) {
-    ilmeee::SceneEntity e;
-    e.name = sceneRenderer->GetMesh3DName(i);
-    // Entities are written in mesh order, so the mesh index is the entity
-    // index and the parent link carries over unchanged.
-    e.parent = sceneRenderer->GetMesh3DParent(i);
-    e.position = sceneRenderer->GetMesh3DPosition(i);
-    e.rotationEuler = sceneRenderer->GetMesh3DRotation(i);
-    e.scale = sceneRenderer->GetMesh3DScale(i);
-    const auto &mesh = sceneRenderer->meshes3d[i];
-    e.objectId = mesh.objectId;
-    e.scripts = mesh.scripts;
-    e.movable = mesh.movable;
-    e.movementScript = mesh.movementScript;
-    e.movementSpeed = mesh.movementSpeed;
-    e.movementRig = mesh.movementRig;
-    e.audio = mesh.audio;
-    e.video = mesh.video;
-    e.dialog = mesh.dialog;
-    e.animation = mesh.animation;
-    e.springBones = mesh.springBones;
-    e.rigidBody.enabled = mesh.hasPhysics;
-    e.rigidBody.useGravity = mesh.useGravity;
-    e.rigidBody.isKinematic = mesh.isKinematic;
-    e.rigidBody.mass = mesh.mass;
-    e.rigidBody.drag = mesh.drag;
-    e.rigidBody.gravityY = mesh.gravityY;
-    e.collider = mesh.collider;
-    e.worldText = mesh.worldText;
-
-    if (mesh.isWorldText) {
-      e.kind = ilmeee::PrimitiveKind::WorldText;
-    } else if (mesh.isAudioEmitter) {
-      e.kind = ilmeee::PrimitiveKind::AudioSource;
-    } else if (sceneRenderer->IsMesh3DLight(i)) {
-      e.kind = ilmeee::PrimitiveKind::Light;
-      e.lightGamma = sceneRenderer->GetMesh3DLightGamma(i);
-      e.lightColor = sceneRenderer->GetMesh3DLightColor(i);
-      e.lightIntensity = sceneRenderer->GetMesh3DLightIntensity(i);
-      e.lightType = sceneRenderer->GetMesh3DLightType(i);
-      e.lightRange = sceneRenderer->GetMesh3DLightRange(i);
-      e.lightSpotAngle = sceneRenderer->GetMesh3DLightSpotAngle(i);
-    } else if (sceneRenderer->IsMesh3DCamera(i)) {
-      e.kind = ilmeee::PrimitiveKind::Camera;
-      e.camProjection = sceneRenderer->GetMesh3DCameraProjection(i);
-      e.camFov = sceneRenderer->GetMesh3DCameraFov(i);
-      e.camOrthoSize = sceneRenderer->GetMesh3DCameraOrthoSize(i);
-      e.camNear = sceneRenderer->GetMesh3DCameraNear(i);
-      e.camFar = sceneRenderer->GetMesh3DCameraFar(i);
-    } else {
-      std::string path = sceneRenderer->GetMesh3DPath(i);
-      // Primitives carry a synthetic "<primitive:kind>" path — the reliable
-      // way to recover their kind (name can be renamed by the user).
-      if (path.rfind("<primitive:", 0) == 0) {
-        if (path.find("sphere") != std::string::npos)
-          e.kind = ilmeee::PrimitiveKind::Sphere;
-        else if (path.find("plane") != std::string::npos)
-          e.kind = ilmeee::PrimitiveKind::Plane;
-        else if (path.find("screen") != std::string::npos)
-          e.kind = ilmeee::PrimitiveKind::Screen;
-        else
-          e.kind = ilmeee::PrimitiveKind::Cube;
-      } else if (path.empty()) {
-        e.kind = ilmeee::PrimitiveKind::Cube; // unknown mesh → safe default
-      } else {
-        fs::path absPath = path;
-        if (!activeProject.empty()) {
-          std::error_code ec;
-          fs::path rel = fs::relative(absPath, activeProject, ec);
-          e.externalPath = ec ? path : rel.string();
-        } else {
-          e.externalPath = path;
-        }
-        std::string ext = absPath.extension().string();
-        if (ext == ".pmx" || ext == ".PMX")
-          e.kind = ilmeee::PrimitiveKind::ExternalPmx;
-        else
-          e.kind = ilmeee::PrimitiveKind::ExternalObj;
-      }
-
-      // Capture per-surface texture bindings so re-textured surfaces
-      // survive a save/load round-trip. Paths under the project are stored
-      // relative; textures elsewhere are stored absolute.
-      uint32_t sc = sceneRenderer->GetMesh3DSubmeshCount(i);
-      for (uint32_t s = 0; s < sc; ++s) {
-        const std::string &tex = sceneRenderer->GetMesh3DSubmeshTexture(i, s);
-        if (tex.empty())
-          continue;
-        ilmeee::SurfaceTexture st;
-        st.surfaceIndex = s;
-        if (!activeProject.empty()) {
-          std::error_code ec2;
-          fs::path rel = fs::relative(fs::path(tex), activeProject, ec2);
-          std::string relStr = ec2 ? std::string() : rel.string();
-          st.texturePath =
-              (!relStr.empty() && relStr.rfind("..", 0) != 0) ? relStr : tex;
-        } else {
-          st.texturePath = tex;
-        }
-        e.surfaceTextures.push_back(std::move(st));
-      }
-    }
-    scene.entities.push_back(std::move(e));
-  }
+  ilmeee::IlmeeeScene scene = ilmeee::CaptureScene(*sceneRenderer, activeProject);
 
   if (hasGameUiCanvas)
     ilmeee::AppendGameUIToScene(scene, gameUi);

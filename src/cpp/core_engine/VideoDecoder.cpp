@@ -1,4 +1,6 @@
 #include "../../../include/core_engine/VideoDecoder.hpp"
+#include "../../../include/core_engine/MediaComponents.hpp"
+#include "../../../include/core_engine/MediaHttp.hpp"
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -46,7 +48,7 @@ struct VideoDecoder::Impl {
     swr_free(&swr);
     avcodec_free_context(&vdec);
     avcodec_free_context(&adec);
-    avformat_close_input(&fmt);
+    CloseMediaInput(&fmt);
   }
 };
 
@@ -61,8 +63,16 @@ bool VideoDecoder::Open(const std::string &path, bool loop,
       *error = msg;
     return false;
   };
-  if (avformat_open_input(&impl->fmt, path.c_str(), nullptr, nullptr) < 0)
-    return fail("cannot open file");
+  // Close() left stop_ set; clear it so the interrupt below only fires
+  // when this decoder is closed while a network read is blocking.
+  stop_ = false;
+  const AVIOInterruptCB interrupt = {
+      [](void *self) -> int {
+        return static_cast<VideoDecoder *>(self)->stop_.load() ? 1 : 0;
+      },
+      this};
+  if (OpenMediaInput(&impl->fmt, path, &interrupt) < 0)
+    return fail(IsMediaUrl(path) ? "cannot open stream URL" : "cannot open file");
   if (avformat_find_stream_info(impl->fmt, nullptr) < 0)
     return fail("cannot read stream info");
 

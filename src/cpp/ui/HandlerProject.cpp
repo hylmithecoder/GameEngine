@@ -1233,6 +1233,11 @@ void HandlerProject::DrawFolderGridView() {
           ImGui::EndMenu();
         }
 
+        if (renderCreateDataAssetMenu && ImGui::BeginMenu("Data Asset")) {
+          renderCreateDataAssetMenu(currentDirectory);
+          ImGui::EndMenu();
+        }
+
         if (ImGui::MenuItem("Shader")) {
           ShowNotification("New Shader", "Creating new shader...",
                            ImVec4(0.4f, 0.7f, 1.0f, 1.0f));

@@ -1,3 +1,5 @@
+#include "../../../include/core_engine/Prefab.hpp"
+#include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include "core_engine/AnimationTooling.hpp"
 #include "core_engine/AnimationController.hpp"
@@ -289,6 +291,7 @@ const char *ScriptTypeName(ilmeee::ScriptValueType type) {
   case ilmeee::ScriptValueType::Object: return "GameObject";
   case ilmeee::ScriptValueType::Vec3: return "Vec3";
   case ilmeee::ScriptValueType::String: return "string";
+  case ilmeee::ScriptValueType::Asset: return "Asset";
   default: return "List";
   }
 }
@@ -306,6 +309,8 @@ json ScalarJson(ilmeee::ScriptValueType type, const ilmeee::ScriptValue &v,
   case T::Vec3: return json::array({v.vec3[0], v.vec3[1], v.vec3[2]});
   case T::String: return v.string;
   case T::Object: return object(v.object);
+  case T::Asset: // project-relative .ilmeeeasset path
+    return v.string.empty() ? json(nullptr) : json(v.string);
   default: return nullptr;
   }
 }
@@ -336,6 +341,17 @@ std::string ScalarFromJson(ilmeee::ScriptValueType type, const json &in,
   case T::Object:
     if (!object(in, v.object))
       return "expects a scene object index, a UI element name, or null";
+    return {};
+  case T::Asset:
+    if (in.is_null()) {
+      v.string.clear();
+      return {};
+    }
+    if (!in.is_string() || in.get<std::string>().empty() ||
+        std::filesystem::path(in.get<std::string>()).is_absolute() ||
+        std::filesystem::path(in.get<std::string>()).extension() != ".ilmeeeasset")
+      return "expects a project-relative .ilmeeeasset path or null";
+    v.string = in.get<std::string>();
     return {};
   default: return "has an unsupported type";
   }
@@ -465,6 +481,22 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"running", deviceMonitor.Running()},
             {"totalBuffered", log.size()},
             {"lines", std::move(out)}};
+  }
+  if (name == "list_prefabs") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    json prefabs = json::array();
+    for (const auto &path : ilmeee::FindPrefabs(projectHandler.projectPath)) {
+      ilmeee::IlmeeeScene prefab;
+      const bool ok = ilmeee::LoadPrefab(
+          (std::filesystem::path(projectHandler.projectPath) / path).string(),
+          prefab);
+      prefabs.push_back({{"path", path},
+                         {"valid", ok},
+                         {"root", ok ? prefab.entities[0].name : ""},
+                         {"objects", ok ? prefab.entities.size() : 0}});
+    }
+    return {{"prefabs", prefabs}, {"count", prefabs.size()}};
   }
   if (name == "list_assets") {
     if (projectHandler.projectPath.empty())
@@ -1103,7 +1135,20 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
   const auto envJson = [&]() -> json {
     const glm::vec4 bg = sceneRenderer->GetBackgroundColor();
     const auto &npr = sceneRenderer->GetNpr();
+    const auto &bloom = sceneRenderer->GetBloom();
     return {{"backgroundColor", json::array({bg.r, bg.g, bg.b, bg.a})},
+            {"bloom",
+             {{"enabled", bloom.enabled},
+              {"threshold", bloom.threshold},
+              {"softKnee", bloom.softKnee},
+              {"intensity", bloom.intensity},
+              {"radius", bloom.radius},
+              {"iterations", bloom.iterations},
+              {"tint", Array(bloom.tint)},
+              {"sceneView", bloom.sceneView},
+              {"available", sceneRenderer->BloomAvailable()},
+              {"note", "Shown in the Game tab / built game; sceneView also "
+                       "applies it to the Scene view (and its screenshots)"}}},
             {"sunDirection", Array(sceneRenderer->sunLight.direction)},
             {"sunColor", Array(sceneRenderer->sunLight.color)},
             {"sunIntensity", sceneRenderer->sunLight.intensity},
@@ -1834,6 +1879,77 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
             {"speed", animation.speed}, {"saved", false},
             {"note", "Plays in Play mode; call save_scene to keep it"}};
   }
+  if (name == "create_prefab") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad = UnknownKey(args, {"index", "folder"}); !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    size_t i;
+    if (!Index(args, "index", count, i))
+      return Error("Invalid object index");
+    std::string folder;
+    if (!Optional(args, "folder", folder))
+      return Error("folder must be a string");
+    namespace fs = std::filesystem;
+    const fs::path project(projectHandler.projectPath);
+    if (!folder.empty()) {
+      const fs::path rel = fs::path(folder).lexically_normal();
+      if (rel.is_absolute() || rel.empty() || *rel.begin() == "..")
+        return Error("folder must be a project-relative path");
+      folder = (project / rel).string();
+    }
+    const auto before = ilmeee::FindPrefabs(project);
+    const ilmeee::IlmeeeScene captured =
+        ilmeee::CapturePrefab(*sceneRenderer, i, project);
+    if (!CreatePrefabFromObject(i, folder))
+      return Error("Could not create the prefab (see the editor Console)");
+    std::string created;
+    for (const auto &path : ilmeee::FindPrefabs(project))
+      if (std::find(before.begin(), before.end(), path) == before.end())
+        created = path;
+    return {{"created", true},
+            {"path", created},
+            {"objects", captured.entities.size()},
+            {"externalReferences", ilmeee::ExternalReferences(captured)}};
+  }
+  if (name == "instantiate_prefab") {
+    if (projectHandler.projectPath.empty())
+      return Error("No project is open");
+    if (const std::string bad = UnknownKey(args, {"path", "position", "parent"});
+        !bad.empty())
+      return Error("Unknown argument '" + bad + "'");
+    std::string path;
+    if (!Optional(args, "path", path) || path.empty())
+      return Error("path is required");
+    namespace fs = std::filesystem;
+    const fs::path rel = fs::path(path).lexically_normal();
+    if (rel.is_absolute() || rel.empty() || *rel.begin() == ".." ||
+        !ilmeee::IsPrefabPath(rel))
+      return Error("path must be a project-relative .ilmeeeprefab");
+    int parent = -1;
+    if (args.contains("parent")) {
+      if (!args["parent"].is_number_integer())
+        return Error("parent must be an integer (-1 or object index)");
+      const auto p = args["parent"].get<std::int64_t>();
+      if (p < -1 || p >= static_cast<std::int64_t>(count))
+        return Error("parent must be -1 (root) or a valid object index");
+      parent = static_cast<int>(p);
+    }
+    glm::vec3 position(0.0f);
+    if (!Vec3(args, "position", position))
+      return Error("position must be [x, y, z]");
+    const size_t before = sceneRenderer->GetMesh3DCount();
+    const int root = SpawnPrefabAsset(rel.generic_string(), parent,
+                                      args.contains("position") ? &position
+                                                                : nullptr);
+    if (root < 0)
+      return Error("Could not spawn " + rel.generic_string() +
+                   " (missing, damaged, or its root failed to load)");
+    return {{"index", root},
+            {"name", sceneRenderer->GetMesh3DName((size_t)root)},
+            {"objectsSpawned", sceneRenderer->GetMesh3DCount() - before},
+            {"saved", false}};
+  }
   if (name == "delete_object") {
     size_t i;
     if (!Index(args, "index", count, i))
@@ -1986,7 +2102,8 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
   if (name == "set_scene_environment") {
     if (const std::string bad = UnknownKey(
             args, {"backgroundColor", "sunDirection", "sunColor", "sunIntensity",
-                   "sunVisible", "gridVisible", "nprPreset", "npr"});
+                   "sunVisible", "gridVisible", "nprPreset", "npr",
+                   "bloomPreset", "bloom"});
         !bad.empty())
       return Error("Unknown argument '" + bad + "'");
     if (args.contains("backgroundColor")) {
@@ -2088,6 +2205,41 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
     }
     if (nprChanged)
       sceneRenderer->SetNpr(npr);
+    ilmeee::BloomSettings bloom = sceneRenderer->GetBloom();
+    bool bloomChanged = false;
+    if (args.contains("bloomPreset")) {
+      std::string preset;
+      if (!Optional(args, "bloomPreset", preset))
+        return Error("bloomPreset must be a string");
+      if (preset == "off") {
+        bloom.enabled = false;
+      } else if (!ilmeee::ApplyBloomPreset(bloom, preset)) {
+        return Error("bloomPreset must be subtle, neon_night, dreamy or off");
+      }
+      bloomChanged = true;
+    }
+    if (auto it = args.find("bloom"); it != args.end()) {
+      if (!it->is_object())
+        return Error("bloom must be an object");
+      const json &b = *it;
+      if (const std::string bad = UnknownKey(
+              b, {"enabled", "threshold", "softKnee", "intensity", "radius",
+                  "iterations", "tint", "sceneView"});
+          !bad.empty())
+        return Error("Unknown bloom field '" + bad + "'");
+      if (!Optional(b, "enabled", bloom.enabled) ||
+          !Optional(b, "threshold", bloom.threshold) ||
+          !Optional(b, "softKnee", bloom.softKnee) ||
+          !Optional(b, "intensity", bloom.intensity) ||
+          !Optional(b, "radius", bloom.radius) ||
+          !Optional(b, "iterations", bloom.iterations) ||
+          !Vec3(b, "tint", bloom.tint) ||
+          !Optional(b, "sceneView", bloom.sceneView))
+        return Error("Invalid bloom field type");
+      bloomChanged = true;
+    }
+    if (bloomChanged)
+      sceneRenderer->SetBloom(bloom); // clamps to the documented ranges
     RecordEditorHistory();
     return envJson();
   }

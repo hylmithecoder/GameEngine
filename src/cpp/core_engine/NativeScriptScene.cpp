@@ -4,10 +4,12 @@
 #include "../../../include/core_engine/MediaSystem.hpp"
 #include "../../../include/core_engine/Physics.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
+#include "../../../include/core_engine/SceneLoader.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <set>
 
 namespace ilmeee {
 namespace {
@@ -20,6 +22,47 @@ int Find(void *opaque, uint64_t id) {
     if (renderer->meshes3d[i].objectId == id)
       return static_cast<int>(i);
   return -1;
+}
+// Mesh indices of `root` and everything below it.
+std::vector<size_t> Subtree(const SceneRenderer &renderer, size_t root) {
+  std::vector<size_t> out;
+  for (size_t i = 0; i < renderer.meshes3d.size(); ++i)
+    if (renderer.IsMesh3DInSubtree(i, root))
+      out.push_back(i);
+  return out;
+}
+void SceneLog(NativeScriptSceneContext &context, const std::string &message) {
+  if (context.log)
+    context.log(message);
+}
+// Loaded once per path per Play; null (warned once) when unusable.
+std::shared_ptr<const IlmeeeScene> LoadPrefabCached(
+    NativeScriptSceneContext &context, const std::string &path) {
+  namespace fs = std::filesystem;
+  const std::string key = fs::path(path).lexically_normal().generic_string();
+  if (const auto it = context.prefabs.find(key); it != context.prefabs.end())
+    return it->second;
+  const auto fail = [&](const std::string &why) {
+    if (context.failedPrefabs.insert(key).second)
+      SceneLog(context, "[ERROR] [Scripts] Instantiate '" + key + "': " + why);
+    return nullptr;
+  };
+  if (context.failedPrefabs.contains(key))
+    return nullptr;
+  if (!IsPrefabPath(key))
+    return fail("not a " + std::string(kPrefabExtension) + " file");
+  std::error_code ec;
+  const fs::path root = fs::weakly_canonical(context.projectRoot, ec);
+  const fs::path file = fs::weakly_canonical(context.projectRoot / key, ec);
+  const auto rel = file.lexically_relative(root).generic_string();
+  if (ec || fs::path(key).is_absolute() || rel.empty() ||
+      rel.rfind("..", 0) == 0)
+    return fail("path must be inside the project");
+  auto prefab = std::make_shared<IlmeeeScene>();
+  if (!LoadPrefab(file.string(), *prefab))
+    return fail("missing or not a valid prefab");
+  context.prefabs.emplace(key, prefab);
+  return prefab;
 }
 UiElement *FindUi(void *opaque, uint64_t id) {
   auto *ui = static_cast<NativeScriptSceneContext *>(opaque)->ui;
@@ -681,7 +724,183 @@ script::HostApi ScriptSceneHost(NativeScriptSceneContext &context) {
     }
     return false;
   };
+  host.instantiate = [](void *ctx, const char *path, const script::Vec3 *position,
+                        uint64_t parent) -> uint64_t {
+    auto &context = *static_cast<NativeScriptSceneContext *>(ctx);
+    if (!context.renderer || !path || !*path)
+      return 0;
+    const auto prefab = LoadPrefabCached(context, path);
+    if (!prefab)
+      return 0;
+    PrefabSpawnOptions options;
+    if (parent) {
+      options.parent = Find(ctx, parent);
+      if (options.parent < 0) {
+        SceneLog(context, std::string("[WARNING] [Scripts] Instantiate '") +
+                              path + "': parent is not a scene object; "
+                                     "spawned at the root.");
+      }
+    }
+    if (position && Finite(*position)) {
+      options.overridePosition = true;
+      options.position = ToEngine(*position);
+    }
+    auto &renderer = *context.renderer;
+    const auto result =
+        InstantiatePrefab(renderer, *prefab, context.projectRoot, options);
+    if (!result.ok()) {
+      SceneLog(context, std::string("[ERROR] [Scripts] Instantiate '") + path +
+                            "': the root object could not be loaded.");
+      return 0;
+    }
+    if (result.failed)
+      SceneLog(context, std::string("[WARNING] [Scripts] Instantiate '") +
+                            path + "': " + std::to_string(result.failed) +
+                            " object(s) could not be loaded.");
+    ++context.spawnedCount;
+    const uint64_t rootId = renderer.meshes3d[result.meshes[0]].objectId;
+    if (context.media)
+      context.media->OnMeshesSpawned(renderer, result.meshes);
+    if (context.scripts) {
+      // Copies: an Awake that spawns again may reallocate meshes3d.
+      std::vector<std::vector<NativeScriptBinding>> bindings;
+      std::vector<uint64_t> ids;
+      for (const size_t mesh : result.meshes) {
+        bindings.push_back(renderer.meshes3d[mesh].scripts);
+        ids.push_back(renderer.meshes3d[mesh].objectId);
+      }
+      std::vector<ScriptOwner> owners;
+      for (size_t i = 0; i < ids.size(); ++i)
+        owners.push_back({ids[i], &bindings[i]});
+      context.scripts->Attach(owners);
+    }
+    return rootId;
+  };
+  host.destroy = [](void *ctx, uint64_t id) {
+    auto &context = *static_cast<NativeScriptSceneContext *>(ctx);
+    const int index = Find(ctx, id);
+    if (index < 0)
+      return false; // UI elements are not destroyable (yet)
+    if (std::find(context.pendingDestroy.begin(), context.pendingDestroy.end(),
+                  id) != context.pendingDestroy.end())
+      return true;
+    context.pendingDestroy.push_back(id);
+    if (context.scripts) {
+      std::vector<uint64_t> ids;
+      for (const size_t mesh : Subtree(*context.renderer, (size_t)index))
+        ids.push_back(context.renderer->meshes3d[mesh].objectId);
+      context.scripts->Detach(ids);
+    }
+    return true;
+  };
   return host;
+}
+void ScriptSceneBeginPlay(NativeScriptSceneContext &context) {
+  context.pendingDestroy.clear();
+  context.prefabs.clear();
+  context.failedPrefabs.clear();
+  context.playOrder.clear();
+  context.playSnapshot = {};
+  context.spawnedCount = 0;
+  if (!context.renderer)
+    return;
+  for (const auto &mesh : context.renderer->meshes3d)
+    context.playOrder.push_back(mesh.objectId);
+  if (context.recordForRestore)
+    context.playSnapshot = CaptureScene(*context.renderer, context.projectRoot);
+}
+void ScriptSceneFlushDestroyed(NativeScriptSceneContext &context) {
+  if (context.pendingDestroy.empty() || !context.renderer)
+    return;
+  auto &renderer = *context.renderer;
+  const auto pending = std::move(context.pendingDestroy);
+  context.pendingDestroy.clear();
+  for (const uint64_t id : pending) {
+    const int index = Find(&context, id);
+    if (index < 0)
+      continue; // already gone with a destroyed parent
+    if (context.dialog && context.ui && context.dialog->IsTalking())
+      for (const size_t mesh : Subtree(renderer, (size_t)index))
+        if (renderer.meshes3d[mesh].objectId == context.dialog->Owner()) {
+          context.dialog->End(renderer, *context.ui);
+          break;
+        }
+    std::vector<int> remap;
+    renderer.RemoveMesh3D((size_t)index, &remap);
+    if (context.media)
+      context.media->RemapMeshes(renderer, remap);
+    if (context.physics)
+      context.physics->RemapMeshes(remap);
+    if (context.movement)
+      context.movement->RemapMeshes(remap);
+    if (context.onMeshesRemoved)
+      context.onMeshesRemoved(remap);
+  }
+}
+bool ScriptSceneRestore(NativeScriptSceneContext &context) {
+  context.pendingDestroy.clear();
+  if (!context.renderer || !context.recordForRestore)
+    return false;
+  auto &renderer = *context.renderer;
+  bool changed = false;
+  const std::unordered_set<uint64_t> original(context.playOrder.begin(),
+                                              context.playOrder.end());
+  // 1. Everything spawned during Play goes away.
+  for (size_t i = 0; i < renderer.meshes3d.size();) {
+    if (original.contains(renderer.meshes3d[i].objectId)) {
+      ++i;
+      continue;
+    }
+    std::vector<int> remap;
+    renderer.RemoveMesh3D(i, &remap);
+    if (context.onMeshesRemoved)
+      context.onMeshesRemoved(remap);
+    changed = true;
+  }
+  // 2. Destroyed scene objects come back from the Play-start snapshot,
+  // with their original ids (references to them stay valid).
+  std::unordered_set<uint64_t> present;
+  for (const auto &mesh : renderer.meshes3d)
+    present.insert(mesh.objectId);
+  const auto &entities = context.playSnapshot.entities;
+  for (size_t ei = 0; ei < entities.size(); ++ei) {
+    if (present.contains(entities[ei].objectId))
+      continue;
+    const int p = entities[ei].parent;
+    if (p >= 0 && !present.contains(entities[(size_t)p].objectId))
+      continue; // restored together with its missing ancestor
+    PrefabSpawnOptions options;
+    options.freshIds = false;
+    options.parent = p >= 0 ? Find(&context, entities[(size_t)p].objectId) : -1;
+    const auto result = InstantiatePrefab(
+        renderer, ExtractSubtree(context.playSnapshot, (int)ei),
+        context.projectRoot, options);
+    for (const size_t mesh : result.meshes)
+      present.insert(renderer.meshes3d[mesh].objectId);
+    if (!result.ok() || result.failed)
+      SceneLog(context, "[WARNING] Could not fully restore '" +
+                            entities[ei].name + "' after Stop.");
+    changed |= result.ok();
+  }
+  // 3. Original order (Hierarchy order and the saved file depend on it).
+  if (changed) {
+    std::unordered_map<uint64_t, size_t> indexOf;
+    for (size_t i = 0; i < renderer.meshes3d.size(); ++i)
+      indexOf[renderer.meshes3d[i].objectId] = i;
+    std::vector<size_t> order;
+    std::vector<bool> used(renderer.meshes3d.size(), false);
+    for (const uint64_t id : context.playOrder)
+      if (const auto it = indexOf.find(id); it != indexOf.end()) {
+        order.push_back(it->second);
+        used[it->second] = true;
+      }
+    for (size_t i = 0; i < used.size(); ++i)
+      if (!used[i])
+        order.push_back(i);
+    renderer.ReorderMeshes3D(order);
+  }
+  context.playSnapshot = {};
+  return changed;
 }
 void ScriptSceneDispatchPhysics(NativeScriptSceneContext &context,
                                 NativeScripts &scripts) {
@@ -701,6 +920,7 @@ void ScriptSceneDispatchPhysics(NativeScriptSceneContext &context,
 }
 void ScriptSceneEndFrame(NativeScriptSceneContext &context) {
   context.previousKeys = KeyBits(context.input);
+  ScriptSceneFlushDestroyed(context);
 }
 std::vector<ScriptOwner> ScriptSceneOwners(SceneRenderer &renderer, GameUI *ui) {
   std::vector<ScriptOwner> owners;

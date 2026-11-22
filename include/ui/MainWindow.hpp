@@ -27,6 +27,7 @@
 #include <list>
 #include <memory>
 #include <sys/types.h>
+#include <unordered_set>
 #include <vector>
 #define IMGUI_HAS_DOCK
 #define IMGUI_HAS_VIEWPORT
@@ -92,6 +93,19 @@ private:
   bool RenderScriptValueField(ilmeee::ScriptValue &value, const char *label,
                               bool &finished);
   bool RenderScriptObjectField(uint64_t &object, const char *label);
+  // .ilmeeeasset picker (combo + drag from Explorer) for AssetRef<T> fields;
+  // `assetClass` empty accepts any ScriptableObject.
+  bool RenderScriptPrefabField(std::string &path, const char *label);
+  bool RenderScriptAssetField(std::string &path, const std::string &assetClass,
+                              const char *label);
+  // Data assets (ScriptableObject): Explorer "Create > Data Asset" menu and
+  // the Inspector shown while a .ilmeeeasset is selected in the Explorer.
+  void RenderCreateDataAssetMenu(const std::string &folder);
+  bool UpdateInspectedDataAsset(); // true while a data asset is inspected
+  void RenderDataAssetInspector();
+  std::string inspectedDataAsset;          // absolute path, empty = none
+  std::unordered_set<std::string> lastExplorerSelection;
+  int dataAssetMeshSelection = -1, dataAssetUiSelection = -1;
   // Combo listing the Canvas elements; true when `objectId` changed.
   bool UiElementCombo(const char *label, uint64_t &objectId);
   void RenderDialogInspector(size_t meshIndex);
@@ -312,8 +326,17 @@ public:
   int SpawnSceneObject(int kind, int parent, const glm::vec3 &localPosition);
   // Deletes the object and everything parented under it.
   void DeleteSceneObject(size_t index);
-  // Adding/removing objects is blocked while playing: Stop restores the
-  // scene by index and could not undo a structural change.
+  // Prefabs (PrefabEditor.cpp). Saves the object + its children as
+  // `<folder>/<Name>.ilmeeeprefab` (default folder: assets/prefabs).
+  bool CreatePrefabFromObject(size_t index, const std::string &folder = {});
+  // Spawns a copy of a prefab (absolute or project-relative path) under
+  // `parent` (-1 = root); `position` overrides the prefab root's local
+  // position. Names are made unique, the root is selected, history recorded.
+  // Returns the root's mesh index, or -1.
+  int SpawnPrefabAsset(const std::string &path, int parent,
+                       const glm::vec3 *position = nullptr);
+  // Editing the scene structure is blocked while playing (scripts may
+  // Instantiate/Destroy then; Stop restores the edit-time scene).
   bool SceneStructureLocked() const;
   // Deleting this subtree would leave the scene without a player camera
   // (which the Hierarchy would immediately recreate).

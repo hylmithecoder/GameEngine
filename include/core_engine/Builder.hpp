@@ -40,7 +40,10 @@ private:
   PlayState state_ = PlayState::Stopped;
 
   // Snapshot storage: serialised mesh transforms before entering play.
+  // Keyed by objectId: scripts may Instantiate/Destroy during Play, so
+  // indices do not survive until Stop.
   struct MeshSnapshot {
+    uint64_t objectId = 0;
     ilmeee::WorldTextComponent worldText;
     glm::vec3 position;
     glm::vec3 rotation;

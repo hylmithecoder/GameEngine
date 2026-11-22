@@ -15,7 +15,7 @@ extern "C" {
     #include <libavutil/imgutils.h>
     #include <libswresample/swresample.h>
     #include <libavutil/channel_layout.h>   // untuk av_get_default_channel_layout
-    #include <libavutil/samplefmt.h> 
+    #include <libavutil/samplefmt.h>
     #include <libavutil/opt.h>
     #include <libavutil/time.h>
 }
@@ -32,10 +32,10 @@ public:
         #if LIBAVFORMAT_VERSION_INT < AV_VERSION_INT(58, 9, 100)
             av_register_all();
         #endif
-        
+
         return true;
     }
-    
+
     static void Cleanup() {
         // FFmpeg cleanup jika diperlukan
     }

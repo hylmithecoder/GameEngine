@@ -155,6 +155,9 @@ public:
     return collisions_;
   }
 
+  // Meshes were removed/renumbered (see MeshRemap.hpp).
+  void RemapOwners(const std::vector<int> &remap);
+
 private:
   std::vector<std::pair<size_t, size_t>> triggers_;
   std::vector<std::pair<size_t, size_t>> collisions_;
@@ -186,6 +189,8 @@ public:
                   const glm::vec3 &impulse);
   bool AddForce(SceneRenderer &renderer, size_t index, const glm::vec3 &force);
   bool IsGrounded(size_t index) const;
+  // Objects were destroyed during Play: follow the renumbered mesh indices.
+  void RemapMeshes(const std::vector<int> &remap);
 
 private:
   PhysicsWorld world_;

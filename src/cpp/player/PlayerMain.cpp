@@ -145,8 +145,9 @@ protected:
     renderer_->SetVulkanContext(ctx.device, ctx.physicalDevice,
                                 ctx.graphicsQueue, ctx.commandPool,
                                 ctx.descriptorPool);
-    // A game creates/destroys nothing mid-frame (video textures wait for the
-    // device themselves), so let CPU and GPU overlap.
+    // Mid-frame creation/destruction waits for the device itself (video
+    // textures, Instantiate/Destroy via RemoveMesh3D), so let CPU and GPU
+    // overlap.
     waitIdleEachFrame = false;
     renderer_->SetAsyncSubmit(true);
     liveStats_ = LiveStatsRequested();
@@ -168,6 +169,9 @@ protected:
     native_.log = [](const std::string &line) { SDL_Log("%s", line.c_str()); };
     nativeContext_ = {renderer_.get(), &input_, &media_, native_.log,
                       &gameUi_, &dialog_, &physics_};
+    nativeContext_.scripts = &native_;
+    nativeContext_.movement = &movement_;
+    nativeContext_.projectRoot = root_; // Instantiate paths are game-relative
     // The Canvas is loaded before scripts so their Start() can use it.
     gameUi_ = ilmeee::GameUI{};
     if (!ilmeee::GameUIFromScene(scene, gameUi_)) {
@@ -212,6 +216,8 @@ protected:
         for (const auto &binding : mesh.scripts)
           if (binding.enabled && !native_.Ready(binding.source))
             throw std::runtime_error("Native script module missing: " + binding.source + "; rebuild this game.");
+      native_.SetAssetRoot(root_); // AssetRef paths are game-relative
+      ilmeee::ScriptSceneBeginPlay(nativeContext_);
       native_.Start(ilmeee::ScriptSceneHost(nativeContext_), ilmeee::ScriptSceneOwners(*renderer_, &gameUi_));
     } catch (const std::exception &e) {
       error_ = std::string("Script loading failed: ") + e.what();

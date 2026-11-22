@@ -1,6 +1,7 @@
 // Collision shapes, contact generation and the step solver. No renderer
 // or ImGui dependency, so TestPhysics links it alone.
 #include "../../../include/core_engine/Physics.hpp"
+#include "../../../include/core_engine/MeshRemap.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -427,6 +428,13 @@ void PhysicsWorld::Step(float dt) {
     if (a.trigger) triggers_.emplace_back(a.owner, b.owner);
     if (b.trigger) triggers_.emplace_back(b.owner, a.owner);
   }
+}
+
+void PhysicsWorld::RemapOwners(const std::vector<int> &remap) {
+  RemapMeshPairs(triggers_, remap);
+  RemapMeshPairs(collisions_, remap);
+  // Bodies are rebuilt from the scene every step.
+  bodies.clear();
 }
 
 } // namespace ilmeee

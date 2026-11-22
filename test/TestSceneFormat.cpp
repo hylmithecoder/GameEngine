@@ -4,10 +4,12 @@
 //   cmake --build build --target TestSceneFormat && ./build/bin/TestSceneFormat
 
 #include "../include/core_engine/IlmeeeScene.hpp"
+#include "../include/core_engine/Prefab.hpp"
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <vector>
 
 using namespace ilmeee;
@@ -39,7 +41,10 @@ static constexpr int kPhysicsBytes = 16 + 4 + 4 + 12 + 12 + 4 * 4;
 // v1.18 physics after it.
 static constexpr int kAnimationBytes = 4 + 2 + 4 + 4 + 2 + kSpringBytes + kPhysicsBytes;
 // v1.15 scene-level NPR block after the background colour.
-static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4;
+// v1.21 bloom after NPR: flags, threshold, softKnee, intensity, radius,
+// tint, iterations. Downgrade tests strip NPR + bloom together.
+static constexpr int kBloomBytes = 4 + 4 * 4 + 12 + 4;
+static constexpr int kNprBytes = 4 + 4 + 4 + 12 + 12 + 4 * 4 + 12 + 4 + kBloomBytes;
 
 static SceneEntity Entity(const char *name, int parent) {
   SceneEntity e;
@@ -657,6 +662,157 @@ int main() {
     WriteAll(file, bytes);
     IlmeeeScene legacy; CHECK(LoadScene(file.string(), legacy));
     CHECK(!legacy.entities[0].springBones.enabled && legacy.entities[0].springBones.chains.empty());
+  }
+  // v1.21 bloom: round trip, clamping, and v1.20 files load with bloom off.
+  {
+    const fs::path file = dir / "bloom.ilmeeescene";
+    IlmeeeScene s;
+    s.entities.push_back(SceneEntity{});
+    s.bloom.enabled = true;
+    s.bloom.sceneView = true;
+    s.bloom.threshold = 0.6f;
+    s.bloom.softKnee = 0.3f;
+    s.bloom.intensity = 2.5f;
+    s.bloom.radius = 0.75f;
+    s.bloom.tint = {1.0f, 0.5f, 0.25f};
+    s.bloom.iterations = 7;
+    CHECK(SaveScene(file.string(), s));
+    IlmeeeScene got;
+    CHECK(LoadScene(file.string(), got));
+    CHECK(got.bloom.enabled && got.bloom.sceneView);
+    CHECK(got.bloom.threshold == 0.6f && got.bloom.softKnee == 0.3f);
+    CHECK(got.bloom.intensity == 2.5f && got.bloom.radius == 0.75f);
+    CHECK(got.bloom.tint == glm::vec3(1.0f, 0.5f, 0.25f));
+    CHECK(got.bloom.iterations == 7);
+    CHECK(got.npr.enabled == s.npr.enabled); // NPR still read before it
+
+    s.bloom.intensity = 99.0f;
+    s.bloom.iterations = 40;
+    s.bloom.radius = 0.0f;
+    CHECK(SaveScene(file.string(), s));
+    CHECK(LoadScene(file.string(), got));
+    CHECK(got.bloom.intensity == 10.0f && got.bloom.iterations == 8 &&
+          got.bloom.radius == 0.1f);
+
+    auto bytes = ReadAll(file);
+    bytes[6] = 20; // v1.20: no bloom block
+    bytes.resize(bytes.size() - kBloomBytes);
+    WriteAll(file, bytes);
+    IlmeeeScene legacy;
+    legacy.bloom.enabled = true; // must be reset by the loader
+    CHECK(LoadScene(file.string(), legacy));
+    CHECK(!legacy.bloom.enabled && legacy.bloom.iterations == 6);
+
+    BloomSettings preset;
+    CHECK(ApplyBloomPreset(preset, "neon_night") && preset.enabled &&
+          preset.iterations == 7);
+    CHECK(!ApplyBloomPreset(preset, "nope"));
+  }
+  // .ilmeeeprefab: subtree extraction, own magic, fresh ids + remapping.
+  {
+    IlmeeeScene world;
+    auto add = [&](const char *name, int parent, uint64_t id) {
+      SceneEntity e;
+      e.name = name;
+      e.parent = parent;
+      e.objectId = id;
+      world.entities.push_back(e);
+      return (int)world.entities.size() - 1;
+    };
+    add("Player", -1, 10);                      // 0
+    const int npc = add("Npc", -1, 20);         // 1
+    add("Hat", npc, 21);                        // 2
+    add("Other", -1, 30);                       // 3
+    const int cam = add("NpcCam", npc, 22);     // 4
+    add("Badge", 2, 23);                        // 5 (grandchild)
+    SceneEntity ui;
+    ui.kind = PrimitiveKind::UiText;
+    ui.objectId = 40;
+    world.entities.push_back(ui);               // 6
+    world.entities[(size_t)npc].position = {5, 0, 1};
+    world.entities[(size_t)npc].movementRig.camera = cam;
+    world.entities[2].movementRig.camera = 0;   // camera outside the prefab
+    // Script refs: internal (Hat), external (Player), list with both.
+    ScriptValue toHat;
+    toHat.name = "Hat";
+    toHat.type = ScriptValueType::Object;
+    toHat.object = 21;
+    ScriptValue toPlayer = toHat;
+    toPlayer.name = "Player";
+    toPlayer.object = 10;
+    ScriptValue list;
+    list.name = "Friends";
+    list.type = ScriptValueType::List;
+    list.elementType = ScriptValueType::Object;
+    list.items = {toHat, toPlayer};
+    ScriptValue prefabField;
+    prefabField.name = "Bullet";
+    prefabField.type = ScriptValueType::Asset;
+    prefabField.string = "assets/prefabs/Bullet.ilmeeeprefab";
+    world.entities[(size_t)npc].scripts.push_back(
+        {"assets/scripts/PartyMember.cpp", "PartyMember", true,
+         {toHat, toPlayer, list, prefabField}});
+    world.entities[(size_t)npc].dialog.box = 40; // scene UI element
+
+    IlmeeeScene prefab = ExtractSubtree(world, npc);
+    CHECK(prefab.entities.size() == 4);
+    CHECK(prefab.entities[0].name == "Npc" && prefab.entities[0].parent == -1);
+    CHECK(prefab.entities[0].position == glm::vec3(5, 0, 1));
+    CHECK(prefab.entities[1].name == "Hat" && prefab.entities[1].parent == 0);
+    CHECK(prefab.entities[2].name == "NpcCam" && prefab.entities[2].parent == 0);
+    CHECK(prefab.entities[3].name == "Badge" && prefab.entities[3].parent == 1);
+    CHECK(prefab.entities[0].movementRig.camera == 2); // rebased
+    CHECK(prefab.entities[1].movementRig.camera == -1); // outside → Game view
+    CHECK(ValidPrefab(prefab));
+    CHECK(ExtractSubtree(world, 6).entities.empty()); // UI root
+    CHECK(ExtractSubtree(world, 99).entities.empty());
+    const auto external = ExternalReferences(prefab);
+    CHECK(external.size() == 2); // Player + Friends (has Player)
+    CHECK(external[0] == "Npc/PartyMember.Player");
+
+    const fs::path prefabFile = dir / "Npc.ilmeeeprefab";
+    CHECK(SavePrefab(prefabFile.string(), prefab));
+    CHECK(!fs::exists(prefabFile.string() + ".tmp"));
+    IlmeeeScene loaded;
+    CHECK(LoadPrefab(prefabFile.string(), loaded));
+    CHECK(loaded.entities.size() == 4 && loaded.entities[3].parent == 1);
+    CHECK(loaded.entities[0].scripts.size() == 1 &&
+          loaded.entities[0].scripts[0].values[3].string ==
+              "assets/prefabs/Bullet.ilmeeeprefab");
+    IlmeeeScene asScene;
+    CHECK(!LoadScene(prefabFile.string(), asScene)); // magic differs
+    const fs::path sceneFile = dir / "world.ilmeeescene";
+    CHECK(SaveScene(sceneFile.string(), world));
+    CHECK(!LoadPrefab(sceneFile.string(), asScene));
+    IlmeeeScene broken = prefab;
+    broken.entities[2].parent = 3; // parent after child
+    CHECK(!ValidPrefab(broken) && !SavePrefab((dir / "bad.ilmeeeprefab").string(), broken));
+    broken = prefab;
+    broken.entities.push_back(ui);
+    CHECK(!ValidPrefab(broken));
+    CHECK(!ValidPrefab(IlmeeeScene{}));
+    CHECK(IsPrefabPath("a/B.IlmeeePrefab") && !IsPrefabPath("a/b.ilmeeescene"));
+
+    // Two copies: new ids, internal refs follow their own copy, external
+    // refs (Player, the dialog's UI box) are kept.
+    IlmeeeScene a = loaded, b = loaded;
+    const auto idsA = AssignFreshObjectIds(a);
+    AssignFreshObjectIds(b);
+    CHECK(idsA.size() == 4 && idsA.at(21) == a.entities[1].objectId);
+    std::set<uint64_t> all;
+    for (const auto *copy : {&a, &b})
+      for (const auto &e : copy->entities) all.insert(e.objectId);
+    CHECK(all.size() == 8 && !all.contains(20) && !all.contains(21));
+    const auto &va = a.entities[0].scripts[0].values;
+    const auto &vb = b.entities[0].scripts[0].values;
+    CHECK(va[0].object == a.entities[1].objectId);
+    CHECK(vb[0].object == b.entities[1].objectId);
+    CHECK(va[0].object != vb[0].object);
+    CHECK(va[1].object == 10 && vb[1].object == 10);
+    CHECK(va[2].items[0].object == a.entities[1].objectId);
+    CHECK(va[2].items[1].object == 10);
+    CHECK(a.entities[0].dialog.box == 40);
+    CHECK(ExternalReferences(a).size() == 2);
   }
   fs::remove_all(dir);
   std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

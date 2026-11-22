@@ -1,4 +1,5 @@
 #include "../../../include/core_engine/NativeScripts.hpp"
+#include "../../../include/core_engine/IlmeeeAsset.hpp"
 #include "../../../include/core_engine/ScriptWorkspace.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include <algorithm>
@@ -78,6 +79,7 @@ struct ScalarSlot {
   std::string text;
   script::Vec3 vec;
   GameObjectRef object;
+  script::AssetRefBase asset;
   void *For(ScriptValueType type) {
     switch (type) {
     case ScriptValueType::Float: return &number;
@@ -85,6 +87,7 @@ struct ScalarSlot {
     case ScriptValueType::String: return &text;
     case ScriptValueType::Vec3: return &vec;
     case ScriptValueType::Object: return &object;
+    case ScriptValueType::Asset: return &asset;
     default: return nullptr;
     }
   }
@@ -98,6 +101,8 @@ void ReadScalar(ScriptValueType type, const void *from, ScriptValue &value) {
     value.string = *static_cast<const std::string *>(from);
   if (type == ScriptValueType::Object)
     value.object = static_cast<const GameObjectRef *>(from)->id;
+  if (type == ScriptValueType::Asset)
+    value.string = static_cast<const script::AssetRefBase *>(from)->path;
   if (type == ScriptValueType::Vec3) {
     const auto *vec = static_cast<const script::Vec3 *>(from);
     value.vec3[0] = vec->x;
@@ -121,16 +126,23 @@ void WriteScalar(ScriptValueType type, void *to, const ScriptValue &value,
     ref->id = value.object;
     ref->Bind(host);
   }
+  if (type == ScriptValueType::Asset) {
+    auto *ref = static_cast<script::AssetRefBase *>(to);
+    ref->path = value.string;
+    ref->Bind(host);
+  }
 }
 bool ValidField(const ScriptProperty &field) {
   if (field.type == ScriptValueType::List)
-    return field.list && field.elementType < ScriptValueType::List;
-  return field.type < ScriptValueType::List;
+    return field.list && IsScriptScalar(field.elementType);
+  return IsScriptScalar(field.type);
 }
 ScriptValue ReadProperty(const ScriptProperty &field) {
   ScriptValue value;
   value.name = field.name;
   value.type = field.type;
+  if (field.assetClass)
+    value.assetClass = field.assetClass;
   if (field.type != ScriptValueType::List) {
     ReadScalar(field.type, field.value, value);
     return value;
@@ -159,10 +171,10 @@ bool Finite(const ScriptValue &value) {
                        [](const ScriptValue &item) { return Finite(item); });
   return true;
 }
-void ApplyProperties(Component &component, const NativeScriptBinding &binding,
+// `properties`: what the component / ScriptableObject described.
+void ApplyProperties(const ScriptProperties &properties,
+                     const std::vector<ScriptValue> &stored,
                      const script::HostApi *host) {
-  ScriptProperties properties;
-  component.DescribeProperties(properties);
   for (const auto &field : properties.fields) {
     if (!ValidField(field))
       continue;
@@ -170,7 +182,7 @@ void ApplyProperties(Component &component, const NativeScriptBinding &binding,
     shape.name = field.name;
     shape.type = field.type;
     shape.elementType = field.elementType;
-    for (const auto &value : binding.values) {
+    for (const auto &value : stored) {
       if (!SameScriptShape(value, shape) || !Finite(value))
         continue;
       if (field.type != ScriptValueType::List) {
@@ -188,17 +200,30 @@ void ApplyProperties(Component &component, const NativeScriptBinding &binding,
     // Defaults the Inspector never touched still need the host.
     if (field.type == ScriptValueType::Object)
       static_cast<GameObjectRef *>(field.value)->Bind(host);
+    if (field.type == ScriptValueType::Asset)
+      static_cast<script::AssetRefBase *>(field.value)->Bind(host);
     if (field.type == ScriptValueType::List &&
-        field.elementType == ScriptValueType::Object) {
+        (field.elementType == ScriptValueType::Object ||
+         field.elementType == ScriptValueType::Asset)) {
       const size_t count = field.list->size(field.value);
       for (size_t i = 0; i < count; ++i) {
-        GameObjectRef ref;
-        field.list->get(field.value, i, &ref);
-        ref.Bind(host);
-        field.list->set(field.value, i, &ref);
+        ScalarSlot slot;
+        void *item = slot.For(field.elementType);
+        field.list->get(field.value, i, item);
+        if (field.elementType == ScriptValueType::Object)
+          slot.object.Bind(host);
+        else
+          slot.asset.Bind(host);
+        field.list->set(field.value, i, item);
       }
     }
   }
+}
+void ApplyProperties(Component &component, const NativeScriptBinding &binding,
+                     const script::HostApi *host) {
+  ScriptProperties properties;
+  component.DescribeProperties(properties);
+  ApplyProperties(properties, binding.values, host);
 }
 } // namespace
 
@@ -372,24 +397,49 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
     fs::create_directories(build);
     const auto wrapper = build / "factory.cpp";
     std::ofstream output(wrapper);
-    output << "#include \"" << result.className
-           << ".hpp\"\n#include <type_traits>\n"
-           << "static_assert(std::is_base_of_v<Component, " << result.className
-           << ">, \"Script class must derive from Component\");\n"
-           << "static_assert(std::is_default_constructible_v<"
-           << result.className
+    // A source holds either a Component or a ScriptableObject; the wrapper
+    // exports a factory for whichever it is (the other one returns null).
+    const auto &name = result.className;
+    output << "#include \"" << name << ".hpp\"\n#include <string_view>\n"
+           << "#include <type_traits>\n"
+           << "constexpr bool kIsAsset = std::is_base_of_v<ScriptableObject, "
+           << name << ">;\n"
+           << "static_assert(std::is_base_of_v<Component, " << name
+           << "> || kIsAsset, \"Script class must derive from Component or "
+              "ScriptableObject\");\n"
+           << "static_assert(!(std::is_base_of_v<Component, " << name
+           << "> && kIsAsset), \"A class cannot be both a Component and a "
+              "ScriptableObject\");\n"
+           << "static_assert(std::is_default_constructible_v<" << name
            << ">, \"Script class needs a public default constructor\");\n"
-           << "static_assert(!std::is_abstract_v<" << result.className
+           << "static_assert(!std::is_abstract_v<" << name
            << ">, \"Script class cannot be abstract\");\n"
+           << "template <class T> constexpr bool NamedAsset() {\n"
+           << "  if constexpr (requires { T::kAssetClass; })\n"
+           << "    return std::string_view(T::kAssetClass) == \"" << name
+           << "\";\n  else\n    return false;\n}\n"
+           << "static_assert(!kIsAsset || NamedAsset<" << name
+           << ">(), \"A ScriptableObject needs ILMEEE_SCRIPTABLE_OBJECT("
+           << name << ") in its class body\");\n"
+           << "template <class T, class B> B *Make() {\n"
+           << "  if constexpr (std::is_base_of_v<B, T>) return new T();\n"
+           << "  else return nullptr;\n}\n"
            << "extern \"C\" __attribute__((visibility(\"default\"))) unsigned "
               "ilmeee_script_api() { return ilmeee::script::kApiVersion; }\n"
            << "extern \"C\" __attribute__((visibility(\"default\"))) uint64_t "
               "ilmeee_script_abi() { return ilmeee::script::kComponentAbi; }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) unsigned "
+              "ilmeee_script_kind() { return kIsAsset ? 1u : 0u; }\n"
            << "extern \"C\" __attribute__((visibility(\"default\"))) "
-              "Component* ilmeee_script_create() { return new "
-           << result.className << "(); }\n"
+              "Component* ilmeee_script_create() { return Make<"
+           << name << ", Component>(); }\n"
            << "extern \"C\" __attribute__((visibility(\"default\"))) void "
-              "ilmeee_script_destroy(Component* value) { delete value; }\n";
+              "ilmeee_script_destroy(Component* value) { delete value; }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) "
+              "ScriptableObject* ilmeee_asset_create() { return Make<"
+           << name << ", ScriptableObject>(); }\n"
+           << "extern \"C\" __attribute__((visibility(\"default\"))) void "
+              "ilmeee_asset_destroy(ScriptableObject* value) { delete value; }\n";
     output.close();
     if (!output) {
       result.diagnostics = "Cannot write the script build wrapper.";
@@ -476,24 +526,41 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
 
 struct NativeScripts::Module {
   void *library = nullptr;
+  std::string className;
+  bool isAsset = false; // ScriptableObject class instead of a Component
   Component *(*create)() = nullptr;
   void (*destroy)(Component *) = nullptr;
+  ScriptableObject *(*createAsset)() = nullptr;
+  void (*destroyAsset)(ScriptableObject *) = nullptr;
   Component *prototype = nullptr;
+  ScriptableObject *assetPrototype = nullptr;
   std::vector<ScriptValue> defaults;
   ~Module() {
     if (prototype && destroy)
       destroy(prototype);
+    if (assetPrototype && destroyAsset)
+      destroyAsset(assetPrototype);
 #ifndef _WIN32
     if (library)
       dlclose(library);
 #endif
   }
 };
+struct NativeScripts::LoadedAsset {
+  std::shared_ptr<Module> module; // keeps the library loaded
+  ScriptableObject *object = nullptr;
+  ~LoadedAsset() {
+    if (object)
+      module->destroyAsset(object);
+  }
+};
 struct NativeScripts::Instance {
   std::shared_ptr<Module> module;
   Component *component = nullptr;
   uint64_t owner = 0;
+  std::string className;
   bool failed = false;
+  bool dead = false; // destroyed during Play, freed by FlushLifecycle
   ~Instance() {
     if (component)
       module->destroy(component);
@@ -645,20 +712,38 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
       dlsym(module->library, "ilmeee_script_create"));
   module->destroy = reinterpret_cast<void (*)(Component *)>(
       dlsym(module->library, "ilmeee_script_destroy"));
+  auto kind = reinterpret_cast<unsigned (*)()>(
+      dlsym(module->library, "ilmeee_script_kind"));
+  module->createAsset = reinterpret_cast<ScriptableObject *(*)()>(
+      dlsym(module->library, "ilmeee_asset_create"));
+  module->destroyAsset = reinterpret_cast<void (*)(ScriptableObject *)>(
+      dlsym(module->library, "ilmeee_asset_destroy"));
   if (!api || api() != script::kApiVersion || !abi ||
-      abi() != script::kComponentAbi || !module->create || !module->destroy) {
+      abi() != script::kComponentAbi || !kind || !module->create ||
+      !module->destroy || !module->createAsset || !module->destroyAsset) {
     error = "Script module has an incompatible engine API or compiler ABI. "
             "Recompile using the engine toolchain.";
     return false;
   }
+  module->className = result.className;
+  module->isAsset = kind() == 1;
   try {
-    module->prototype = module->create();
-    if (!module->prototype) {
-      error = "Script factory returned no component.";
-      return false;
-    }
     ScriptProperties properties;
-    module->prototype->DescribeProperties(properties);
+    if (module->isAsset) {
+      module->assetPrototype = module->createAsset();
+      if (!module->assetPrototype) {
+        error = "Script factory returned no ScriptableObject.";
+        return false;
+      }
+      module->assetPrototype->DescribeProperties(properties);
+    } else {
+      module->prototype = module->create();
+      if (!module->prototype) {
+        error = "Script factory returned no component.";
+        return false;
+      }
+      module->prototype->DescribeProperties(properties);
+    }
     if (properties.fields.size() > 1024) {
       error = "A component may expose at most 1024 fields.";
       return false;
@@ -699,6 +784,85 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
 bool NativeScripts::Ready(const std::string &source) const {
   return modules_.contains(source) && Diagnostics(source).empty();
 }
+bool NativeScripts::IsAsset(const std::string &source) const {
+  const auto it = modules_.find(source);
+  return it != modules_.end() && it->second->isAsset;
+}
+std::vector<std::string> NativeScripts::AssetClasses() const {
+  std::vector<std::string> sources;
+  for (const auto &[source, module] : modules_)
+    if (module->isAsset && Ready(source))
+      sources.push_back(source);
+  std::sort(sources.begin(), sources.end());
+  return sources;
+}
+void NativeScripts::SetAssetRoot(const fs::path &root) { assetRoot_ = root; }
+const ScriptableObject *NativeScripts::ResolveAsset(void *opaque,
+                                                    const char *path,
+                                                    const char *className) {
+  auto *self = static_cast<NativeScripts *>(opaque);
+  if (!self || !self->active_ || !path || !*path)
+    return nullptr;
+  const std::string key = fs::path(path).lexically_normal().generic_string();
+  const auto warnOnce = [&](const std::string &message) {
+    if (self->failedAssets_.insert(key).second && self->log)
+      self->log("[WARNING] [Scripts] Asset " + key + ": " + message);
+  };
+  auto found = self->assets_.find(key);
+  if (found == self->assets_.end()) {
+    if (self->failedAssets_.contains(key))
+      return nullptr;
+    const fs::path root =
+        self->assetRoot_.empty() ? self->options_.project : self->assetRoot_;
+    std::error_code ec;
+    const auto canonicalRoot = fs::weakly_canonical(root, ec);
+    const auto file = fs::weakly_canonical(root / key, ec);
+    if (ec || fs::path(key).is_absolute() || !Inside(canonicalRoot, file)) {
+      warnOnce("path must be inside the project");
+      return nullptr;
+    }
+    DataAssetFile data;
+    if (!LoadDataAsset(file.string(), data)) {
+      warnOnce("missing or not a valid .ilmeeeasset file");
+      return nullptr;
+    }
+    const auto module = self->modules_.find(data.source);
+    if (module == self->modules_.end() || !module->second->isAsset ||
+        module->second->className != data.className ||
+        !self->Ready(data.source)) {
+      warnOnce("class " + data.className + " (" + data.source +
+               ") is not a compiled ScriptableObject");
+      return nullptr;
+    }
+    auto loaded = std::make_unique<LoadedAsset>();
+    loaded->module = module->second;
+    try {
+      loaded->object = loaded->module->createAsset();
+      if (!loaded->object)
+        throw std::runtime_error("factory returned no object");
+      loaded->object->BindHost(&self->host_);
+      ScriptProperties properties;
+      loaded->object->DescribeProperties(properties);
+      ApplyProperties(properties, data.values, &self->host_);
+      loaded->object->OnLoad();
+    } catch (const std::exception &e) {
+      warnOnce(e.what());
+      return nullptr;
+    } catch (...) {
+      warnOnce("unknown exception while loading");
+      return nullptr;
+    }
+    found = self->assets_.emplace(key, std::move(loaded)).first;
+  }
+  const auto &loaded = *found->second;
+  if (className && loaded.module->className != className) {
+    if (self->log && self->failedAssets_.insert(key + "|" + className).second)
+      self->log("[WARNING] [Scripts] Asset " + key + " is a " +
+                loaded.module->className + ", not a " + className);
+    return nullptr;
+  }
+  return loaded.object;
+}
 std::vector<std::string> NativeScripts::Sources() const {
   std::set<std::string> sources;
   for (const auto &[source, module] : modules_)
@@ -720,48 +884,167 @@ NativeScripts::Properties(const NativeScriptBinding &binding) const {
   auto values = it->second->defaults;
   for (auto &value : values)
     for (const auto &stored : binding.values)
-      if (SameScriptShape(value, stored))
+      if (SameScriptShape(value, stored)) {
+        auto assetClass = std::move(value.assetClass);
         value = stored;
+        value.assetClass = std::move(assetClass);
+      }
   return values;
+}
+std::unique_ptr<NativeScripts::Instance>
+NativeScripts::CreateInstance(uint64_t owner,
+                              const NativeScriptBinding &binding) {
+  if (!binding.enabled || detached_.contains(owner))
+    return nullptr;
+  const auto module = modules_.find(binding.source);
+  if (module != modules_.end() && module->second->isAsset) {
+    if (log)
+      log("[WARNING] [Scripts] " + binding.className +
+          " is a ScriptableObject, not a component; skipped.");
+    return nullptr;
+  }
+  if (module == modules_.end() || !Ready(binding.source)) {
+    if (log)
+      log("[WARNING] [Scripts] " + binding.className +
+          ": not running; compile this script first.");
+    return nullptr;
+  }
+  auto instance = std::make_unique<Instance>();
+  instance->module = module->second;
+  instance->className = binding.className;
+  try {
+    instance->component = instance->module->create();
+    if (!instance->component)
+      throw std::runtime_error("Script factory returned no instance");
+    instance->owner = owner;
+    instance->component->Bind(&host_, owner);
+    ApplyProperties(*instance->component, binding, &host_);
+    instance->component->Awake();
+    instance->component->OnEnable();
+    return instance;
+  } catch (const std::exception &e) {
+    if (log)
+      log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
+  } catch (...) {
+    if (log)
+      log("[ERROR] [Scripts] " + binding.className +
+          ": unknown exception during initialization");
+  }
+  return nullptr;
 }
 void NativeScripts::Start(script::HostApi host,
                           const std::vector<ScriptOwner> &owners) {
   Stop();
   host_ = host;
+  host_.asset = &NativeScripts::ResolveAsset;
+  host_.assetContext = this;
   active_ = true;
+  updating_ = true; // a Start() that spawns must not grow instances_ now
+  // Copied first: a script that spawns from Awake/Start may reallocate the
+  // storage owner.scripts points into.
+  std::vector<std::pair<uint64_t, NativeScriptBinding>> bindings;
   for (const auto &owner : owners)
-    for (const auto &binding : *owner.scripts) {
-      if (!binding.enabled)
-        continue;
-      const auto module = modules_.find(binding.source);
-      if (module == modules_.end() || !Ready(binding.source)) {
-        if (log)
-          log("[WARNING] [Scripts] " + binding.className +
-              ": not running; compile this script first.");
-        continue;
-      }
-      auto instance = std::make_unique<Instance>();
-      instance->module = module->second;
-      try {
-        instance->component = instance->module->create();
-        if (!instance->component)
-          throw std::runtime_error("Script factory returned no instance");
-        instance->owner = owner.id;
-        instance->component->Bind(&host_, owner.id);
-        ApplyProperties(*instance->component, binding, &host_);
-        instance->component->Awake();
-        instance->component->OnEnable();
-        instance->component->Start();
-        instances_.push_back(std::move(instance));
-      } catch (const std::exception &e) {
-        if (log)
-          log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
-      } catch (...) {
-        if (log)
-          log("[ERROR] [Scripts] " + binding.className +
-              ": unknown exception during initialization");
-      }
+    if (owner.scripts)
+      for (const auto &binding : *owner.scripts)
+        bindings.emplace_back(owner.id, binding);
+  for (const auto &[ownerId, binding] : bindings) {
+    auto instance = CreateInstance(ownerId, binding);
+    if (!instance)
+      continue;
+    try {
+      instance->component->Start();
+      instances_.push_back(std::move(instance));
+    } catch (const std::exception &e) {
+      if (log)
+        log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
+    } catch (...) {
+      if (log)
+        log("[ERROR] [Scripts] " + binding.className +
+            ": unknown exception during initialization");
     }
+  }
+  updating_ = false;
+  FlushLifecycle();
+}
+void NativeScripts::Attach(const std::vector<ScriptOwner> &owners) {
+  if (!active_)
+    return;
+  for (const auto &owner : owners) {
+    if (!owner.scripts)
+      continue;
+    for (const auto &binding : *owner.scripts)
+      if (auto instance = CreateInstance(owner.id, binding))
+        spawned_.push_back(std::move(instance));
+  }
+  if (!updating_)
+    FlushLifecycle();
+}
+void NativeScripts::Detach(const std::vector<uint64_t> &ownerIds) {
+  if (!active_ || ownerIds.empty())
+    return;
+  const std::set<uint64_t> doomed(ownerIds.begin(), ownerIds.end());
+  detached_.insert(doomed.begin(), doomed.end());
+  const auto kill = [&](Instance &instance) {
+    if (instance.dead || !doomed.contains(instance.owner))
+      return;
+    instance.dead = true;
+    if (instance.failed)
+      return;
+    try {
+      instance.component->OnDisable();
+      instance.component->OnDestroy();
+    } catch (const std::exception &e) {
+      if (log)
+        log("[ERROR] [Scripts] " + instance.className + " OnDestroy: " +
+            e.what());
+    } catch (...) {
+      if (log)
+        log("[ERROR] [Scripts] " + instance.className +
+            " OnDestroy: unknown exception");
+    }
+  };
+  // Index loops: OnDestroy may spawn (push_back) or destroy more objects.
+  for (size_t i = 0; i < instances_.size(); ++i)
+    kill(*instances_[i]);
+  for (size_t i = 0; i < spawned_.size(); ++i)
+    kill(*spawned_[i]);
+  if (!updating_)
+    FlushLifecycle();
+}
+size_t NativeScripts::InstanceCount() const {
+  size_t count = 0;
+  for (const auto &instance : instances_)
+    count += instance->dead ? 0 : 1;
+  for (const auto &instance : spawned_)
+    count += instance->dead ? 0 : 1;
+  return count;
+}
+void NativeScripts::FlushLifecycle() {
+  // Start may spawn again; those join this loop and also Start this frame.
+  updating_ = true;
+  while (!spawned_.empty()) {
+    auto batch = std::move(spawned_);
+    spawned_.clear();
+    for (auto &instance : batch) {
+      if (!instance->dead && !instance->failed) {
+        try {
+          instance->component->Start();
+        } catch (const std::exception &e) {
+          instance->failed = true;
+          if (log)
+            log("[ERROR] [Scripts] " + instance->className + ": " + e.what());
+        } catch (...) {
+          instance->failed = true;
+          if (log)
+            log("[ERROR] [Scripts] " + instance->className +
+                ": unknown exception during Start");
+        }
+      }
+      instances_.push_back(std::move(instance));
+    }
+  }
+  updating_ = false;
+  std::erase_if(instances_, [](const auto &instance) { return instance->dead; });
 }
 void NativeScripts::DispatchPhysicsEvents(
     const std::vector<std::pair<uint64_t, uint64_t>> &triggers,
@@ -783,8 +1066,10 @@ void NativeScripts::DispatchPhysicsEvents(
         }
         const auto call = [&](uint64_t ownerId, uint64_t otherId,
                               void (Component::*fn)(script::GameObject)) {
-          for (auto &instance : instances_) {
-            if (instance->failed || instance->owner != ownerId)
+          for (size_t i = 0; i < instances_.size(); ++i) {
+            auto &instance = instances_[i];
+            if (instance->failed || instance->dead ||
+                instance->owner != ownerId)
               continue;
             try {
               (instance->component->*fn)({otherId, &host_});
@@ -808,16 +1093,23 @@ void NativeScripts::DispatchPhysicsEvents(
                active.contains({ownerId, otherId}) ? onStay : onEnter);
         active = std::move(current);
       };
+  updating_ = true; // handlers may Instantiate/Destroy
   dispatch(triggers, activeTriggers_, &Component::OnTriggerEnter,
            &Component::OnTriggerStay, &Component::OnTriggerExit);
   dispatch(collisions, activeCollisions_, &Component::OnCollisionEnter,
            &Component::OnCollisionStay, &Component::OnCollisionExit);
+  updating_ = false;
+  FlushLifecycle();
 }
 void NativeScripts::Update(float deltaTime) {
   if (!std::isfinite(deltaTime) || deltaTime <= 0)
     return;
-  for (auto &instance : instances_) {
-    if (instance->failed)
+  updating_ = true;
+  // Index loop: a script may Instantiate (spawned_) or Destroy (dead flag)
+  // here; instances_ itself only changes in FlushLifecycle.
+  for (size_t i = 0; i < instances_.size(); ++i) {
+    auto &instance = instances_[i];
+    if (instance->failed || instance->dead)
       continue;
     try {
       const float step = std::min(deltaTime, 0.25f);
@@ -833,17 +1125,28 @@ void NativeScripts::Update(float deltaTime) {
         log("[ERROR] [Scripts] Update stopped: unknown exception");
     }
   }
+  updating_ = false;
+  FlushLifecycle();
 }
 void NativeScripts::Stop() {
   active_ = false;
   activeTriggers_.clear();
   activeCollisions_.clear();
-  for (auto &instance : instances_) {
-    try {
-      instance->component->OnDisable();
-    } catch (...) {
+  for (auto *list : {&instances_, &spawned_})
+    for (auto &instance : *list) {
+      if (instance->dead)
+        continue;
+      try {
+        instance->component->OnDisable();
+      } catch (...) {
+      }
     }
-  }
   instances_.clear();
+  spawned_.clear();
+  detached_.clear();
+  updating_ = false;
+  // After the components: their destructors may still hold asset pointers.
+  assets_.clear();
+  failedAssets_.clear();
 }
 } // namespace ilmeee

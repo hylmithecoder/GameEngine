@@ -1,4 +1,4 @@
-// Lighting menu + window: scene-wide NPR (toon / cel) lighting.
+// Lighting menu + window: scene-wide NPR (toon / cel) lighting and bloom.
 #include "../../../include/ui/MainWindow.hpp"
 
 using namespace ImGui;
@@ -52,6 +52,51 @@ const NprPreset kPresets[] = {
     {"Comic Ink", "Hard dark shadows and thick black outlines", ComicInk()},
 };
 
+// Bloom section, shared by the Lighting window. True when edited.
+bool BloomEditor(ilmeee::BloomSettings &bloom, bool available) {
+  bool changed = Checkbox("Bloom", &bloom.enabled);
+  SameLine();
+  TextDisabled("(?)");
+  if (IsItemHovered())
+    SetTooltip("Glow around bright pixels (lamps, neon, sky, highlights).\n"
+               "Shown in the Game tab and the built game; tick 'Scene View'\n"
+               "to see it while editing too. Saved with the scene.");
+  if (!available && bloom.enabled)
+    TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                "Bloom shaders unavailable (see Console)");
+  for (size_t i = 0; i < std::size(ilmeee::kBloomPresets); ++i) {
+    if (i)
+      SameLine();
+    const auto &p = ilmeee::kBloomPresets[i];
+    PushID(p.id);
+    if (SmallButton(p.label)) {
+      ilmeee::ApplyBloomPreset(bloom, p);
+      changed = true;
+    }
+    PopID();
+    if (IsItemHovered())
+      SetTooltip("%s", p.tooltip);
+  }
+  BeginDisabled(!bloom.enabled);
+  changed |= SliderFloat("Threshold", &bloom.threshold, 0.0f, 1.5f, "%.2f");
+  if (IsItemHovered())
+    SetTooltip("Brightness where glow starts (lower = more things glow)");
+  changed |= SliderFloat("Soft Knee", &bloom.softKnee, 0.0f, 1.0f, "%.2f");
+  changed |= SliderFloat("Intensity", &bloom.intensity, 0.0f, 5.0f, "%.2f");
+  changed |= SliderFloat("Radius", &bloom.radius, 0.1f, 1.0f, "%.2f");
+  if (IsItemHovered())
+    SetTooltip("How far the glow spreads");
+  changed |= SliderInt("Iterations", &bloom.iterations, 1,
+                       ilmeee::BloomSettings::kMaxIterations);
+  changed |= ColorEdit3("Tint", &bloom.tint.x,
+                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+  changed |= Checkbox("Scene View", &bloom.sceneView);
+  if (IsItemHovered())
+    SetTooltip("Also apply bloom to the editor's Scene view");
+  EndDisabled();
+  return changed;
+}
+
 } // namespace
 
 void MainWindow::RenderLightingMenu() {
@@ -75,6 +120,9 @@ void MainWindow::RenderLightingMenu() {
     }
     EndMenu();
   }
+  ilmeee::BloomSettings bloom = sceneRenderer->GetBloom();
+  if (MenuItem("Bloom", nullptr, &bloom.enabled))
+    sceneRenderer->SetBloom(bloom);
   Separator();
   MenuItem("Lighting Settings...", nullptr, &showLighting);
   if (changed)
@@ -148,5 +196,10 @@ void MainWindow::RenderLightingWindow() {
                "Light object.");
   if (changed)
     sceneRenderer->SetNpr(npr);
+
+  SeparatorText("Post Processing");
+  ilmeee::BloomSettings bloom = sceneRenderer->GetBloom();
+  if (BloomEditor(bloom, sceneRenderer->BloomAvailable()))
+    sceneRenderer->SetBloom(bloom);
   End();
 }

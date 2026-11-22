@@ -7,11 +7,16 @@ menjalankannya saat Play. Header SDK:
 | Header | Isi |
 |---|---|
 | `core_engine/core/Component.hpp` | `Component`, `ScriptProperties` (include ini saja) |
-| `core_engine/script/GameObject.hpp` | `Vec3`, `Transform`, `GameObject`, `GameObjectRef`, `ObjectRef<T>` |
+| `core_engine/script/GameObject.hpp` | `Vec3`, `Transform`, `GameObject`, `GameObjectRef`, `ObjectRef<T>`, `AssetRef<T>`, `PrefabRef` |
+| `core_engine/script/ScriptableObject.hpp` | `ScriptableObject`, `ILMEEE_SCRIPTABLE_OBJECT` (ikut ter-include lewat `Component.hpp`) |
 | `core_engine/script/SceneObjects.hpp` | `AudioGameObject`, `VideoPlayerGameObject`, `LightGameObject`, `CameraGameObject`, `UiGameObject`, `UiTextGameObject`, `UiImageGameObject`, `UiButtonGameObject`, `TextGameObject`, `DialogGameObject`, `PhysicsGameObject`, `ColliderGameObject` |
 
-Versi API: `ilmeee::script::kApiVersion = 6`. Script yang di-compile untuk
+Versi API: `ilmeee::script::kApiVersion = 8`. Script yang di-compile untuk
 versi lain ditolak, cukup tekan **Recompile**.
+
+API 8 (22-11-2026): `Instantiate`/`Destroy`/`OnDestroy` dan `PrefabRef`
+(lihat [Prefab](#prefab)); `AssetRef<T>::operator->` tidak pernah lagi
+men-dereference null.
 
 ## Kerangka script
 
@@ -63,6 +68,7 @@ void spherecontroller::Update(float deltaTime) {
 | `Awake()`, `Start()` | Dipanggil sekali saat Play dimulai |
 | `Update(float deltaTime)` | Tiap frame selama Play (bukan saat Pause) |
 | `OnEnable()`, `OnDisable()` | Saat script aktif / berhenti |
+| `OnDestroy()` | Sekali, saat object-nya di-`Destroy` selama Play (bukan saat Stop) |
 | `OnTriggerEnter(GameObject other)` | Saat mulai overlap dengan collider bertipe **Is Trigger** (dipanggil di kedua pihak) |
 | `OnTriggerStay(GameObject other)` | Selama masih overlap dengan trigger |
 | `OnTriggerExit(GameObject other)` | Saat keluar dari trigger |
@@ -75,6 +81,8 @@ void spherecontroller::Update(float deltaTime) {
 | `LogError(msg)` | Dengan `[ERROR]`, dan membuka Console di editor |
 | `IsKeyDown(key)` | Selama tombol ditahan. `"W"`, `"A"`, `"S"`, `"D"`, `"Space"`, `"E"`, `"Enter"`, `"Interact"` |
 | `IsKeyPressed(key)` | Hanya di frame pertama tombol ditekan (menu, dialog, interaksi) |
+| `Instantiate(prefab, pos, parent)` | Spawn salinan prefab, kembalikan root-nya (`GameObject`). Lihat [Prefab](#prefab) |
+| `Destroy(obj)` | Hapus object + anak-anaknya di akhir frame (aman dipanggil di `Update`, juga untuk `gameObject` sendiri) |
 
 `"E"` dan `"Interact"` sama: tombol E di keyboard, atau Button UI dengan
 Action `Interact` (untuk Android). WASD ikut joystick UI.
@@ -140,6 +148,8 @@ Aturan:
 | `Vec3` | DragFloat3 (X, Y, Z) |
 | `GameObjectRef` | Pilihan object / drag dari Hierarchy |
 | `ObjectRef<T>` | Sama seperti `GameObjectRef`, tapi `Get()` langsung bertipe `T` |
+| `AssetRef<T>` | Pilihan file `.ilmeeeasset` (Data Asset) bertipe `T` / drag dari Explorer. Lihat [ScriptableObject](#scriptableobject-data-asset) |
+| `PrefabRef` | Pilihan file `.ilmeeeprefab` / drag dari Explorer. Lihat [Prefab](#prefab) |
 | `std::vector<T>` | List: tiap item pakai widget tipe `T`, tombol **X** (hapus), **+ Add** (salin item terakhir), **Clear** |
 
 `T` di `std::vector<T>` boleh semua tipe di atas kecuali `std::vector` lagi
@@ -184,6 +194,181 @@ Vec3 pos, rot, skala{1, 1, 1};
 // ...
 gameObject.SetTransform({pos, rot, skala});
 ```
+
+## ScriptableObject (Data Asset)
+
+Data yang dipakai bareng banyak object, disimpan di file `.ilmeeeasset`,
+bukan di object scene (padanan `ScriptableObject` di Unity). Contoh: data
+karakter VN, item, stats musuh, konfigurasi level.
+
+**1. Buat class-nya** di `assets/scripts/` (nama class = nama file, perlu
+`.hpp` dan `.cpp` seperti script biasa):
+
+```cpp
+// assets/scripts/EnemyStats.hpp
+#pragma once
+#include <core_engine/core/Component.hpp>
+
+class EnemyStats : public ScriptableObject {
+    ILMEEE_SCRIPTABLE_OBJECT(EnemyStats)   // wajib, di awal body class
+public:
+    float maxHp = 100;
+    std::string displayName = "Slime";
+    std::vector<std::string> drops;
+    AssetRef<EnemyStats> evolution;         // asset boleh menunjuk asset lain
+
+    void DescribeProperties(ScriptProperties &p) override {
+        p.Field("Max HP", maxHp);
+        p.Field("Nama", displayName);
+        p.Field("Drop", drops);
+        p.Field("Evolusi", evolution);
+    }
+    void OnLoad() override {}               // opsional, sekali per Play
+    float HpAtLevel(int level) const { return maxHp * (1 + 0.1f * level); }
+};
+```
+
+```cpp
+// assets/scripts/EnemyStats.cpp
+#include "EnemyStats.hpp"
+```
+
+**2. Buat asset-nya**: Explorer, klik kanan, lalu **Create > Data Asset >
+EnemyStats**. Klik file `.ilmeeeasset` tersebut untuk mengedit field-nya di
+Inspector (tersimpan otomatis setiap selesai edit). Satu class bisa punya
+banyak asset, mis. `Slime.ilmeeeasset` dan `Goblin.ilmeeeasset`.
+
+**3. Pakai dari component** lewat field `AssetRef<T>`:
+
+```cpp
+// assets/scripts/Enemy.hpp
+#pragma once
+#include <core_engine/core/Component.hpp>
+#include "EnemyStats.hpp"
+
+class Enemy : public Component {
+public:
+    AssetRef<EnemyStats> stats;
+    float hp = 0;
+    void DescribeProperties(ScriptProperties &p) override {
+        p.Field("Stats", stats);
+    }
+    void Start() override {
+        const EnemyStats *s = stats.Get();      // null kalau kosong / salah
+        if (!s) { LogWarning("Stats belum diisi"); return; }
+        hp = s->maxHp;
+        Log(s->displayName + " muncul, HP " + std::to_string(hp));
+        if (stats->evolution.IsValid())
+            Log("bisa berevolusi jadi " + stats->evolution->displayName);
+    }
+};
+```
+
+| API | Keterangan |
+|---|---|
+| `ScriptableObject` | Base class. Tanpa `gameObject`, `Update`, atau coroutine |
+| `ILMEEE_SCRIPTABLE_OBJECT(Nama)` | Wajib. Nama harus sama dengan nama class/file (dicek saat compile) |
+| `DescribeProperties(p)` | Sama seperti di Component; semua tipe field didukung |
+| `OnLoad()` | Setelah nilai dari file diterapkan, sekali per sesi Play |
+| `Log(msg)` | Ke Console > Output |
+| `AssetRef<T>::Get()` | `const T*`, atau `nullptr` kalau kosong, file hilang, atau class-nya beda |
+| `AssetRef<T>::IsValid()` | `Get() != nullptr` |
+| `AssetRef<T>::operator->` | `stats->maxHp`. Kalau asset kosong/hilang/salah class: **tidak crash**, membaca nilai default `T` dan menulis satu `[ERROR]` per field ke Console. Tetap cek `IsValid()` kalau asset memang opsional |
+| `AssetRef<T>::path`, `IsSet()` | Path relatif project yang tersimpan |
+
+Aturan:
+- **Read-only saat Play.** `Get()` mengembalikan `const T*`. Semua
+  component yang menunjuk asset yang sama mendapat **instance yang sama**
+  (di-load saat `Get()` pertama, dihapus saat Stop). Untuk state yang
+  berubah (HP sekarang, dll.), salin ke field component seperti `hp` di atas.
+  Perubahan di Inspector asset berlaku di Play berikutnya.
+- Method yang dipanggil script lain harus **inline di header** (seperti
+  `HpAtLevel` di atas): setiap script adalah shared library terpisah.
+- `std::vector<AssetRef<T>>` didukung (mis. daftar item di toko).
+- Inspector component hanya menawarkan asset dengan class yang cocok;
+  drag asset dengan class lain ditolak.
+- ScriptableObject tidak bisa dipasang sebagai component (tidak muncul di
+  **Add Component**).
+- Build Linux/Android ikut menyalin asset yang dipakai scene (termasuk
+  asset yang ditunjuk asset lain) dan meng-compile class-nya.
+- Format scene naik ke **v1.20** (tipe field Asset). Player Android lama
+  menolak scene baru: rebuild player (`scripts/android/build-player.sh`),
+  karena header SDK juga berubah.
+
+## Prefab
+
+Prefab (`.ilmeeeprefab`) adalah object + semua anaknya (komponen, script, nilai
+field) yang disimpan ke file lalu di-spawn berkali-kali.
+
+**Membuat:** klik kanan object di Hierarchy > **Create Prefab** (tersimpan di
+`assets/prefabs/<Nama>.ilmeeeprefab`), atau drag object dari Hierarchy ke
+folder di Explorer. Saat Play, menu ini nonaktif.
+
+**Spawn di editor:** drag `.ilmeeeprefab` dari Explorer ke viewport (di titik
+lantai), ke item Hierarchy (jadi anak item itu), atau ke node Scene (di root,
+posisi asli prefab). Nama dibuat unik, bisa di-Undo.
+
+**Spawn dari script:**
+
+```cpp
+class Spawner : public Component {
+public:
+    PrefabRef bullet;   // drag Bullet.ilmeeeprefab ke field ini
+    float cooldown = 0;
+    void DescribeProperties(ScriptProperties &p) override {
+        p.Field("Bullet", bullet);
+    }
+    void Update(float dt) override {
+        cooldown -= dt;
+        if (IsKeyPressed("Space") && cooldown <= 0) {
+            cooldown = 0.3f;
+            GameObject b = Instantiate(bullet, gameObject.GetPosition() + Vec3{0, 1, 0});
+            if (!b.IsValid()) LogWarning("Bullet gagal di-spawn");
+        }
+    }
+};
+
+class Bullet : public Component {
+public:
+    float life = 2;
+    void Update(float dt) override {
+        gameObject.Translate({0, 0, 8 * dt});
+        if ((life -= dt) <= 0) Destroy(gameObject);   // aman di Update
+    }
+    void OnTriggerEnter(GameObject) override { Destroy(gameObject); }
+    void OnDestroy() override { Log("bullet hilang"); }
+};
+```
+
+| API | Keterangan |
+|---|---|
+| `PrefabRef` | Field Inspector berisi path `.ilmeeeprefab`; `IsSet()` / `IsValid()`, `path` |
+| `Instantiate(prefabRef, pos = {}, parent = {})` | Spawn salinan. `pos` = posisi dunia, atau lokal terhadap `parent` kalau `parent` valid. Kembalikan root baru; `IsValid()` false kalau gagal (log `[ERROR]` sekali per path) |
+| `Instantiate("assets/prefabs/X.ilmeeeprefab", pos, parent)` | Sama, dengan path langsung (relatif project) |
+| `Destroy(obj)` | Object + anak-anaknya hilang di **akhir frame**. Script-nya langsung mendapat `OnDisable` + `OnDestroy` dan berhenti di-`Update`. Memanggil dua kali aman |
+
+Urutan lifecycle salinan: `Awake` + `OnEnable` langsung di dalam
+`Instantiate`, `Start` di akhir frame itu, `Update` mulai frame berikutnya.
+
+Aturan:
+- **Unpacked (v1):** salinan tidak punya link ke file prefab. Mengubah
+  prefab tidak mengubah salinan yang sudah ada di scene.
+- Setiap salinan mendapat **objectId baru**. Referensi antar object di dalam
+  prefab (field `GameObjectRef`/`ObjectRef`, termasuk item List) ikut
+  menunjuk salinannya sendiri, jadi dua salinan tidak saling silang.
+- Referensi ke object **di luar** prefab (mis. `Player`) disimpan apa adanya:
+  valid lagi di scene yang punya object itu, invalid di scene lain. Editor
+  menampilkan warning saat Create Prefab.
+- Canvas/UI tidak ikut prefab. Komponen Dialog tetap menunjuk elemen UI
+  scene (box/text/speaker) dengan id-nya.
+- Di editor, **Stop** mengembalikan scene persis seperti sebelum Play: semua
+  yang di-spawn dihapus, yang di-`Destroy` dikembalikan (id dan urutan sama).
+- Build Linux/Android menyalin prefab yang ditunjuk field `PrefabRef` atau
+  field `std::string` berisi path `.ilmeeeprefab` (beserta model, tekstur,
+  script, data asset, dan prefab lain di dalamnya). Path yang hanya ditulis
+  di kode C++ tidak terlacak: pakai field, atau centang **Include unused
+  assets**.
+- Header SDK berubah (API 8): player Android perlu di-rebuild.
 
 ## GameObject
 
@@ -558,6 +743,17 @@ dan menambah collider kepala/dada/paha; field lain (`enabled`, `wind`,
 `chains`, `colliders`) menimpa. Jalan saat Play, lalu `save_scene`.
 `set_animation` memasang clip (`.ilmeeeanim`/`.vmd`) atau controller ke model
 PMX, mis. `{"index": 12, "clip": "assets/animations/PhysicsDemo.ilmeeeanim"}`.
+
+Bloom (glow lampu/neon, scene v1.21): `set_scene_environment {"bloomPreset":
+"neon_night"}` (`subtle`, `neon_night`, `dreamy`, `off`) atau `{"bloom":
+{"enabled": true, "threshold": 0.7, "intensity": 1.5, "radius": 0.9,
+"iterations": 7, "tint": [1, 0.9, 0.8], "sceneView": true}}`; nilainya
+dibaca lewat `get_scene_environment`. Tampil di tab Game dan game hasil
+build; `sceneView` juga menampilkannya di Scene view. Lalu `save_scene`.
+
+Prefab: `list_prefabs`, `create_prefab {"index": 4}` (opsional `folder`),
+`instantiate_prefab {"path": "assets/prefabs/Npc.ilmeeeprefab", "position":
+[2, 0, 1], "parent": -1}` lalu `save_scene`.
 
 ### Komponen lewat MCP
 

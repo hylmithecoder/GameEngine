@@ -43,6 +43,7 @@ SceneRenderer::~SceneRenderer() {
     dynamicTextures.clear();
     if (dynamicSampler != VK_NULL_HANDLE)
       vkDestroySampler(device, dynamicSampler, nullptr);
+    bloomPass.Destroy();
     DestroyOffscreenResources();
 
     // Destroy pipelines
@@ -455,6 +456,7 @@ void SceneRenderer::CreateOffscreenResources() {
 }
 
 void SceneRenderer::DestroyOffscreenResources() {
+  bloomPass.Release(offscreen.view); // its chain samples/writes this view
   if (offscreen.framebuffer != VK_NULL_HANDLE)
     vkDestroyFramebuffer(device, offscreen.framebuffer, nullptr);
   if (offscreen.renderPass != VK_NULL_HANDLE)
@@ -598,6 +600,10 @@ void SceneRenderer::RenderSceneToTexture(const Scene &scene) {
   }
 
   vkCmdEndRenderPass(cmd);
+  if (bloom.enabled && bloom.sceneView) {
+    EnsureBloomPass();
+    bloomPass.Record(cmd, offscreen.view, width, height, bloom);
+  }
   vkEndCommandBuffer(cmd);
 
   SubmitOffscreenCommands(cmd);
@@ -2507,7 +2513,7 @@ bool SceneRenderer::SetMesh3DParent(size_t child, int parent, bool keepWorld) {
   return true;
 }
 
-size_t SceneRenderer::RemoveMesh3D(size_t i) {
+size_t SceneRenderer::RemoveMesh3D(size_t i, std::vector<int> *remapOut) {
   if (i >= meshes3d.size())
     return 0;
 
@@ -2543,7 +2549,33 @@ size_t SceneRenderer::RemoveMesh3D(size_t i) {
   }
   size_t removed = meshes3d.size() - kept.size();
   meshes3d = std::move(kept);
+  if (remapOut)
+    *remapOut = std::move(remap);
   return removed;
+}
+
+bool SceneRenderer::ReorderMeshes3D(const std::vector<size_t> &order) {
+  if (order.size() != meshes3d.size())
+    return false;
+  std::vector<int> remap(meshes3d.size(), -1);
+  for (size_t to = 0; to < order.size(); ++to) {
+    if (order[to] >= meshes3d.size() || remap[order[to]] >= 0)
+      return false;
+    remap[order[to]] = (int)to;
+  }
+  std::vector<Mesh3D> sorted;
+  sorted.reserve(meshes3d.size());
+  for (const size_t from : order) {
+    Mesh3D m = std::move(meshes3d[from]);
+    m.parent = m.parent >= 0 ? remap[(size_t)m.parent] : -1;
+    m.movementRig.camera = m.movementRig.camera >= 0 &&
+                                   (size_t)m.movementRig.camera < remap.size()
+                               ? remap[(size_t)m.movementRig.camera]
+                               : -1;
+    sorted.push_back(std::move(m));
+  }
+  meshes3d = std::move(sorted);
+  return true;
 }
 
 glm::vec3 SceneRenderer::GetMesh3DPosition(size_t i) const {
@@ -4223,9 +4255,24 @@ void SceneRenderer::RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
     DrawGizmos(cmd, vp3d);
 }
 
+void SceneRenderer::EnsureBloomPass() {
+  if (bloomInitTried || device == VK_NULL_HANDLE)
+    return;
+  bloomInitTried = true;
+  std::string error;
+  if (!bloomPass.Init(
+          device, offscreen.format,
+          [this](const std::string &path) { return LoadShader(path); },
+          [this](uint32_t bits, VkMemoryPropertyFlags flags) {
+            return findMemoryType(bits, flags);
+          },
+          &error))
+    Debug::Log("Bloom disabled: " + error, Debug::LogLevel::WARNING);
+}
+
 void SceneRenderer::SubmitOffscreenPass(
     const Offscreen &target, int w, int h,
-    const std::function<void(VkCommandBuffer)> &record) {
+    const std::function<void(VkCommandBuffer)> &record, bool applyBloom) {
   WaitOffscreenWork();
   UpdateWorldTexts();
   VkCommandBufferAllocateInfo allocInfo{};
@@ -4268,6 +4315,10 @@ void SceneRenderer::SubmitOffscreenPass(
   record(cmd);
 
   vkCmdEndRenderPass(cmd);
+  if (applyBloom && bloom.enabled) {
+    EnsureBloomPass();
+    bloomPass.Record(cmd, target.view, w, h, bloom);
+  }
   vkEndCommandBuffer(cmd);
   SubmitOffscreenCommands(cmd);
 }
@@ -4279,9 +4330,10 @@ bool SceneRenderer::RenderGameView() {
   glm::mat4 view, proj;
   if (!ComputePlayerCameraMatrices((float)width / (float)height, view, proj))
     return false;
-  SubmitOffscreenPass(offscreen, width, height, [&](VkCommandBuffer cmd) {
-    RecordWorld(cmd, view, proj, WorldView::Game);
-  });
+  SubmitOffscreenPass(
+      offscreen, width, height,
+      [&](VkCommandBuffer cmd) { RecordWorld(cmd, view, proj, WorldView::Game); },
+      /*bloom=*/true);
   return true;
 }
 
@@ -4558,6 +4610,7 @@ void SceneRenderer::CreatePreviewResources() {
 void SceneRenderer::DestroyPreviewResources() {
   if (device == VK_NULL_HANDLE)
     return;
+  bloomPass.Release(preview.view);
   if (preview.framebuffer != VK_NULL_HANDLE)
     vkDestroyFramebuffer(device, preview.framebuffer, nullptr);
   if (preview.renderPass != VK_NULL_HANDLE)
@@ -4588,10 +4641,10 @@ void SceneRenderer::RenderPlayerCameraPreview() {
   if (!ComputePlayerCameraMatrices(aspect, view, proj))
     return;
   // Game view: the preview shows exactly what a built game will.
-  SubmitOffscreenPass(preview, previewWidth, previewHeight,
-                      [&](VkCommandBuffer cmd) {
-                        RecordWorld(cmd, view, proj, WorldView::Game);
-                      });
+  SubmitOffscreenPass(
+      preview, previewWidth, previewHeight,
+      [&](VkCommandBuffer cmd) { RecordWorld(cmd, view, proj, WorldView::Game); },
+      /*bloom=*/true);
 }
 
 VkDescriptorSet SceneRenderer::GetPlayerCameraPreviewDescriptor() const {

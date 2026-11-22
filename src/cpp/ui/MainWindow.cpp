@@ -221,6 +221,11 @@ void MainWindow::OnUpdate(float deltaTime) {
     nativeScriptContext.dialog = &dialogSystem;
     nativeScriptContext.physics = &physicsSystem;
     nativeScriptContext.previousKeys = 0;
+    nativeScriptContext.scripts = &nativeScripts;
+    nativeScriptContext.movement = &movementSystem;
+    nativeScriptContext.projectRoot = projectHandler.projectPath;
+    nativeScriptContext.recordForRestore = true; // Stop undoes spawn/destroy
+    ilmeee::ScriptSceneBeginPlay(nativeScriptContext);
     if (sceneRenderer) {
       dialogSystem.SetProjectRoot(projectHandler.projectPath);
       dialogSystem.Start(*sceneRenderer, gameUi);
@@ -233,6 +238,10 @@ void MainWindow::OnUpdate(float deltaTime) {
     nativeScripts.Stop();
     dialogSystem.Stop();
     gameUi = gameUiBeforePlay;
+    // Objects scripts spawned/destroyed during Play: back to the edit state.
+    // Restores the pre-Play state exactly, so no undo entry is recorded.
+    if (ilmeee::ScriptSceneRestore(nativeScriptContext))
+      selectedSurface = -1;
   }
   gameWasStopped = builder.IsStopped();
   if (builder.IsPlaying() && sceneRenderer) {

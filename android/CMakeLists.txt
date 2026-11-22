@@ -65,6 +65,7 @@ add_library(main SHARED
     ${ENGINE_ROOT}/src/cpp/core_engine/NativeScriptScene.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneLoader.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/SceneRenderer.cpp
+    ${ENGINE_ROOT}/src/cpp/core_engine/BloomPass.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/AudioEngine.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/VideoDecoder.cpp
     ${ENGINE_ROOT}/src/cpp/core_engine/MediaSystem.cpp

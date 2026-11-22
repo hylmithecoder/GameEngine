@@ -101,7 +101,7 @@ set(IMGUI_SOURCES
 )
 
 set(SOURCE_HANDLER
-    src/cpp/core_engine/core/Launcher.cpp 
+    src/cpp/core_engine/core/Launcher.cpp
     src/cpp/core_engine/core/HandlerLauncher.cpp
 )
 
@@ -256,12 +256,13 @@ target_link_libraries(MakeWorldTextPreview PRIVATE glm::glm pthread ${CMAKE_DL_L
 
 add_executable(TestMedia test/TestMedia.cpp
     src/cpp/core_engine/AudioEngine.cpp
-    src/cpp/core_engine/VideoDecoder.cpp)
+    src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaHttp.cpp)
 target_include_directories(TestMedia PRIVATE ${STB_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS})
 target_compile_definitions(TestMedia PRIVATE ILMEEE_HAS_FFMPEG)
 target_link_libraries(TestMedia PRIVATE PkgConfig::SDL3 ${FFMPEG_LIBRARIES}
-    stb_impl pthread)
+    stb_impl pthread curl)
 
 add_executable(TestMovementScripts test/TestMovementScripts.cpp
     src/cpp/core_engine/MovementScript.cpp)
@@ -309,6 +310,7 @@ add_executable(IlmeeePlayer
     src/cpp/player/PlayerMain.cpp
     src/cpp/core_engine/AudioEngine.cpp
     src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaHttp.cpp
     src/cpp/core_engine/MediaSystem.cpp
     src/cpp/core_engine/GameUI.cpp
     src/cpp/core_engine/DialogSystem.cpp
@@ -319,6 +321,7 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/UserMovementScripts.cpp
     src/cpp/core_engine/SceneLoader.cpp
     src/cpp/core_engine/SceneRenderer.cpp
+    src/cpp/core_engine/BloomPass.cpp
     src/cpp/core_engine/TextureManager.cpp
     src/cpp/core_engine/PMXLoader.cpp
     src/cpp/vulkan/VulkanBase.cpp
@@ -345,6 +348,7 @@ target_link_libraries(IlmeeePlayer PRIVATE
     ufbx
     ${FFMPEG_LIBRARIES}
     ${GTK3_LIBRARIES}
+    curl
 )
 
 # Spawns the real HandlerIlmeeeEngine; needs a display (run under xvfb-run).
@@ -510,7 +514,7 @@ target_include_directories(TestBackground PRIVATE
     ${GLAD_4_DIR}/include
     # GLES2
     # GLEW
-    
+
 )
 
 # target_include_directories(TestGLSL PRIVATE
@@ -686,20 +690,20 @@ install(FILES
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
     option(BUILD_DOCUMENTATION "Create and install the HTML based API documentation (requires Doxygen)" ${DOXYGEN_FOUND})
-    
+
     if(BUILD_DOCUMENTATION)
         set(DOXYGEN_IN ${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile.in)
         set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile)
-        
+
         configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
-        
+
         add_custom_target(doc_doxygen ALL
             COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
             COMMENT "Generating API documentation with Doxygen"
             VERBATIM
         )
-        
+
         install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/html DESTINATION share/doc)
     endif()
 endif()

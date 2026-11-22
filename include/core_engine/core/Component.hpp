@@ -33,7 +33,28 @@ struct FieldType<T, std::enable_if_t<std::is_base_of_v<GameObjectRef, T>>> {
   using Storage = GameObjectRef;
 };
 template <class T>
+struct FieldType<T, std::enable_if_t<std::is_base_of_v<AssetRefBase, T>>> {
+  static constexpr auto type = ScriptValueType::Asset;
+  using Storage = AssetRefBase;
+};
+template <class T>
 concept InspectorScalar = requires { FieldType<T>::type; };
+template <class T> struct AssetRefTarget {};
+template <class T> struct AssetRefTarget<AssetRef<T>> { using Type = T; };
+// Class an AssetRef<T> field accepts (T::kAssetClass), else null.
+template <class T> constexpr const char *AssetClassOf() {
+  if constexpr (std::is_same_v<T, PrefabRef>) {
+    return kPrefabAssetClass;
+  } else if constexpr (requires { typename AssetRefTarget<T>::Type; }) {
+    using Target = typename AssetRefTarget<T>::Type;
+    static_assert(requires { Target::kAssetClass; },
+                  "AssetRef<T>: include T's header; T must declare "
+                  "ILMEEE_SCRIPTABLE_OBJECT(T)");
+    return Target::kAssetClass;
+  } else {
+    return nullptr;
+  }
+}
 
 // Type-erased std::vector<T>, built inside the script so the host never
 // needs T. Elements travel as FieldType<T>::Storage.
@@ -67,10 +88,12 @@ struct ScriptProperty {
   // List only.
   ilmeee::ScriptValueType elementType = ilmeee::ScriptValueType::Float;
   const ilmeee::script::ListAccess *list = nullptr;
+  // Asset fields / Asset lists (API 7): accepted ScriptableObject class.
+  const char *assetClass = nullptr;
 };
 // Field(name, member) exposes a member in the Inspector: float, bool,
-// std::string, Vec3, GameObjectRef, ObjectRef<T>, or a std::vector of any of
-// those.
+// std::string, Vec3, GameObjectRef, ObjectRef<T>, AssetRef<T>, PrefabRef,
+// or a std::vector of any of those.
 class ScriptProperties {
 public:
   std::vector<ScriptProperty> fields;
@@ -78,13 +101,16 @@ public:
   void Field(const char *name, T &value) {
     using Traits = ilmeee::script::FieldType<T>;
     fields.push_back({name, Traits::type,
-                      static_cast<typename Traits::Storage *>(&value)});
+                      static_cast<typename Traits::Storage *>(&value),
+                      ilmeee::ScriptValueType::Float, nullptr,
+                      ilmeee::script::AssetClassOf<T>()});
   }
   template <ilmeee::script::InspectorScalar T>
   void Field(const char *name, std::vector<T> &list) {
     fields.push_back({name, ilmeee::ScriptValueType::List, &list,
                       ilmeee::script::FieldType<T>::type,
-                      &ilmeee::script::kListAccess<T>});
+                      &ilmeee::script::kListAccess<T>,
+                      ilmeee::script::AssetClassOf<T>()});
   }
 };
 
@@ -113,12 +139,43 @@ public:
   void LogError(const std::string &message) const {
     Log("[ERROR] " + message);
   }
+  // Spawns a copy of a prefab (API 8). `position` is world space, or local
+  // to `parent` when it is valid. Returns the new root; check IsValid().
+  ilmeee::script::GameObject
+  Instantiate(const std::string &prefabPath,
+              ilmeee::script::Vec3 position = {},
+              ilmeee::script::GameObject parent = {}) const {
+    const uint64_t id =
+        host_ && host_->instantiate && !prefabPath.empty()
+            ? host_->instantiate(host_->context, prefabPath.c_str(),
+                                 &position, parent.Id())
+            : 0;
+    return {id, host_};
+  }
+  ilmeee::script::GameObject
+  Instantiate(const ilmeee::script::PrefabRef &prefab,
+              ilmeee::script::Vec3 position = {},
+              ilmeee::script::GameObject parent = {}) const {
+    if (!prefab.IsSet()) {
+      LogError("Instantiate: PrefabRef is not assigned.");
+      return {};
+    }
+    return Instantiate(prefab.path, position, parent);
+  }
+  // Removes `object` and its children at the end of this frame (safe inside
+  // Update, also for this component's own gameObject).
+  bool Destroy(ilmeee::script::GameObject object) const {
+    return host_ && host_->destroy && object.Id() &&
+           host_->destroy(host_->context, object.Id());
+  }
   virtual ~Component() = default;
   virtual void Awake() {}
   virtual void Start() {}
-  virtual void Update(float deltaTime) {}
+  virtual void Update(float deltaTime) { (void)deltaTime; }
   virtual void OnEnable() {}
   virtual void OnDisable() {}
+  // Once, when the object is destroyed during Play (not when Play stops).
+  virtual void OnDestroy() {}
   virtual void OnTriggerEnter(ilmeee::script::GameObject other) { (void)other; }
   virtual void OnTriggerStay(ilmeee::script::GameObject other) { (void)other; }
   virtual void OnTriggerExit(ilmeee::script::GameObject other) { (void)other; }
@@ -169,3 +226,7 @@ inline constexpr uint64_t kComponentAbi =
     (static_cast<uint64_t>(sizeof(std::vector<ScriptProperty>)) << 8) |
     static_cast<uint64_t>(sizeof(ScriptProperty));
 } // namespace ilmeee::script
+
+// ScriptableObject lives in its own header but is part of the SDK: scripts
+// only need to include this file.
+#include "../script/ScriptableObject.hpp"

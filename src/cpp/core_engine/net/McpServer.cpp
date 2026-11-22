@@ -446,6 +446,17 @@ json ToolList() {
                     {"rotation", vec3},
                     {"scale", vec3},
                     {"parent", index}}, {"url"}));
+  add("list_prefabs", "List every .ilmeeeprefab under assets/ (project-relative paths). Prefabs are reusable object subtrees: spawn them in the editor with instantiate_prefab, or at runtime from a script with Instantiate(prefabRef, position).",
+      ObjectSchema());
+  add("create_prefab", "Save a 3D scene object and all of its children (with their components and scripts) as a .ilmeeeprefab in the stopped editor. Default folder assets/prefabs; the file name comes from the object name and never overwrites. Object references to objects outside the subtree are kept by id and reported as warnings.",
+      ObjectSchema({{"index", index},
+                    {"folder", {{"type", "string"}, {"description", "Optional project-relative folder (default assets/prefabs)"}}}},
+                   {"index"}));
+  add("instantiate_prefab", "Spawn a copy of a .ilmeeeprefab into the stopped editor scene with fresh object ids (internal references between its objects follow the copy). Names are made unique; records Undo; call save_scene to keep it.",
+      ObjectSchema({{"path", {{"type", "string"}, {"minLength", 1}, {"description", "Project-relative .ilmeeeprefab path (see list_prefabs)"}}},
+                    {"position", vec3},
+                    {"parent", {{"type", "integer"}, {"minimum", -1}, {"description", "Parent object index, or -1 for the scene root (default)"}}}},
+                   {"path"}));
   add("delete_object", "Delete a 3D scene object and its child hierarchy in the stopped editor; records Undo. Refuses to delete the last camera in the scene.",
       ObjectSchema({{"index", index}}, {"index"}));
   add("set_object_properties", "Rename or reparent a 3D scene object, or edit type-specific properties for Light (lightType, color, intensity, range, spotAngle, gamma), Camera (projection, fov, orthoSize, near, far), and 3D Text (text, textSize, textColor, alignment, visible) in the stopped editor; records Undo.",
@@ -471,7 +482,7 @@ json ToolList() {
                     {"visible", {{"type", "boolean"}}}}, {"index"}));
   add("get_scene_environment", "Get the scene background color, directional sun light (direction, color, intensity, visible), 3D grid visibility, and Toon/NPR cel-shading settings.",
       ObjectSchema());
-  add("set_scene_environment", "Configure the scene background color, directional sun light, 3D grid visibility, and Toon/NPR cel-shading preset or parameters in the stopped editor; records Undo.",
+  add("set_scene_environment", "Configure the scene background color, directional sun light, 3D grid visibility, Toon/NPR cel-shading preset or parameters, and Bloom (glow around bright pixels; Game view/built game, plus Scene view when bloom.sceneView) in the stopped editor; records Undo. Call save_scene to keep it.",
       ObjectSchema({{"backgroundColor", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 3}, {"maxItems", 4}}},
                     {"sunDirection", vec3},
                     {"sunColor", vec3},
@@ -492,7 +503,16 @@ json ToolList() {
                                           {"specularStrength", {{"type", "number"}, {"minimum", 0}, {"maximum", 2}}},
                                           {"outline", {{"type", "boolean"}}},
                                           {"outlineColor", vec3},
-                                          {"outlineWidth", {{"type", "number"}, {"minimum", 0}, {"maximum", 10}}}})}}));
+                                          {"outlineWidth", {{"type", "number"}, {"minimum", 0}, {"maximum", 10}}}})},
+                    {"bloomPreset", {{"type", "string"}, {"enum", {"subtle", "neon_night", "dreamy", "off"}}}},
+                    {"bloom", ObjectSchema({{"enabled", {{"type", "boolean"}}},
+                                            {"threshold", {{"type", "number"}, {"minimum", 0}, {"maximum", 4}, {"description", "Brightness (0..1 per channel) where glow starts; lower = more glow"}}},
+                                            {"softKnee", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                                            {"intensity", {{"type", "number"}, {"minimum", 0}, {"maximum", 10}}},
+                                            {"radius", {{"type", "number"}, {"minimum", 0.1}, {"maximum", 1}, {"description", "Spread of the glow"}}},
+                                            {"iterations", {{"type", "integer"}, {"minimum", 1}, {"maximum", 8}}},
+                                            {"tint", vec3},
+                                            {"sceneView", {{"type", "boolean"}, {"description", "Also show bloom in the editor Scene view"}}}})}}));
   const json rgba = {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 3}, {"maxItems", 4}};
   const json uiAnchor = {{"type", "string"}, {"enum", {"top_left", "top_right", "bottom_left", "bottom_right", "center", "top_center", "bottom_center", "center_left", "center_right", "stretch_top", "stretch_bottom", "stretch_center", "stretch_full", "stretch"}}};
   add("create_ui_element", "Create a Game UI Canvas element (text, image, button, or joystick) in the stopped editor, automatically enabling the Canvas if not yet created. Call save_scene to persist.",

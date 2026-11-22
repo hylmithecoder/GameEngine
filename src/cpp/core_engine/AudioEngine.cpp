@@ -1,5 +1,6 @@
 #include "../../../include/core_engine/AudioEngine.hpp"
 #include "../../../include/core_engine/MediaComponents.hpp"
+#include "../../../include/core_engine/MediaHttp.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -115,9 +116,9 @@ bool DecodeOgg(const std::string &path, AudioClip &out, std::string *error) {
 bool DecodeFFmpeg(const std::string &path, AudioClip &out,
                   std::string *error) {
   AVFormatContext *fmt = nullptr;
-  if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0) {
+  if (OpenMediaInput(&fmt, path) < 0) {
     if (error)
-      *error = "cannot open file";
+      *error = IsMediaUrl(path) ? "cannot open stream URL" : "cannot open file";
     return false;
   }
   bool ok = false;
@@ -176,7 +177,7 @@ bool DecodeFFmpeg(const std::string &path, AudioClip &out,
   av_packet_free(&pkt);
   swr_free(&swr);
   avcodec_free_context(&dec);
-  avformat_close_input(&fmt);
+  CloseMediaInput(&fmt);
   return ok;
 }
 #endif

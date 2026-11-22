@@ -5,6 +5,8 @@
 
 #include "../include/core_engine/GameBuilder.hpp"
 #include "../include/core_engine/AnimationController.hpp"
+#include "../include/core_engine/IlmeeeAsset.hpp"
+#include "../include/core_engine/Prefab.hpp"
 #include "../include/core_engine/IlmeeeScene.hpp"
 #include "../include/core_engine/NativeScripts.hpp"
 #include "../include/core_engine/ScriptWorkspace.hpp"
@@ -12,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
 
 using namespace ilmeee;
 namespace fs = std::filesystem;
@@ -453,6 +456,137 @@ int main() {
   CHECK(SafeGameName("  ../../etc/passwd") == "etcpasswd");
   CHECK(SafeGameName("Ilmeee: VN #1!") == "Ilmeee_VN_1");
   CHECK(SafeGameName("ミク") == "Game");
+
+  // Data assets referenced by script values ship with their ScriptableObject
+  // class, following asset -> asset references (including a cycle).
+  {
+    const auto project = tmp / "Asset Project";
+    fs::create_directories(project / "scenes");
+    std::string error;
+    CHECK(CreateScriptFiles(project / "assets/scripts", "Holder", error));
+    Write(project / "assets/scripts/Stats.hpp",
+          "#pragma once\n#include <core_engine/core/Component.hpp>\n"
+          "class Stats : public ScriptableObject {\n"
+          "  ILMEEE_SCRIPTABLE_OBJECT(Stats)\npublic:\n  AssetRef<Stats> next;\n"
+          "  void DescribeProperties(ScriptProperties &p) override { p.Field(\"Next\", next); }\n};\n");
+    Write(project / "assets/scripts/Stats.cpp", "#include \"Stats.hpp\"\n");
+    Write(project / "assets/scripts/Unused.hpp",
+          "#pragma once\n#include <core_engine/core/Component.hpp>\n"
+          "class Unused : public ScriptableObject { ILMEEE_SCRIPTABLE_OBJECT(Unused) };\n");
+    Write(project / "assets/scripts/Unused.cpp", "#include \"Unused.hpp\"\n");
+    const auto ref = [](const std::string &name, const std::string &path) {
+      ScriptValue value;
+      value.name = name;
+      value.type = ScriptValueType::Asset;
+      value.string = path;
+      return value;
+    };
+    fs::create_directories(project / "assets/data");
+    CHECK(SaveDataAsset((project / "assets/data/a.ilmeeeasset").string(),
+                        {"assets/scripts/Stats.cpp", "Stats", {ref("Next", "assets/data/b.ilmeeeasset")}}));
+    CHECK(SaveDataAsset((project / "assets/data/b.ilmeeeasset").string(),
+                        {"assets/scripts/Stats.cpp", "Stats", {ref("Next", "assets/data/a.ilmeeeasset")}}));
+    CHECK(SaveDataAsset((project / "assets/data/unused.ilmeeeasset").string(),
+                        {"assets/scripts/Unused.cpp", "Unused", {}}));
+    IlmeeeScene scene;
+    scene.entities.push_back(SceneEntity{});
+    ScriptValue list;
+    list.name = "Pool";
+    list.type = ScriptValueType::List;
+    list.elementType = ScriptValueType::Asset;
+    list.items = {ref("", "assets/data/b.ilmeeeasset"), ref("", "assets/data/missing.ilmeeeasset")};
+    scene.entities[0].scripts.push_back({"assets/scripts/Holder.cpp", "Holder", true,
+                                         {ref("Stats", "assets/data/a.ilmeeeasset"), list}});
+    CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
+    auto assetOptions = o;
+    assetOptions.projectRoot = project;
+    assetOptions.outputDir = tmp / "asset-game";
+    assetOptions.includeUnusedAssets = false;
+    const auto built = BuildGame(assetOptions, logger);
+    if (!built.ok) std::fprintf(stderr, "%s\n", built.error.c_str());
+    CHECK(built.ok);
+    const auto game = assetOptions.outputDir;
+    CHECK(fs::exists(game / "assets/data/a.ilmeeeasset"));
+    CHECK(fs::exists(game / "assets/data/b.ilmeeeasset"));
+    CHECK(!fs::exists(game / "assets/data/unused.ilmeeeasset"));
+    DataAssetFile shipped;
+    CHECK(LoadDataAsset((game / "assets/data/a.ilmeeeasset").string(), shipped));
+    CHECK(shipped.values.size() == 1 && shipped.values[0].string == "assets/data/b.ilmeeeasset");
+    std::ifstream manifestFile(game / "native-scripts.json");
+    const auto modules = nlohmann::json::parse(manifestFile);
+    std::set<std::string> classes;
+    for (const auto &module : modules) classes.insert(module["className"].get<std::string>());
+    CHECK(classes == std::set<std::string>({"Holder", "Stats"}));
+  }
+
+  // Prefabs referenced by PrefabRef (Asset) or string fields ship with what
+  // their objects use, including prefab -> prefab cycles; unused ones don't.
+  {
+    const auto project = tmp / "Prefab Project";
+    fs::create_directories(project / "scenes");
+    std::string error;
+    CHECK(CreateScriptFiles(project / "assets/scripts", "Spawner", error));
+    CHECK(CreateScriptFiles(project / "assets/scripts", "Bullet", error));
+    Write(project / "assets/textures/bullet.png", "png");
+    const auto field = [](const std::string &name, ScriptValueType type,
+                          const std::string &path) {
+      ScriptValue value;
+      value.name = name;
+      value.type = type;
+      value.string = path;
+      return value;
+    };
+    IlmeeeScene bullet;
+    bullet.entities.push_back(SceneEntity{});
+    bullet.entities[0].name = "Bullet";
+    bullet.entities[0].surfaceTextures.push_back({0, "assets/textures/bullet.png"});
+    bullet.entities[0].scripts.push_back(
+        {"assets/scripts/Bullet.cpp", "Bullet", true,
+         {field("Impact", ScriptValueType::Asset, "assets/prefabs/Spark.ilmeeeprefab")}});
+    IlmeeeScene spark;
+    spark.entities.push_back(SceneEntity{});
+    spark.entities[0].name = "Spark";
+    spark.entities[0].scripts.push_back(
+        {"assets/scripts/Bullet.cpp", "Bullet", true,
+         {field("Impact", ScriptValueType::Asset, "assets/prefabs/Bullet.ilmeeeprefab")}});
+    fs::create_directories(project / "assets/prefabs");
+    CHECK(SavePrefab((project / "assets/prefabs/Bullet.ilmeeeprefab").string(), bullet));
+    CHECK(SavePrefab((project / "assets/prefabs/Spark.ilmeeeprefab").string(), spark));
+    CHECK(SavePrefab((project / "assets/prefabs/Unused.ilmeeeprefab").string(), spark));
+    CHECK(SavePrefab((project / "assets/prefabs/ByName.ilmeeeprefab").string(), spark));
+    IlmeeeScene scene;
+    scene.entities.push_back(SceneEntity{});
+    scene.entities[0].scripts.push_back(
+        {"assets/scripts/Spawner.cpp", "Spawner", true,
+         {field("Bullet", ScriptValueType::Asset, "assets/prefabs/Bullet.ilmeeeprefab"),
+          field("Name", ScriptValueType::String, "assets/prefabs/ByName.ilmeeeprefab"),
+          field("Gone", ScriptValueType::Asset, "assets/prefabs/Missing.ilmeeeprefab")}});
+    CHECK(SaveScene((project / "scenes/main.ilmeeescene").string(), scene));
+    auto prefabOptions = o;
+    prefabOptions.projectRoot = project;
+    prefabOptions.outputDir = tmp / "prefab-game";
+    prefabOptions.includeUnusedAssets = false;
+    const auto built = BuildGame(prefabOptions, logger);
+    if (!built.ok) std::fprintf(stderr, "%s\n", built.error.c_str());
+    CHECK(built.ok);
+    CHECK(built.missingReferences >= 1); // Missing.ilmeeeprefab
+    const auto game = prefabOptions.outputDir;
+    CHECK(fs::exists(game / "assets/prefabs/Bullet.ilmeeeprefab"));
+    CHECK(fs::exists(game / "assets/prefabs/Spark.ilmeeeprefab"));
+    CHECK(fs::exists(game / "assets/prefabs/ByName.ilmeeeprefab"));
+    CHECK(!fs::exists(game / "assets/prefabs/Unused.ilmeeeprefab"));
+    CHECK(fs::exists(game / "assets/textures/bullet.png"));
+    IlmeeeScene shipped;
+    CHECK(LoadPrefab((game / "assets/prefabs/Bullet.ilmeeeprefab").string(), shipped));
+    CHECK(shipped.entities.size() == 1 &&
+          shipped.entities[0].scripts[0].values[0].string ==
+              "assets/prefabs/Spark.ilmeeeprefab");
+    std::ifstream manifestFile(game / "native-scripts.json");
+    const auto modules = nlohmann::json::parse(manifestFile);
+    std::set<std::string> classes;
+    for (const auto &module : modules) classes.insert(module["className"].get<std::string>());
+    CHECK(classes == std::set<std::string>({"Bullet", "Spawner"}));
+  }
 
   // Native bindings ship as modules; the player needs no project compiler.
   {

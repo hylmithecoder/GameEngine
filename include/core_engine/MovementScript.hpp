@@ -109,6 +109,8 @@ public:
   // PhysicsSystem reports whether a collider holds the object up and at
   // which parent-local height; scripts then use it as their ground.
   void SetGroundSupport(size_t index, bool supported, float localY);
+  // Objects were destroyed during Play: follow the renumbered mesh indices.
+  void RemapMeshes(const std::vector<int> &remap);
 
 private:
   struct State {

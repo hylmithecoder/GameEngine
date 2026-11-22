@@ -1,9 +1,12 @@
+#include "../include/core_engine/IlmeeeAsset.hpp"
 #include "../include/core_engine/IlmeeeScene.hpp"
 #include "../include/core_engine/NativeScripts.hpp"
 #include "../include/core_engine/ScriptWorkspace.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <thread>
 #include <tuple>
 
@@ -616,6 +619,208 @@ public:
   CHECK(world.log ==
         (std::vector<std::string>{"trig_exit:400", "col_exit:300"}));
   runtime.Stop();
+  // API 7: ScriptableObject data assets and AssetRef<T> fields.
+  {
+    Write(project / "assets/scripts/EnemyStats.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class EnemyStats : public ScriptableObject {
+  ILMEEE_SCRIPTABLE_OBJECT(EnemyStats)
+public:
+  float maxHp = 100;
+  std::string displayName = "Slime";
+  std::vector<float> drops{0.5f};
+  AssetRef<EnemyStats> next; // assets may point at other assets
+  int loads = 0;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Max HP", maxHp);
+    p.Field("Name", displayName);
+    p.Field("Drops", drops);
+    p.Field("Next", next);
+  }
+  void OnLoad() override { ++loads; Log("loaded " + displayName); }
+  float Doubled() const { return maxHp * 2; }
+};
+)cpp");
+    Write(project / "assets/scripts/EnemyStats.cpp", "#include \"EnemyStats.hpp\"\n");
+    Write(project / "assets/scripts/ItemData.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class ItemData : public ScriptableObject {
+  ILMEEE_SCRIPTABLE_OBJECT(ItemData)
+public:
+  float price = 1;
+  void DescribeProperties(ScriptProperties &p) override { p.Field("Price", price); }
+};
+)cpp");
+    Write(project / "assets/scripts/ItemData.cpp", "#include \"ItemData.hpp\"\n");
+    Write(project / "assets/scripts/Enemy.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+#include "EnemyStats.hpp"
+#include "ItemData.hpp"
+#include <type_traits>
+class Enemy : public Component {
+public:
+  AssetRef<EnemyStats> stats;
+  AssetRef<ItemData> wrongClass;
+  AssetRef<EnemyStats> escape;
+  std::vector<AssetRef<EnemyStats>> pool;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Stats", stats);
+    p.Field("Wrong", wrongClass);
+    p.Field("Escape", escape);
+    p.Field("Pool", pool);
+  }
+  void Start() override {
+    static_assert(std::is_same_v<decltype(stats.Get()), const EnemyStats *>);
+    const EnemyStats *s = stats.Get();
+    if (!s) { Log("no stats"); return; }
+    Log("hp=" + std::to_string(int(s->maxHp)) + " name=" + s->displayName +
+        " drops=" + std::to_string(s->drops.size()) +
+        " doubled=" + std::to_string(int(s->Doubled())));
+    if (s->next.IsValid()) Log("next=" + s->next->displayName);
+    Log(std::string("wrong=") + (wrongClass.IsValid() ? "yes" : "no"));
+    Log(std::string("escape=") + (escape.IsValid() ? "yes" : "no"));
+    Log("pool=" + std::to_string(pool.size()) + " same=" +
+        std::to_string(!pool.empty() && pool[0].Get() == s));
+    Log("loads=" + std::to_string(s->loads));
+  }
+};
+)cpp");
+    Write(project / "assets/scripts/Enemy.cpp", "#include \"Enemy.hpp\"\n");
+    Write(project / "assets/scripts/Unnamed.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+class Unnamed : public ScriptableObject {};
+)cpp");
+    Write(project / "assets/scripts/Unnamed.cpp", "#include \"Unnamed.hpp\"\n");
+    const auto statsLib = ilmeee::CompileNativeScript(options, "assets/scripts/EnemyStats.cpp");
+    const auto itemLib = ilmeee::CompileNativeScript(options, "assets/scripts/ItemData.cpp");
+    const auto enemyLib = ilmeee::CompileNativeScript(options, "assets/scripts/Enemy.cpp");
+    for (const auto *lib : {&statsLib, &itemLib, &enemyLib})
+      if (!lib->ok) std::fprintf(stderr, "%s\n", lib->diagnostics.c_str());
+    CHECK(statsLib.ok && itemLib.ok && enemyLib.ok);
+    const auto unnamed = ilmeee::CompileNativeScript(options, "assets/scripts/Unnamed.cpp");
+    CHECK(!unnamed.ok);
+    CHECK(unnamed.diagnostics.find("ILMEEE_SCRIPTABLE_OBJECT(Unnamed)") != std::string::npos);
+    CHECK(runtime.Load(statsLib, error));
+    CHECK(runtime.Load(itemLib, error));
+    CHECK(runtime.Load(enemyLib, error));
+    CHECK(runtime.IsAsset("assets/scripts/EnemyStats.cpp"));
+    CHECK(!runtime.IsAsset("assets/scripts/Enemy.cpp"));
+    const auto classes = runtime.AssetClasses();
+    CHECK(classes.size() == 2 && classes[0] == "assets/scripts/EnemyStats.cpp");
+
+    // Asset Inspector values come from the class defaults like a component.
+    ilmeee::DataAssetFile slime{"assets/scripts/EnemyStats.cpp", "EnemyStats", {}};
+    auto values = runtime.Properties({slime.source, slime.className, true, {}});
+    CHECK(values.size() == 4);
+    for (auto &value : values) {
+      if (value.name == "Max HP") value.number = 250;
+      if (value.name == "Drops") value.items.resize(3, value.items.front());
+      if (value.name == "Next") {
+        CHECK(value.type == ilmeee::ScriptValueType::Asset);
+        CHECK(value.assetClass == "EnemyStats");
+        value.string = "assets/data/boss.ilmeeeasset";
+      }
+    }
+    slime.values = values;
+    fs::create_directories(project / "assets/data");
+    CHECK(ilmeee::SaveDataAsset((project / "assets/data/slime.ilmeeeasset").string(), slime));
+    ilmeee::DataAssetFile boss{"assets/scripts/EnemyStats.cpp", "EnemyStats", {}};
+    ilmeee::ScriptValue bossName;
+    bossName.name = "Name";
+    bossName.type = ilmeee::ScriptValueType::String;
+    bossName.string = "King";
+    boss.values.push_back(bossName); // only changed fields need storing
+    CHECK(ilmeee::SaveDataAsset((project / "assets/data/boss.ilmeeeasset").string(), boss));
+    ilmeee::DataAssetFile item{"assets/scripts/ItemData.cpp", "ItemData", {}};
+    CHECK(ilmeee::SaveDataAsset((project / "assets/data/potion.ilmeeeasset").string(), item));
+    ilmeee::DataAssetFile reloaded;
+    CHECK(ilmeee::LoadDataAsset((project / "assets/data/slime.ilmeeeasset").string(), reloaded));
+    CHECK(reloaded.className == "EnemyStats" && reloaded.values.size() == 4);
+    CHECK(!fs::exists(project / "assets/data/slime.ilmeeeasset.tmp"));
+    std::vector<std::string> referenced;
+    ilmeee::CollectAssetPaths(reloaded.values, referenced);
+    CHECK(referenced.size() == 1 && referenced[0] == "assets/data/boss.ilmeeeasset");
+    CHECK(ilmeee::FindDataAssets(project).size() == 3);
+    CHECK(ilmeee::FindDataAssets(project, "EnemyStats").size() == 2);
+    Write(project / "assets/data/garbage.ilmeeeasset", "not an asset");
+    CHECK(!ilmeee::LoadDataAsset((project / "assets/data/garbage.ilmeeeasset").string(), reloaded));
+    CHECK(ilmeee::FindDataAssets(project).size() == 3);
+
+    ilmeee::NativeScriptBinding enemy{"assets/scripts/Enemy.cpp", "Enemy", true, {}};
+    enemy.values = runtime.Properties(enemy);
+    CHECK(enemy.values.size() == 4);
+    for (auto &value : enemy.values) {
+      if (value.name == "Stats" || value.name == "Wrong")
+        value.string = "assets/data/slime.ilmeeeasset";
+      if (value.name == "Escape")
+        value.string = "../outside.ilmeeeasset";
+      if (value.name == "Pool") {
+        CHECK(value.elementType == ilmeee::ScriptValueType::Asset);
+        CHECK(value.assetClass == "EnemyStats");
+        ilmeee::ScriptValue entry;
+        entry.type = ilmeee::ScriptValueType::Asset;
+        entry.string = "./assets/data//slime.ilmeeeasset"; // same asset, other spelling
+        value.items = {entry};
+      }
+    }
+    // A ScriptableObject bound like a component is skipped, not run.
+    std::vector<ilmeee::NativeScriptBinding> enemyBindings{
+        enemy, {slime.source, slime.className, true, {}}};
+    world.objects[42] = {};
+    world.log.clear();
+    std::vector<std::string> warnings;
+    runtime.log = [&](const std::string &line) { warnings.push_back(line); };
+    runtime.Start(host, {{42, &enemyBindings}});
+    CHECK(world.log.size() == 1 && world.log[0] == "no stats"); // no root yet
+    runtime.Stop();
+    world.log.clear();
+    warnings.clear();
+    runtime.SetAssetRoot(project);
+    runtime.Start(host, {{42, &enemyBindings}});
+    const auto logged = [&](const std::string &line) {
+      return std::find(world.log.begin(), world.log.end(), line) != world.log.end();
+    };
+    CHECK(logged("loaded Slime"));
+    CHECK(logged("hp=250 name=Slime drops=3 doubled=500"));
+    CHECK(logged("loaded King"));
+    CHECK(logged("next=King"));
+    CHECK(logged("wrong=no"));
+    CHECK(logged("escape=no"));
+    CHECK(logged("pool=1 same=1"));
+    CHECK(logged("loads=1"));
+    const auto warned = [&](const std::string &part) {
+      return std::any_of(warnings.begin(), warnings.end(), [&](const auto &line) {
+        return line.find(part) != std::string::npos;
+      });
+    };
+    CHECK(warned("ScriptableObject, not a component"));
+    CHECK(warned("is a EnemyStats, not a ItemData"));
+    CHECK(warned("inside the project"));
+    runtime.Stop();
+    runtime.log = nullptr;
+    // Asset values in a scene round-trip (v1.20).
+    ilmeee::IlmeeeScene assetScene;
+    ilmeee::SceneEntity holder;
+    holder.name = "Holder";
+    holder.scripts.push_back(enemy);
+    assetScene.entities.push_back(holder);
+    const auto scenePath = (project / "asset-scene.ilmeeescene").string();
+    CHECK(ilmeee::SaveScene(scenePath, assetScene));
+    ilmeee::IlmeeeScene loadedScene;
+    CHECK(ilmeee::LoadScene(scenePath, loadedScene));
+    const auto &stored = loadedScene.entities.at(0).scripts.at(0).values;
+    CHECK(stored.size() == 4 && stored[0].type == ilmeee::ScriptValueType::Asset &&
+          stored[0].string == "assets/data/slime.ilmeeeasset");
+    CHECK(stored[3].elementType == ilmeee::ScriptValueType::Asset &&
+          stored[3].items.size() == 1);
+    fs::remove(scenePath);
+    for (const auto *name : {"Unnamed.hpp", "Unnamed.cpp"})
+      fs::remove(project / "assets/scripts" / name);
+  }
   CHECK(ilmeee::CreateScriptFiles(project / "assets/scripts", "InvalidClass",
                                   error));
   Write(project / "assets/scripts/InvalidClass.hpp",
@@ -687,6 +892,154 @@ class AbiMismatch : public Component {};
   CHECK(!liveBad.ok && !asynchronous.Ready("assets/scripts/InvalidApi.cpp"));
   CHECK(asynchronous.Diagnostics("assets/scripts/InvalidApi.cpp")
             .find("FunctionThatDoesNotExist") != std::string::npos);
+  // API 8: safe AssetRef ->, PrefabRef, Instantiate/Destroy lifecycle.
+  {
+    Write(project / "assets/scripts/Spawner.hpp", R"cpp(
+#pragma once
+#include <core_engine/core/Component.hpp>
+#include "EnemyStats.hpp"
+class Spawner : public Component {
+public:
+  AssetRef<EnemyStats> stats; // left unassigned on purpose
+  PrefabRef bullet;
+  std::string role;
+  bool spawned = false;
+  void DescribeProperties(ScriptProperties &p) override {
+    p.Field("Stats", stats);
+    p.Field("Bullet", bullet);
+    p.Field("Role", role);
+  }
+  std::string Id() const { return std::to_string(gameObject.Id()); }
+  void Awake() override { Log("awake " + Id()); }
+  void Start() override {
+    Log("start " + Id());
+    if (role == "spawner") {
+      // Unassigned AssetRef: -> must not crash; one error per field.
+      Log("hp=" + std::to_string(int(stats->maxHp)) + " " + stats->displayName);
+      Log("hp=" + std::to_string(int(stats->maxHp)));
+    }
+    if (role == "child")
+      Log(Instantiate(PrefabRef{}).IsValid() ? "bad" : "no prefab");
+  }
+  void Update(float) override {
+    Log("update " + Id());
+    if (role == "spawner" && !spawned) {
+      spawned = true;
+      Log(Instantiate(bullet, {1, 2, 3}).IsValid() ? "spawned" : "spawn failed");
+    }
+    if (role == "suicide")
+      Log(Destroy(gameObject) ? "destroying" : "destroy failed");
+  }
+  void OnDisable() override { Log("disable " + Id()); }
+  void OnDestroy() override { Log("destroy " + Id()); }
+};
+)cpp");
+    Write(project / "assets/scripts/Spawner.cpp", "#include \"Spawner.hpp\"\n");
+    const auto spawnerLib =
+        ilmeee::CompileNativeScript(options, "assets/scripts/Spawner.cpp");
+    if (!spawnerLib.ok)
+      std::fprintf(stderr, "%s\n", spawnerLib.diagnostics.c_str());
+    CHECK(spawnerLib.ok);
+    CHECK(runtime.Load(spawnerLib, error));
+    const auto makeBinding = [&](const std::string &role,
+                                 const std::string &bullet) {
+      ilmeee::NativeScriptBinding b{"assets/scripts/Spawner.cpp", "Spawner",
+                                    true, {}};
+      b.values = runtime.Properties(b);
+      for (auto &value : b.values) {
+        if (value.name == "Role")
+          value.string = role;
+        if (value.name == "Bullet") {
+          CHECK(value.type == ilmeee::ScriptValueType::Asset);
+          CHECK(value.assetClass == ilmeee::script::kPrefabAssetClass);
+          value.string = bullet;
+        }
+      }
+      return b;
+    };
+    struct SpawnWorld {
+      std::vector<std::string> log;
+      ilmeee::NativeScripts *runtime = nullptr;
+      std::vector<ilmeee::NativeScriptBinding> childScripts;
+      std::string lastPath;
+      ilmeee::script::Vec3 lastPosition;
+      std::set<uint64_t> alive{42, 43};
+    } spawnWorld;
+    spawnWorld.runtime = &runtime;
+    spawnWorld.childScripts = {makeBinding("child", "")};
+    ilmeee::script::HostApi spawnHost;
+    spawnHost.context = &spawnWorld;
+    spawnHost.valid = [](void *ctx, uint64_t id) {
+      return static_cast<SpawnWorld *>(ctx)->alive.contains(id);
+    };
+    spawnHost.log = [](void *ctx, const char *line) {
+      static_cast<SpawnWorld *>(ctx)->log.emplace_back(line);
+    };
+    spawnHost.instantiate = [](void *ctx, const char *path,
+                               const ilmeee::script::Vec3 *position,
+                               uint64_t) -> uint64_t {
+      auto &w = *static_cast<SpawnWorld *>(ctx);
+      w.lastPath = path;
+      w.lastPosition = *position;
+      w.alive.insert(500);
+      w.runtime->Attach({{500, &w.childScripts}});
+      return 500;
+    };
+    spawnHost.destroy = [](void *ctx, uint64_t id) {
+      auto &w = *static_cast<SpawnWorld *>(ctx);
+      w.runtime->Detach({id});
+      return true;
+    };
+    std::vector<ilmeee::NativeScriptBinding> spawnerScripts{
+        makeBinding("spawner", "assets/prefabs/Bullet.ilmeeeprefab")};
+    std::vector<ilmeee::NativeScriptBinding> suicideScripts{
+        makeBinding("suicide", "")};
+    runtime.Start(spawnHost, {{42, &spawnerScripts}, {43, &suicideScripts}});
+    const auto count = [&](const std::string &needle) {
+      return std::count_if(spawnWorld.log.begin(), spawnWorld.log.end(),
+                           [&](const std::string &line) {
+                             return line.find(needle) != std::string::npos;
+                           });
+    };
+    CHECK(count("hp=100 Slime") == 1); // default-constructed EnemyStats
+    CHECK(count("hp=100") == 2);
+    CHECK(count("AssetRef<EnemyStats> is not assigned") == 1);
+    CHECK(runtime.InstanceCount() == 2);
+    spawnWorld.log.clear();
+    runtime.Update(0.1f);
+    CHECK(spawnWorld.lastPath == "assets/prefabs/Bullet.ilmeeeprefab");
+    CHECK(spawnWorld.lastPosition.x == 1 && spawnWorld.lastPosition.y == 2 &&
+          spawnWorld.lastPosition.z == 3);
+    // Spawned: Awake during the spawner's Update, Start at the end of it,
+    // no Update this frame. Destroyed: OnDisable + OnDestroy right away.
+    CHECK(spawnWorld.log ==
+          (std::vector<std::string>{"update 42", "awake 500", "spawned",
+                                    "update 43", "disable 43", "destroy 43",
+                                    "destroying", "start 500",
+                                    "[ERROR] Instantiate: PrefabRef is not assigned.",
+                                    "no prefab"}));
+    CHECK(runtime.InstanceCount() == 2);
+    spawnWorld.log.clear();
+    runtime.Update(0.1f);
+    CHECK(spawnWorld.log ==
+          (std::vector<std::string>{"update 42", "update 500"}));
+    // Destroying again (or an unknown id) is harmless; Stop skips the dead.
+    runtime.Detach({43, 999});
+    spawnWorld.log.clear();
+    runtime.Stop();
+    CHECK(spawnWorld.log ==
+          (std::vector<std::string>{"disable 42", "disable 500"}));
+    CHECK(runtime.InstanceCount() == 0);
+    // Instantiate/Destroy without host support fail softly.
+    ilmeee::script::HostApi bare = spawnHost;
+    bare.instantiate = nullptr;
+    bare.destroy = nullptr;
+    spawnWorld.log.clear();
+    runtime.Start(bare, {{42, &spawnerScripts}, {43, &suicideScripts}});
+    runtime.Update(0.1f);
+    CHECK(count("spawn failed") == 1 && count("destroy failed") == 1);
+    runtime.Stop();
+  }
   // Keep a runnable fixture for the real player's renderer/host smoke test.
   ilmeee::IlmeeeScene scene;
   ilmeee::SceneEntity owner;

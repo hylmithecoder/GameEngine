@@ -1,4 +1,5 @@
 #include "../../include/core_engine/Builder.hpp"
+#include <unordered_map>
 
 namespace Ilmeee {
 
@@ -12,6 +13,7 @@ void Builder::Play() {
   snapshot_.clear();
   for (const auto &mesh : renderer_->meshes3d) {
     MeshSnapshot snap;
+    snap.objectId = mesh.objectId;
     snap.worldText = mesh.worldText;
     snap.position = mesh.userPosition;
     snap.rotation = mesh.userRotation;
@@ -50,20 +52,29 @@ void Builder::Stop() {
     return;
 
   // Restore transforms from snapshot
-  if (renderer_ && snapshot_.size() == renderer_->meshes3d.size()) {
-    for (size_t i = 0; i < snapshot_.size(); i++) {
-      renderer_->meshes3d[i].userPosition = snapshot_[i].position;
-      renderer_->meshes3d[i].userRotation = snapshot_[i].rotation;
-      renderer_->meshes3d[i].userScale = snapshot_[i].scale;
-      renderer_->meshes3d[i].worldText = snapshot_[i].worldText;
-      renderer_->meshes3d[i].hasPhysics = snapshot_[i].hasPhysics;
-      renderer_->meshes3d[i].useGravity = snapshot_[i].useGravity;
-      renderer_->meshes3d[i].isKinematic = snapshot_[i].isKinematic;
-      renderer_->meshes3d[i].mass = snapshot_[i].mass;
-      renderer_->meshes3d[i].drag = snapshot_[i].drag;
-      renderer_->meshes3d[i].gravityY = snapshot_[i].gravityY;
-      renderer_->meshes3d[i].velocity = snapshot_[i].velocity;
-      renderer_->meshes3d[i].collider = snapshot_[i].collider;
+  // Objects spawned during Play have no snapshot (the editor removes them);
+  // destroyed ones are brought back by ScriptSceneRestore.
+  if (renderer_) {
+    std::unordered_map<uint64_t, const MeshSnapshot *> byId;
+    for (const auto &snap : snapshot_)
+      byId[snap.objectId] = &snap;
+    for (auto &mesh : renderer_->meshes3d) {
+      const auto it = byId.find(mesh.objectId);
+      if (it == byId.end())
+        continue;
+      const MeshSnapshot &snap = *it->second;
+      mesh.userPosition = snap.position;
+      mesh.userRotation = snap.rotation;
+      mesh.userScale = snap.scale;
+      mesh.worldText = snap.worldText;
+      mesh.hasPhysics = snap.hasPhysics;
+      mesh.useGravity = snap.useGravity;
+      mesh.isKinematic = snap.isKinematic;
+      mesh.mass = snap.mass;
+      mesh.drag = snap.drag;
+      mesh.gravityY = snap.gravityY;
+      mesh.velocity = snap.velocity;
+      mesh.collider = snap.collider;
     }
   }
   snapshot_.clear();

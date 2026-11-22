@@ -2,8 +2,10 @@
 #include <cstdint>
 #include <string>
 
+class ScriptableObject; // script/ScriptableObject.hpp
+
 namespace ilmeee::script {
-inline constexpr uint32_t kApiVersion = 6;
+inline constexpr uint32_t kApiVersion = 8;
 struct Vec3 {
   float x = 0, y = 0, z = 0;
   Vec3 operator+(Vec3 other) const {
@@ -148,6 +150,21 @@ struct HostApi {
   bool (*command)(void *, uint64_t, Command) = nullptr;
   // API 3: true only on the frame the key went down.
   bool (*keyPressed)(void *, const char *) = nullptr;
+  // API 7: shared, read-only ScriptableObject loaded from a .ilmeeeasset
+  // (project-relative path). Null when missing or of another class. Called
+  // with assetContext, not context: assets are owned by NativeScripts.
+  const ScriptableObject *(*asset)(void *, const char *path,
+                                   const char *className) = nullptr;
+  void *assetContext = nullptr;
+  // API 8: spawn a .ilmeeeprefab (project-relative path) at `position`
+  // (world, or local to `parent` when non-zero). Returns the new root's id,
+  // 0 on failure. The copy's scripts Awake now and Start at the end of the
+  // frame.
+  uint64_t (*instantiate)(void *, const char *path, const Vec3 *position,
+                          uint64_t parent) = nullptr;
+  // API 8: removes the object and its children at the end of the frame;
+  // their scripts get OnDisable + OnDestroy right away and stop updating.
+  bool (*destroy)(void *, uint64_t) = nullptr;
 };
 class GameObject {
 public:
@@ -260,6 +277,65 @@ template <class T> class ObjectRef : public GameObjectRef {
 public:
   T Get() const { return GameObjectRef::Get().template As<T>(); }
   bool IsValid() const { return Get().IsValid(); }
+};
+// Inspector field holding a .ilmeeeasset path; see AssetRef<T>.
+class AssetRefBase {
+public:
+  std::string path; // serialized identity: project-relative asset path
+  bool IsSet() const { return !path.empty(); }
+  void Bind(const HostApi *host) { host_ = host; }
+
+protected:
+  const ScriptableObject *Resolve(const char *className) const {
+    return host_ && host_->asset && !path.empty()
+               ? host_->asset(host_->assetContext, path.c_str(), className)
+               : nullptr;
+  }
+  // Logged once per field: `->` was used while Get() is null.
+  void ReportMissing(const char *className) const {
+    if (reported_ || !host_ || !host_->log)
+      return;
+    reported_ = true;
+    const std::string message =
+        "[ERROR] AssetRef<" + std::string(className) + "> " +
+        (path.empty() ? std::string("is not assigned")
+                      : "'" + path + "' could not be loaded") +
+        "; using default values. Check IsValid() or Get() before ->.";
+    host_->log(host_->context, message.c_str());
+  }
+
+private:
+  const HostApi *host_ = nullptr;
+  mutable bool reported_ = false;
+};
+// Inspector field that resolves to a shared data asset:
+// AssetRef<EnemyStats> stats;  ...  if (auto *s = stats.Get()) s->maxHp;
+// T must use ILMEEE_SCRIPTABLE_OBJECT(T). The asset is loaded on first Get()
+// during Play and is read-only (the same instance is shared by every user).
+// `stats->maxHp` never dereferences null: an unassigned or broken asset
+// logs one error and reads a default-constructed T instead.
+template <class T> class AssetRef : public AssetRefBase {
+public:
+  const T *Get() const {
+    const ScriptableObject *base = Resolve(T::kAssetClass);
+    return base ? static_cast<const T *>(base) : nullptr;
+  }
+  bool IsValid() const { return Get() != nullptr; }
+  const T *operator->() const {
+    if (const T *value = Get())
+      return value;
+    ReportMissing(T::kAssetClass);
+    static const T fallback{};
+    return &fallback;
+  }
+};
+// Accepted class of a PrefabRef field (stored like an Asset value).
+inline constexpr const char *kPrefabAssetClass = "ilmeee.Prefab";
+// Inspector field holding a .ilmeeeprefab path (API 8), for
+// Component::Instantiate(prefab, position).
+class PrefabRef : public AssetRefBase {
+public:
+  bool IsValid() const { return IsSet(); }
 };
 } // namespace ilmeee::script
 using GameObjectRef = ilmeee::script::GameObjectRef;

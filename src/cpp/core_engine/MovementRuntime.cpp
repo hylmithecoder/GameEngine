@@ -1,4 +1,5 @@
 #include "../../../include/core_engine/MovementScript.hpp"
+#include "../../../include/core_engine/MeshRemap.hpp"
 #include "../../../include/core_engine/SceneRenderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -120,6 +121,10 @@ void EchoKeyboardOnJoysticks(const SceneRenderer &renderer,
     if (!mesh.movementRig.lookJoystick.empty())
       input.axes[mesh.movementRig.lookJoystick] = look;
   }
+}
+
+void MovementSystem::RemapMeshes(const std::vector<int> &remap) {
+  RemapMeshKeys(states_, remap);
 }
 
 void MovementSystem::Reset() {

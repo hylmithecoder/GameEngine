@@ -73,3 +73,5 @@ docs/*
 !docs/ScriptingAPI.md
 !docs/AndroidPerformanceAndUI.md
 .env
+
+.opencode

@@ -378,4 +378,6 @@ using DialogGameObject = ilmeee::script::DialogGameObject;
 using PhysicsGameObject = ilmeee::script::PhysicsGameObject;
 using ColliderGameObject = ilmeee::script::ColliderGameObject;
 template <class T> using ObjectRef = ilmeee::script::ObjectRef<T>;
+template <class T> using AssetRef = ilmeee::script::AssetRef<T>;
+using PrefabRef = ilmeee::script::PrefabRef;
 #endif

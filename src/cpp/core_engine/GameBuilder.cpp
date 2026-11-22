@@ -1,6 +1,8 @@
 #include "../../../include/core_engine/GameBuilder.hpp"
+#include "../../../include/core_engine/IlmeeeAsset.hpp"
 #include "../../../include/core_engine/NativeScripts.hpp"
 #include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/Prefab.hpp"
 #include "../../../include/core_engine/ModelDependencies.hpp"
 #include "../../../include/core_engine/AnimationController.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
@@ -261,6 +263,83 @@ public:
     return dst.generic_string();
   }
 
+  // Data assets (.ilmeeeasset) referenced by script values: copied with the
+  // assets they reference in turn, and their ScriptableObject class compiled.
+  // Prefabs (.ilmeeeprefab) travel the same way: as PrefabRef fields
+  // (Asset values) or as plain string fields holding a prefab path.
+  void RelocateAssetValues(std::vector<ScriptValue> &values) {
+    const auto relocate = [&](ScriptValue &value) {
+      if (value.string.empty())
+        return;
+      value.string = IsPrefabPath(value.string) ? CopyPrefab(value.string)
+                                                : CopyDataAsset(value.string);
+    };
+    const auto relocateString = [&](ScriptValue &value) {
+      if (IsPrefabPath(value.string))
+        value.string = CopyPrefab(value.string);
+    };
+    for (auto &value : values) {
+      if (value.type == ScriptValueType::Asset)
+        relocate(value);
+      if (value.type == ScriptValueType::String)
+        relocateString(value);
+      if (value.type == ScriptValueType::List &&
+          value.elementType == ScriptValueType::Asset)
+        for (auto &item : value.items)
+          relocate(item);
+      if (value.type == ScriptValueType::List &&
+          value.elementType == ScriptValueType::String)
+        for (auto &item : value.items)
+          relocateString(item);
+    }
+  }
+  // A prefab plus everything its objects use (models, textures, media,
+  // scripts, data assets, other prefabs), rewritten with game paths.
+  std::string CopyPrefab(const std::string &ref) {
+    fs::path original(ref);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    if (const auto done = prefabs_.find(original); done != prefabs_.end())
+      return done->second;
+    IlmeeeScene prefab;
+    if (!LoadPrefab(original.string(), prefab)) {
+      ++r_.missingReferences;
+      Say("  ! missing or unreadable prefab: " + ref);
+      return ref;
+    }
+    const auto relocated = Relocate(original.string(), false, "prefabs");
+    prefabs_[original] = relocated; // before recursing: prefabs may cycle
+    for (SceneEntity &e : prefab.entities)
+      RelocateEntity(e);
+    fs::create_directories((gameDir_ / relocated).parent_path());
+    if (!SavePrefab((gameDir_ / relocated).string(), prefab))
+      throw std::runtime_error("cannot write " + (gameDir_ / relocated).string());
+    Say("  prefab " + relocated + " (" + std::to_string(prefab.entities.size()) +
+        " objects)");
+    return relocated;
+  }
+  std::string CopyDataAsset(const std::string &ref) {
+    fs::path original(ref);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    if (const auto done = dataAssets_.find(original); done != dataAssets_.end())
+      return done->second;
+    DataAssetFile asset;
+    if (!LoadDataAsset(original.string(), asset)) {
+      ++r_.missingReferences;
+      Say("  ! missing or unreadable data asset: " + ref);
+      return ref;
+    }
+    const auto relocated = Relocate(original.string(), false, "data");
+    dataAssets_[original] = relocated; // before recursing: assets may cycle
+    nativeSources_.insert(asset.source);
+    RelocateAssetValues(asset.values);
+    fs::create_directories((gameDir_ / relocated).parent_path());
+    if (!SaveDataAsset((gameDir_ / relocated).string(), asset))
+      throw std::runtime_error("cannot write " + (gameDir_ / relocated).string());
+    return relocated;
+  }
+
   std::string CopyController(const std::string &source) {
     fs::path original(source);
     if (original.is_relative()) original = root_ / original;
@@ -280,6 +359,38 @@ public:
     return relocated;
   }
 
+  // Rewrites one scene/prefab entity's references to paths inside the game
+  // and copies what they point at.
+  void RelocateEntity(SceneEntity &e) {
+    for (auto &script : e.scripts) {
+      nativeSources_.insert(script.source);
+      RelocateAssetValues(script.values);
+    }
+    if (e.kind == PrimitiveKind::ExternalObj ||
+        e.kind == PrimitiveKind::ExternalPmx)
+      e.externalPath = Relocate(e.externalPath, true);
+    for (SurfaceTexture &t : e.surfaceTextures)
+      t.texturePath = Relocate(t.texturePath, false);
+    if ((e.kind == PrimitiveKind::UiImage ||
+         e.kind == PrimitiveKind::UiButton) && !e.uiImagePath.empty())
+      e.uiImagePath = Relocate(e.uiImagePath, false);
+    if (!e.audio.clip.empty())
+      e.audio.clip = Relocate(e.audio.clip, false, "audio");
+    if (!e.dialog.file.empty())
+      e.dialog.file = Relocate(e.dialog.file, false, "dialog");
+    if (!e.animation.clip.empty())
+      e.animation.clip = Relocate(e.animation.clip, false, "animations");
+    if (!e.animation.controller.empty()) e.animation.controller = CopyController(e.animation.controller);
+    if (!e.video.clip.empty() && !IsStreamUrl(e.video.clip)) {
+      const fs::path original = Canonical(
+          fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)
+                                               : root_ / e.video.clip);
+      e.video.clip = Relocate(e.video.clip, false, "video");
+      if (o_.target == BuildTarget::Android && o_.androidMaxVideoHeight > 0)
+        PrepareVideoForPhone(original, gameDir_ / e.video.clip);
+    }
+  }
+
   void CopyScenes() {
     fs::path src = root_ / "scenes";
     for (auto it = fs::recursive_directory_iterator(
@@ -297,34 +408,8 @@ public:
         CopyFile(it->path(), dst);
         continue;
       }
-      for (SceneEntity &e : scene.entities) {
-        for (const auto &script : e.scripts) {
-          nativeSources_.insert(script.source);
-        }
-        if (e.kind == PrimitiveKind::ExternalObj ||
-            e.kind == PrimitiveKind::ExternalPmx)
-          e.externalPath = Relocate(e.externalPath, true);
-        for (SurfaceTexture &t : e.surfaceTextures)
-          t.texturePath = Relocate(t.texturePath, false);
-        if ((e.kind == PrimitiveKind::UiImage ||
-             e.kind == PrimitiveKind::UiButton) && !e.uiImagePath.empty())
-          e.uiImagePath = Relocate(e.uiImagePath, false);
-        if (!e.audio.clip.empty())
-          e.audio.clip = Relocate(e.audio.clip, false, "audio");
-        if (!e.dialog.file.empty())
-          e.dialog.file = Relocate(e.dialog.file, false, "dialog");
-        if (!e.animation.clip.empty())
-          e.animation.clip = Relocate(e.animation.clip, false, "animations");
-        if (!e.animation.controller.empty()) e.animation.controller = CopyController(e.animation.controller);
-        if (!e.video.clip.empty() && !IsStreamUrl(e.video.clip)) {
-          const fs::path original = Canonical(
-              fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)
-                                                   : root_ / e.video.clip);
-          e.video.clip = Relocate(e.video.clip, false, "video");
-          if (o_.target == BuildTarget::Android && o_.androidMaxVideoHeight > 0)
-            PrepareVideoForPhone(original, gameDir_ / e.video.clip);
-        }
-      }
+      for (SceneEntity &e : scene.entities)
+        RelocateEntity(e);
       fs::create_directories(dst.parent_path());
       if (!SaveScene(dst.string(), scene))
         throw std::runtime_error("cannot write " + dst.string());
@@ -914,6 +999,8 @@ private:
   GameBuildResult &r_;
   fs::path root_, assets_, stage_, out_;
   std::set<std::string> nativeSources_;
+  std::map<fs::path, std::string> dataAssets_; // original -> game path
+  std::map<fs::path, std::string> prefabs_;    // original -> game path
   fs::path gameDir_; // where the game folder goes: stage_, or APK assets
   std::map<fs::path, fs::path> copiedDirs_;
   std::map<fs::path, fs::path> copiedFiles_;

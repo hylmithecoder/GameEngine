@@ -56,6 +56,14 @@ public:
   void StopVideo(size_t mesh);
   bool IsVideoPlaying(const SceneRenderer &renderer, size_t mesh) const;
 
+  // Objects spawned during Play: start their Play On Start audio (video
+  // slots are created on demand by Update).
+  void OnMeshesSpawned(SceneRenderer &renderer,
+                       const std::vector<size_t> &meshes);
+  // Objects about to be destroyed during Play: call before RemoveMesh3D
+  // with its remap (old -> new, -1 removed); stops their audio/video.
+  void RemapMeshes(SceneRenderer &renderer, const std::vector<int> &remap);
+
   // Last load/playback error for a clip ("" = fine / not tried).
   std::string ErrorFor(const std::string &clip) const;
   static bool VideoSupported() { return VideoDecoder::Available(); }
