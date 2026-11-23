@@ -24,28 +24,26 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
-#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <random>
-#include <signal.h>
 #include <sstream>
 #include <string>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
+#include <core_engine/Process.hpp>
 #include <core_engine/UserDataDir.hpp>
+#include <core_engine/net/CollabClient.hpp>
 #include <json.hpp>
 #include <nfd.hpp>
 
@@ -62,12 +60,28 @@ using json = nlohmann::json;
 // directory instead, then fall back to a few sibling layouts and
 // finally to PATH.
 static fs::path ExecutableDir() {
+  const std::string self = ilmeee::CurrentExecutablePath();
+  if (!self.empty())
+    return fs::path(self).parent_path();
   std::error_code ec;
-  fs::path self = fs::read_symlink("/proc/self/exe", ec);
-  if (!ec && !self.empty())
-    return self.parent_path();
   return fs::current_path(ec);
 }
+
+static std::tm LocalTime(std::time_t t) {
+  std::tm tm{};
+#ifdef _WIN32
+  localtime_s(&tm, &t);
+#else
+  localtime_r(&t, &tm);
+#endif
+  return tm;
+}
+
+#ifdef _WIN32
+static constexpr const char *kEditorExe = "GameEngineSDL.exe";
+#else
+static constexpr const char *kEditorExe = "GameEngineSDL";
+#endif
 
 static std::string ResolveEditorBinary() {
   const char *override_env = std::getenv("ILMEEE_EDITOR_BIN");
@@ -76,18 +90,18 @@ static std::string ResolveEditorBinary() {
 
   const fs::path dir = ExecutableDir();
   const fs::path candidates[] = {
-      dir / "GameEngineSDL",              // installed / build bin layout
-      dir / "bin" / "GameEngineSDL",      // Hub at prefix root
-      dir.parent_path() / "bin" / "GameEngineSDL",
-      fs::path("build") / "bin" / "GameEngineSDL", // run from repo root
+      dir / kEditorExe,              // installed / build bin layout
+      dir / "bin" / kEditorExe,      // Hub at prefix root
+      dir.parent_path() / "bin" / kEditorExe,
+      fs::path("build") / "bin" / kEditorExe, // run from repo root
   };
   std::error_code ec;
   for (const auto &c : candidates) {
     if (fs::exists(c, ec) && !ec)
       return fs::absolute(c, ec).string();
   }
-  // Last resort: let execvp search PATH.
-  return "GameEngineSDL";
+  // Last resort: let the OS search PATH.
+  return kEditorExe;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,8 +151,7 @@ public:
       text.pop_back();
     char tbuf[16];
     std::time_t t = std::time(nullptr);
-    std::tm tm{};
-    localtime_r(&t, &tm);
+    const std::tm tm = LocalTime(t);
     std::snprintf(tbuf, sizeof(tbuf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min,
                   tm.tm_sec);
     std::lock_guard<std::mutex> lk(mu);
@@ -194,14 +207,15 @@ static std::string StripAnsi(const std::string &s) {
 }
 
 struct ChildProc {
-  pid_t pid = -1;
+  std::shared_ptr<ilmeee::Process> proc;
+  long pid = -1;
   std::string label;       // "Editor:<pid>"
   std::string projectPath; // for display
   bool mcpEnabled = false;
   std::mutex tokenMutex;
   std::string mcpToken;
   std::string publicHost; // --mcp-public-host given at launch
-  int readFd = -1;
+  std::string collabRoom;  // online workspace it was opened for ("" = none)
   std::thread reader;
   std::atomic<bool> alive{false};
 };
@@ -213,9 +227,7 @@ struct ChildProc {
 namespace {
 
 std::string TodayIsoDate() {
-  std::time_t t = std::time(nullptr);
-  std::tm tm{};
-  localtime_r(&t, &tm);
+  const std::tm tm = LocalTime(std::time(nullptr));
   char buf[16];
   std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm.tm_year + 1900,
                 tm.tm_mon + 1, tm.tm_mday);
@@ -323,6 +335,43 @@ std::string GenerateMcpToken() {
   return token;
 }
 
+// ~/.ilmeeeengine/collab.json is shared with the editor's Realtime Collab
+// window: server URL, token, display name, color, and rooms[<project path>].
+fs::path CollabJsonPath() { return ilmeee::UserDataRoot() / "collab.json"; }
+
+json ReadCollabJson() {
+  std::ifstream f(CollabJsonPath());
+  json j = f ? json::parse(f, nullptr, false) : json::object();
+  return j.is_object() ? j : json::object();
+}
+
+void WriteCollabJson(const json &j) {
+  std::error_code ec;
+  fs::create_directories(CollabJsonPath().parent_path(), ec);
+  {
+    std::ofstream f(CollabJsonPath(), std::ios::trunc);
+    f << j.dump(2);
+  }
+  // It holds the server token: private to the user.
+  fs::permissions(CollabJsonPath(), fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace, ec);
+}
+
+// Same rule as the server / editor: [A-Za-z0-9_.-], max 64, no leading dot.
+std::string SanitizeRoomName(const std::string &in) {
+  std::string out;
+  for (char c : in)
+    if (std::isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.')
+      out += c;
+    else if (!out.empty() && out.back() != '-')
+      out += '-';
+  while (!out.empty() && (out.front() == '.' || out.front() == '-'))
+    out.erase(out.begin());
+  if (out.size() > 64)
+    out.resize(64);
+  return out;
+}
+
 std::vector<ProjectEntry> LoadRecentProjects() {
   std::vector<ProjectEntry> out;
   std::ifstream f(HubConfigPath());
@@ -394,9 +443,11 @@ public:
     // — without termination the child's pipe would never EOF and the
     // reader thread would hang forever on shutdown.
     for (auto &c : children) {
-      if (c->alive && c->pid > 0)
-        kill(c->pid, SIGTERM);
+      if (c->alive && c->proc)
+        c->proc->Terminate();
     }
+    if (roomFetch.joinable())
+      roomFetch.join();
     for (auto &c : children) {
       if (c->reader.joinable())
         c->reader.join();
@@ -413,7 +464,8 @@ public:
   // stdout+stderr into a pipe whose reader thread feeds logStore. The
   // process is intentionally kept in the same process group so the
   // user can quit everything by closing Hub.
-  bool LaunchEditor(const std::string &projectPath, bool mcpEnabled) {
+  bool LaunchEditor(const std::string &projectPath, bool mcpEnabled,
+                    const std::string &collabRoom = {}) {
     if (projectPath.empty()) {
       logStore.Push("Hub", "LaunchEditor: empty project path.");
       return false;
@@ -428,131 +480,88 @@ public:
       }
     }
 
-    int fds[2];
-    if (pipe(fds) != 0) {
-      logStore.Push("Hub",
-                    std::string("pipe() failed: ") + std::strerror(errno));
-      return false;
-    }
-    // Set close-on-exec on the read end so the child doesn't inherit it.
-    int flags = fcntl(fds[0], F_GETFD);
-    if (flags != -1)
-      fcntl(fds[0], F_SETFD, flags | FD_CLOEXEC);
-
-    pid_t pid = fork();
-    if (pid < 0) {
-      close(fds[0]);
-      close(fds[1]);
-      logStore.Push("Hub",
-                    std::string("fork() failed: ") + std::strerror(errno));
-      return false;
-    }
-
-    if (pid == 0) {
-      // Child: redirect stdout + stderr to the pipe write end.
-      close(fds[0]);
-      dup2(fds[1], STDOUT_FILENO);
-      dup2(fds[1], STDERR_FILENO);
-      close(fds[1]);
-      // Force line buffering even though stdout is now a pipe; otherwise
-      // glibc may switch to full buffering and the Hub console would
-      // show nothing until the child terminates.
-      setvbuf(stdout, nullptr, _IOLBF, 0);
-      setvbuf(stderr, nullptr, _IOLBF, 0);
-      const std::string editorBin = ResolveEditorBinary();
-      std::vector<const char *> args = {"GameEngineSDL", "--project",
-                                        projectPath.c_str()};
-      if (g_DebugMode)
-        args.push_back("--debug");
-      if (mcpEnabled) {
-        args.push_back("--mcp");
-        // Token goes through the environment, not argv, so it stays out
-        // of `ps` output.
-        if (!mcpSettings.token.empty())
-          setenv("ILMEEE_MCP_TOKEN", mcpSettings.token.c_str(), 1);
-        if (!mcpSettings.publicHost.empty()) {
-          args.push_back("--mcp-public-host");
-          args.push_back(mcpSettings.publicHost.c_str());
-        }
+    ilmeee::ProcessOptions o;
+    o.program = ResolveEditorBinary();
+    o.args = {"--project", projectPath};
+    if (g_DebugMode)
+      o.args.push_back("--debug");
+    if (mcpEnabled) {
+      o.args.push_back("--mcp");
+      // Token goes through the environment, not argv, so it stays out of
+      // `ps` / Task Manager command lines.
+      if (!mcpSettings.token.empty())
+        o.env.emplace_back("ILMEEE_MCP_TOKEN", mcpSettings.token);
+      if (!mcpSettings.publicHost.empty()) {
+        o.args.push_back("--mcp-public-host");
+        o.args.push_back(mcpSettings.publicHost);
       }
-      args.push_back(nullptr);
-      execvp(editorBin.c_str(), const_cast<char *const *>(args.data()));
-      // exec failed:
-      std::fprintf(stderr, "execvp(%s) failed: %s\n", editorBin.c_str(),
-                   std::strerror(errno));
-      _exit(127);
+    }
+    if (!collabRoom.empty()) {
+      o.args.push_back("--collab-room");
+      o.args.push_back(collabRoom);
     }
 
-    // Parent
-    close(fds[1]);
+    auto proc = std::make_shared<ilmeee::Process>();
+    std::string error;
+    if (!proc->Start(o, error)) {
+      logStore.Push("Hub", "Could not start the editor (" + o.program + "): " + error);
+      return false;
+    }
 
     auto child = std::make_shared<ChildProc>();
-    child->pid = pid;
-    child->label = "Editor:" + std::to_string(pid);
+    child->proc = proc;
+    child->pid = proc->Pid();
+    child->label = "Editor:" + std::to_string(child->pid);
     child->projectPath = projectPath;
     child->mcpEnabled = mcpEnabled;
+    child->collabRoom = collabRoom;
     if (mcpEnabled) {
       // A configured token is never logged by the editor, so remember it.
       child->mcpToken = mcpSettings.token;
       child->publicHost = mcpSettings.publicHost;
     }
-    child->readFd = fds[0];
     child->alive.store(true);
 
     LogStore *store = &logStore;
-    int readFd = fds[0];
-    std::string label = child->label;
-    pid_t childPid = pid;
-
-    child->reader = std::thread([readFd, label, store, childPid, child]() {
+    const std::string label = child->label;
+    child->reader = std::thread([label, store, child]() {
       std::string buf;
       char chunk[4096];
-      while (true) {
-        ssize_t n = ::read(readFd, chunk, sizeof(chunk));
-        if (n > 0) {
-          buf.append(chunk, (size_t)n);
-          size_t pos;
-          while ((pos = buf.find('\n')) != std::string::npos) {
-            std::string line = buf.substr(0, pos);
-            buf.erase(0, pos + 1);
-            std::string clean = StripAnsi(line);
-            const std::string marker = "[MCP] Session token: ";
-            const size_t tokenPos = clean.find(marker);
-            if (tokenPos != std::string::npos) {
-              std::lock_guard<std::mutex> lock(child->tokenMutex);
-              child->mcpToken = clean.substr(tokenPos + marker.size());
-            }
-            store->Push(label, std::move(clean));
+      long n;
+      while ((n = child->proc->Read(chunk, sizeof(chunk))) > 0) {
+        buf.append(chunk, (size_t)n);
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+          std::string line = buf.substr(0, pos);
+          buf.erase(0, pos + 1);
+          if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+          std::string clean = StripAnsi(line);
+          const std::string marker = "[MCP] Session token: ";
+          const size_t tokenPos = clean.find(marker);
+          if (tokenPos != std::string::npos) {
+            std::lock_guard<std::mutex> lock(child->tokenMutex);
+            child->mcpToken = clean.substr(tokenPos + marker.size());
           }
-        } else if (n == 0) {
-          break; // EOF — child closed its stdout/stderr
-        } else if (errno == EINTR) {
-          continue;
-        } else {
-          break;
+          store->Push(label, std::move(clean));
         }
       }
       if (!buf.empty())
         store->Push(label, StripAnsi(buf));
-      ::close(readFd);
-
-      int status = 0;
-      ::waitpid(childPid, &status, 0);
+      const int code = child->proc->Wait();
       child->alive.store(false);
-      std::string exitMsg =
-          "Editor pid=" + std::to_string(childPid) + " exited";
-      if (WIFEXITED(status)) {
-        exitMsg += " (code " + std::to_string(WEXITSTATUS(status)) + ")";
-      } else if (WIFSIGNALED(status)) {
-        exitMsg += " (signal " + std::to_string(WTERMSIG(status)) + ")";
-      }
+      std::string exitMsg = "Editor pid=" + std::to_string(child->pid) + " exited (code " +
+                            std::to_string(code) + ")";
+      if (code == 127)
+        exitMsg += " - editor binary not found or not runnable";
       store->Push("Hub", exitMsg);
     });
 
     children.push_back(child);
-    logStore.Push("Hub", "Launched editor pid=" + std::to_string(pid) +
+    logStore.Push("Hub", "Launched editor pid=" + std::to_string(child->pid) +
                              " project=" + projectPath +
-                             (mcpEnabled ? " MCP=on" : " MCP=off"));
+                             (mcpEnabled ? " MCP=on" : " MCP=off") +
+                             (collabRoom.empty() ? "" : " workspace=" + collabRoom));
     return true;
   }
 
@@ -695,7 +704,7 @@ public:
   }
 
 private:
-  enum class Section { Projects, Templates, Learn, Settings };
+  enum class Section { Projects, Online, Templates, Learn, Settings };
 
   std::vector<ProjectEntry> projects;
   Section currentSection = Section::Projects;
@@ -708,6 +717,22 @@ private:
   char newProjName[128] = "";
   char newProjLocation[512] = "";
   std::string newProjError;
+
+  // Online workspaces (realtime collab rooms on the server).
+  bool onlineLoaded = false;
+  bool showOnlineToken = false;
+  char onlineUrl[256] = "";
+  char onlineToken[128] = "";
+  char onlineName[64] = "";
+  std::thread roomFetch;
+  std::atomic<bool> fetching{false};
+  std::mutex roomMutex;
+  ilmeee::net::CollabRoomList roomList; // guarded by roomMutex
+  bool roomListValid = false;           // guarded by roomMutex
+  double lastFetch = -1000.0;
+  std::string pickForRoom; // workspace waiting for "which local project?"
+  int hostProjectIdx = 0;
+  char hostRoom[64] = "";
 
   // Log capture state.
   LogStore logStore;
@@ -742,6 +767,7 @@ private:
     ImGui::TextDisabled("WORKSPACE");
     ImGui::Spacing();
     SidebarButton("Projects", Section::Projects);
+    SidebarButton("Online Workspaces", Section::Online);
     SidebarButton("Templates", Section::Templates);
     SidebarButton("Learn", Section::Learn);
     SidebarButton("Settings", Section::Settings);
@@ -781,6 +807,9 @@ private:
     case Section::Projects:
       DrawProjectList();
       break;
+    case Section::Online:
+      DrawOnlinePane();
+      break;
     case Section::Templates:
       DrawTemplatesPlaceholder();
       break;
@@ -800,6 +829,7 @@ private:
     const bool compact = available < 820.0f;
     ImGui::BeginChild("##Topbar", ImVec2(0, compact ? 116.0f : 76.0f), false);
     const char *title = currentSection == Section::Projects ? "Projects" :
+                        currentSection == Section::Online ? "Online Workspaces" :
                         currentSection == Section::Templates ? "Templates" :
                         currentSection == Section::Learn ? "Learn" : "Settings";
     ImGui::SetCursorPos(ImVec2(20, 13));
@@ -962,6 +992,274 @@ private:
     ImGui::Dummy(ImVec2(0, 8));
   }
 
+  // ---------------- Online workspaces ----------------
+  void LoadOnlineSettings() {
+    onlineLoaded = true;
+    const json j = ReadCollabJson();
+    std::snprintf(onlineUrl, sizeof onlineUrl, "%s",
+                  j.value("url", std::string(ilmeee::net::kCollabDefaultUrl)).c_str());
+    std::snprintf(onlineToken, sizeof onlineToken, "%s", j.value("token", std::string()).c_str());
+    std::string name = j.value("name", std::string());
+    if (name.empty()) {
+      const char *u = std::getenv("USER");
+      if (!u || !*u)
+        u = std::getenv("USERNAME");
+      name = u && *u ? u : "editor";
+    }
+    std::snprintf(onlineName, sizeof onlineName, "%s", name.c_str());
+  }
+
+  void SaveOnlineSettings() {
+    json j = ReadCollabJson();
+    j["url"] = std::string(onlineUrl);
+    j["token"] = std::string(onlineToken);
+    j["name"] = std::string(onlineName);
+    WriteCollabJson(j);
+  }
+
+  // Local project linked to a workspace (collab.json rooms[path] == room).
+  std::string LocalCopyOf(const std::string &room) {
+    const json j = ReadCollabJson();
+    if (auto r = j.find("rooms"); r != j.end() && r->is_object())
+      for (auto it = r->begin(); it != r->end(); ++it) {
+        std::error_code ec;
+        if (it->is_string() && it->get<std::string>() == room && fs::is_directory(it.key(), ec))
+          return it.key();
+      }
+    return {};
+  }
+
+  void LinkLocalCopy(const std::string &path, const std::string &room) {
+    json j = ReadCollabJson();
+    if (!j.contains("rooms") || !j["rooms"].is_object())
+      j["rooms"] = json::object();
+    j["rooms"][path] = room;
+    WriteCollabJson(j);
+  }
+
+  void RefreshRooms() {
+    if (fetching)
+      return;
+    if (roomFetch.joinable())
+      roomFetch.join();
+    fetching = true;
+    lastFetch = ImGui::GetTime();
+    const std::string url = onlineUrl, token = onlineToken;
+    roomFetch = std::thread([this, url, token] {
+      auto list = ilmeee::net::FetchCollabRooms(url, token);
+      {
+        std::lock_guard<std::mutex> lock(roomMutex);
+        roomList = std::move(list);
+        roomListValid = true;
+      }
+      fetching = false;
+    });
+  }
+
+  void OpenWorkspace(const std::string &projectPath, const std::string &room) {
+    LinkLocalCopy(projectPath, room);
+    AddOrUpdateProject(projectPath, "");
+    const size_t idx = IndexOf(projectPath);
+    const bool mcp = idx < projects.size() && projects[idx].mcpEnabled;
+    hostProjectIdx = 0; // AddOrUpdateProject moved it to the top
+    if (LaunchEditor(projectPath, mcp, room) && idx < projects.size()) {
+      projects[idx].lastOpened = TodayIsoDate();
+      SaveRecentProjects(projects);
+    }
+  }
+
+  static ImVec4 Rgb(std::uint32_t c) {
+    return ImVec4((float)(c >> 16 & 255) / 255.0f, (float)(c >> 8 & 255) / 255.0f,
+                  (float)(c & 255) / 255.0f, 1.0f);
+  }
+
+  static std::string Ago(std::uint64_t whenUnix) {
+    if (!whenUnix)
+      return "never";
+    const auto now = (std::uint64_t)std::time(nullptr);
+    const std::uint64_t d = now > whenUnix ? now - whenUnix : 0;
+    if (d < 60) return "just now";
+    if (d < 3600) return std::to_string(d / 60) + " min ago";
+    if (d < 86400) return std::to_string(d / 3600) + " h ago";
+    return std::to_string(d / 86400) + " days ago";
+  }
+
+  void DrawOnlinePane() {
+    if (!onlineLoaded)
+      LoadOnlineSettings();
+    ImGui::BeginChild("##OnlineScroll", ImVec2(0, 0), false);
+    ImGui::TextWrapped(
+        "Edit a scene together in realtime. Everyone in a workspace needs a copy of "
+        "the same project folder (models, textures and audio are not sent); the scene "
+        "itself is shared live. Joining a workspace that already has a scene replaces "
+        "the scene of your local copy with it.");
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(420);
+    bool changed = ImGui::InputText("Server", onlineUrl, sizeof onlineUrl);
+    ImGui::SetNextItemWidth(420);
+    changed |= ImGui::InputText("Token", onlineToken, sizeof onlineToken,
+                                showOnlineToken ? 0 : ImGuiInputTextFlags_Password);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show##onlineToken", &showOnlineToken);
+    ImGui::SetNextItemWidth(420);
+    changed |= ImGui::InputText("Your name", onlineName, sizeof onlineName);
+    if (changed)
+      SaveOnlineSettings(); // the editor reads the same file when it joins
+
+    const bool canFetch = onlineToken[0] != '\0' && onlineUrl[0] != '\0';
+    ImGui::BeginDisabled(!canFetch || fetching);
+    if (ImGui::Button(fetching ? "Refreshing..." : "Refresh"))
+      RefreshRooms();
+    ImGui::EndDisabled();
+    if (canFetch && !fetching && ImGui::GetTime() - lastFetch > 5.0)
+      RefreshRooms(); // keep the list live while this page is open
+
+    ilmeee::net::CollabRoomList list;
+    bool valid;
+    {
+      std::lock_guard<std::mutex> lock(roomMutex);
+      list = roomList;
+      valid = roomListValid;
+    }
+    ImGui::SameLine();
+    if (!canFetch)
+      ImGui::TextDisabled("Enter the server token to see the workspaces.");
+    else if (valid && !list.ok)
+      ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", list.error.c_str());
+    else if (valid)
+      ImGui::TextDisabled("%zu workspace(s)", list.rooms.size());
+
+    // ---- host one of my projects ----
+    ImGui::Spacing();
+    ImGui::SeparatorText("Put a project online");
+    if (projects.empty()) {
+      ImGui::TextDisabled("Add a project on the Projects page first.");
+    } else {
+      hostProjectIdx = std::clamp(hostProjectIdx, 0, (int)projects.size() - 1);
+      ImGui::SetNextItemWidth(260);
+      if (ImGui::BeginCombo("##hostProject", projects[(size_t)hostProjectIdx].name.c_str())) {
+        for (int i = 0; i < (int)projects.size(); ++i)
+          if (ImGui::Selectable(projects[(size_t)i].name.c_str(), i == hostProjectIdx)) {
+            hostProjectIdx = i;
+            hostRoom[0] = '\0';
+          }
+        ImGui::EndCombo();
+      }
+      const ProjectEntry &hp = projects[(size_t)hostProjectIdx];
+      if (hostRoom[0] == '\0') {
+        const json j = ReadCollabJson();
+        std::string room = SanitizeRoomName(fs::path(hp.path).filename().string());
+        if (auto r = j.find("rooms"); r != j.end() && r->is_object())
+          if (auto it = r->find(hp.path); it != r->end() && it->is_string())
+            room = it->get<std::string>();
+        std::snprintf(hostRoom, sizeof hostRoom, "%s", room.c_str());
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(220);
+      ImGui::InputText("Workspace name", hostRoom, sizeof hostRoom,
+                       ImGuiInputTextFlags_CharsNoBlank);
+      ImGui::SameLine();
+      const std::string room = SanitizeRoomName(hostRoom);
+      ImGui::BeginDisabled(room.empty() || !canFetch);
+      if (ImGui::Button("Go online")) {
+        OpenWorkspace(hp.path, room);
+        lastFetch = ImGui::GetTime() - 3.0; // refresh soon to show it
+      }
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Opens the project and joins the workspace. A new (empty) "
+                          "workspace takes this project's current scene.");
+    }
+
+    // ---- workspaces on the server ----
+    ImGui::Spacing();
+    ImGui::SeparatorText("Workspaces on the server");
+    if (valid && list.ok && list.rooms.empty())
+      ImGui::TextDisabled("No workspaces yet. Put a project online above.");
+    for (const auto &room : list.rooms) {
+      ImGui::PushID(room.name.c_str());
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.135f, 0.151f, 1.0f));
+      ImGui::BeginChild("##ws", ImVec2(0, 92), true, ImGuiWindowFlags_NoScrollbar);
+      ImGui::TextUnformatted(room.name.c_str());
+      ImGui::SameLine(0, 12);
+      ImGui::TextDisabled("%zu objects  -  active %s", room.objects, Ago(room.updatedUnix).c_str());
+      if (room.peers.empty()) {
+        ImGui::TextDisabled("Nobody online");
+      } else {
+        for (size_t i = 0; i < room.peers.size(); ++i) {
+          if (i)
+            ImGui::SameLine(0, 10);
+          ImGui::ColorButton("##pc", Rgb(room.peers[i].second), ImGuiColorEditFlags_NoTooltip,
+                             ImVec2(10, 10));
+          ImGui::SameLine(0, 4);
+          ImGui::TextUnformatted(room.peers[i].first.c_str());
+        }
+      }
+      const std::string local = LocalCopyOf(room.name);
+      bool openHere = false;
+      for (const auto &c : children)
+        openHere |= c->alive && c->collabRoom == room.name;
+      if (local.empty())
+        ImGui::TextDisabled("No local copy linked yet");
+      else
+        ImGui::TextDisabled("Your copy: %s", local.c_str());
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 30));
+      ImGui::BeginDisabled(openHere);
+      if (ImGui::Button(openHere ? "Open" : "Join", ImVec2(110, 30))) {
+        if (!local.empty())
+          OpenWorkspace(local, room.name);
+        else
+          pickForRoom = room.name;
+      }
+      ImGui::EndDisabled();
+      if (openHere && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Already open in an editor started from this Hub");
+      ImGui::EndChild();
+      ImGui::PopStyleColor();
+      ImGui::PopID();
+      ImGui::Dummy(ImVec2(0, 4));
+    }
+    ImGui::EndChild();
+    DrawPickLocalCopyPopup();
+  }
+
+  // "Which folder is your copy of <workspace>?"
+  void DrawPickLocalCopyPopup() {
+    if (!pickForRoom.empty() && !ImGui::IsPopupOpen("Choose your copy"))
+      ImGui::OpenPopup("Choose your copy");
+    ImGui::SetNextWindowSize(ImVec2(520, 0));
+    if (!ImGui::BeginPopupModal("Choose your copy", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+      return;
+    ImGui::TextWrapped("Which folder on this computer is your copy of the project for "
+                       "workspace '%s'? Its scene will be replaced by the workspace's.",
+                       pickForRoom.c_str());
+    ImGui::Spacing();
+    std::string chosen;
+    for (const auto &p : projects)
+      if (ImGui::Selectable((p.name + "  (" + p.path + ")").c_str()))
+        chosen = p.path;
+    ImGui::Spacing();
+    if (ImGui::Button("Browse folder...")) {
+      nfdchar_t *outPath = nullptr;
+      if (NFD::PickFolder(outPath, nullptr) == NFD_OKAY && outPath) {
+        chosen = outPath;
+        NFD::FreePath(outPath);
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      pickForRoom.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    if (!chosen.empty()) {
+      OpenWorkspace(chosen, pickForRoom);
+      pickForRoom.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
   void DrawTemplatesPlaceholder() {
     ImGui::TextDisabled("Templates");
     ImGui::Separator();
@@ -980,7 +1278,7 @@ private:
     ImGui::TextDisabled("Settings");
     ImGui::Separator();
     ImGui::Text("Hub config: %s", HubConfigPath().c_str());
-    ImGui::Text("Editor binary: ./GameEngineSDL (working dir)");
+    ImGui::Text("Editor binary: %s", ResolveEditorBinary().c_str());
     ImGui::Spacing();
     if (ImGui::Button("Reload Project List")) {
       projects = LoadRecentProjects();

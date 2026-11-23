@@ -62,6 +62,19 @@ done < <(find "$STAGE" -maxdepth 1 \( -iname '*.exe' -o -iname '*.dll' \) -print
 [ "$leaks" = 0 ] || exit 1
 
 cp "$ROOT/assets/icons/app_icon.ico" "$STAGE/IlmeeeEngine.ico"
+
+# MSYS2's OpenSSL looks for trusted CAs inside the MSYS2 tree, which users
+# don't have; ilmeee::net::ResolveCaFile picks up cacert.pem next to the exe
+# (wss:// collab, the Hub's workspace list).
+CA_BUNDLE=""
+for c in /ucrt64/etc/ssl/certs/ca-bundle.crt /usr/ssl/certs/ca-bundle.crt /etc/ssl/certs/ca-bundle.crt; do
+    [ -f "$c" ] && CA_BUNDLE=$c && break
+done
+if [ -z "$CA_BUNDLE" ]; then
+    echo "::error::no CA bundle found to ship as cacert.pem"; exit 1
+fi
+cp "$CA_BUNDLE" "$STAGE/cacert.pem"
+echo "  + cacert.pem (from $CA_BUNDLE)"
 cat > "$STAGE/VERSION.txt" <<EOF
 Ilmeee Engine $VERSION
 commit ${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}

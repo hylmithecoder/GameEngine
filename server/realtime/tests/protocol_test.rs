@@ -326,3 +326,47 @@ async fn locks_queue_and_hand_off() {
     assert_eq!(a.expect("notice").await["payload"]["level"], "warn");
     s.stop().await;
 }
+
+async fn http_get_auth(addr: SocketAddr, path: &str, token: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+    c.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).await.unwrap();
+    out
+}
+
+#[tokio::test]
+async fn room_list_needs_token_and_reports_rooms() {
+    let s = Server::start(cfg("sekret")).await;
+    assert!(http_get(s.addr, "/rooms").await.starts_with("HTTP/1.1 401"));
+    assert!(http_get_auth(s.addr, "/rooms", "nope").await.starts_with("HTTP/1.1 401"));
+
+    let mut a = Client::connect(s.addr).await;
+    a.hello("sekret").await;
+    a.join("alpha", "Alice").await;
+    a.event("op", json!({"key":"o1","slot":"data","data":{}})).await;
+    a.event("op", json!({"key":"env","slot":"data","data":{}})).await;
+    a.expect("op").await;
+    a.expect("op").await;
+    let mut b = Client::connect(s.addr).await;
+    b.hello("sekret").await;
+    b.join("beta", "Bob").await;
+
+    let resp = http_get_auth(s.addr, "/rooms", "sekret").await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let body: Value = serde_json::from_str(resp.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let rooms = body["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 2);
+    let alpha = rooms.iter().find(|r| r["name"] == "alpha").unwrap();
+    assert_eq!(alpha["objects"], 1); // "env" is not an object
+    assert_eq!(alpha["peers"][0]["name"], "Alice");
+    let beta = rooms.iter().find(|r| r["name"] == "beta").unwrap();
+    assert_eq!(beta["objects"], 0);
+    s.stop().await;
+}

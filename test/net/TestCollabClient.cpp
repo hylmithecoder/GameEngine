@@ -235,6 +235,18 @@ static bool Pump(const std::function<bool()> &done, P &...peers) {
   return false;
 }
 
+static void TestHttpBase() {
+  CHECK(CollabHttpBase("wss://realtimeprotokol.ilmeee.com/ws") ==
+        "https://realtimeprotokol.ilmeee.com");
+  CHECK(CollabHttpBase("ws://127.0.0.1:9230/ws") == "http://127.0.0.1:9230");
+  CHECK(CollabHttpBase("ws://host") == "http://host");
+  CHECK(CollabHttpBase("wss://host:8443/a/b?x=1") == "https://host:8443");
+  CHECK(CollabHttpBase("https://host/ws").empty());
+  CHECK(CollabHttpBase("wss:///ws").empty());
+  const auto bad = FetchCollabRooms("ftp://x", "");
+  CHECK(!bad.ok && !bad.error.empty());
+}
+
 static void TestOnline() {
   const std::string room = "cpp-test-" + std::to_string(getpid()) + "-" +
                            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
@@ -318,6 +330,22 @@ static void TestOnline() {
     CHECK(Pump([&] { return a.client.Locks().count(lk) == 0; }, a, b, c));
   }
 
+  // room directory (Hub): our room is listed with its three people
+  {
+    const auto list = FetchCollabRooms(std::getenv("ILMEEE_RT_URL"),
+                                       std::getenv("ILMEEE_RT_TOKEN") ? std::getenv("ILMEEE_RT_TOKEN") : "");
+    CHECK(list.ok);
+    const CollabRoomInfo *mine = nullptr;
+    for (const auto &r : list.rooms)
+      if (r.name == room)
+        mine = &r;
+    CHECK(mine && mine->peers.size() == 3);
+    if (std::getenv("ILMEEE_RT_TOKEN") && *std::getenv("ILMEEE_RT_TOKEN")) {
+      const auto denied = FetchCollabRooms(std::getenv("ILMEEE_RT_URL"), "definitely-wrong");
+      CHECK(!denied.ok && denied.status == 401);
+    }
+  }
+
   // leaving
   c.client.Stop();
   CHECK(c.client.State() == CollabState::Offline);
@@ -353,6 +381,7 @@ int main() {
   Run("entity data codec", TestEntityCodec);
   Run("xform + environment codec", TestXformAndEnvironment);
   Run("last-writer-wins verdicts", TestLww);
+  Run("http base + room list errors", TestHttpBase);
   if (std::getenv("ILMEEE_RT_URL")) {
     std::printf("online: %s (TLS %s)\n", std::getenv("ILMEEE_RT_URL"),
                 WsTlsAvailable() ? "available" : "not built");

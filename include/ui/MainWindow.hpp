@@ -341,6 +341,8 @@ public:
   float collabLockAsk = 0.0f;    // seconds since we last asked for it
   glm::vec3 collabCursor{0.0f};  // our scene cursor (world), for presence
   bool collabCursorValid = false;
+  bool collabAutoJoinDone = false; // --collab-room / ILMEEE_COLLAB_ROOM handled
+  float collabAutoJoinWait = 0.0f;
   bool collabShowCameras = true, collabShowCursors = true, collabShowSelections = true;
   std::string CollabKeyOf(size_t meshIndex) const;
   std::string CollabPeerName(uint32_t id) const;

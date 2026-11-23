@@ -14,6 +14,9 @@
 //!   server: event lock {key, holder, queue} to the whole room (holder 0 = free);
 //!           the join reply carries locks[] (see locks.rs)
 //!
+//! HTTP: `GET /rooms` (Authorization: Bearer <token>) lists the rooms for the
+//! Hub's "online workspaces" — name, who is in it, object count, last change.
+//!
 //! Every room mutation and the broadcast it causes happen under one lock with
 //! non-blocking sends, so all peers see ops in the same order and a join reply
 //! always lands before the first op broadcast that follows it.
@@ -26,6 +29,7 @@ use crate::room::{OpIn, RoomState, now_unix};
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
@@ -101,7 +105,15 @@ impl AppState {
     pub fn new(cfg: Config, saved: HashMap<String, RoomState>) -> Arc<Self> {
         let rooms = saved
             .into_iter()
-            .map(|(name, state)| (name, Room { state, ..Default::default() }))
+            .map(|(name, state)| {
+                (
+                    name,
+                    Room {
+                        state,
+                        ..Default::default()
+                    },
+                )
+            })
             .collect();
         Arc::new(Self {
             cfg,
@@ -117,7 +129,9 @@ impl AppState {
 
     /// Writes rooms changed since the last call.
     pub fn persist_dirty(&self) {
-        let Some(dir) = &self.cfg.data_dir else { return };
+        let Some(dir) = &self.cfg.data_dir else {
+            return;
+        };
         let snapshot: Vec<(String, RoomState)> = {
             let mut rooms = self.rooms();
             rooms
@@ -147,7 +161,9 @@ impl AppState {
             let mut rooms = self.rooms();
             let names: Vec<String> = rooms
                 .iter()
-                .filter(|(_, r)| r.peers.is_empty() && now.saturating_sub(r.state.updated_unix) > ttl)
+                .filter(|(_, r)| {
+                    r.peers.is_empty() && now.saturating_sub(r.state.updated_unix) > ttl
+                })
                 .map(|(n, _)| n.clone())
                 .collect();
             for n in &names {
@@ -182,6 +198,7 @@ pub fn router(app: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
+        .route("/rooms", get(list_rooms))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
 }
@@ -203,6 +220,51 @@ async fn health(State(app): State<Arc<AppState>>) -> Json<Value> {
         "peers": peers,
         "uptime_secs": app.started.elapsed().as_secs(),
     }))
+}
+
+/// Room list for the Hub. Needs the server token like the WebSocket does.
+async fn list_rooms(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !app.cfg.token.is_empty() {
+        let given = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+        if !protocol::tokens_equal(given, &app.cfg.token) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "invalid token"})),
+            )
+                .into_response();
+        }
+    }
+    let mut list: Vec<(u64, Value)> = {
+        let rooms = app.rooms();
+        rooms
+            .iter()
+            .map(|(name, r)| {
+                let mut peers: Vec<(u32, Value)> = r
+                    .peers
+                    .iter()
+                    .map(|(id, p)| (*id, json!({"name": p.name, "color": p.color})))
+                    .collect();
+                peers.sort_by_key(|(id, _)| *id);
+                let objects = r.state.keys.keys().filter(|k| k.starts_with('o')).count();
+                (
+                    r.state.updated_unix,
+                    json!({
+                        "name": name,
+                        "peers": peers.into_iter().map(|(_, p)| p).collect::<Vec<_>>(),
+                        "objects": objects,
+                        "seq": r.state.seq,
+                        "updated_unix": r.state.updated_unix,
+                    }),
+                )
+            })
+            .collect()
+    };
+    list.sort_by_key(|(updated, _)| std::cmp::Reverse(*updated)); // most recently active first
+    Json(json!({"rooms": list.into_iter().map(|(_, v)| v).collect::<Vec<_>>()})).into_response()
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(app): State<Arc<AppState>>) -> Response {
@@ -227,7 +289,10 @@ impl Conn {
     }
     fn refuse(&self, reason: &str) {
         tracing::info!(conn = self.id, reason, "refusing connection");
-        self.send(protocol::event("bye", json!({"reason": reason, "retry": false})));
+        self.send(protocol::event(
+            "bye",
+            json!({"reason": reason, "retry": false}),
+        ));
         let _ = self.tx.try_send(Out::Close(reason.to_string()));
     }
 }
@@ -249,7 +314,10 @@ async fn connection(socket: WebSocket, app: Arc<AppState>) {
                     let mut reason = reason;
                     reason.truncate(120); // close reason must fit in a control frame
                     let _ = sink
-                        .send(Message::Close(Some(CloseFrame { code: 1008, reason: reason.into() })))
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1008,
+                            reason: reason.into(),
+                        })))
                         .await;
                     break;
                 }
@@ -258,7 +326,13 @@ async fn connection(socket: WebSocket, app: Arc<AppState>) {
         let _ = sink.close().await;
     });
 
-    let mut conn = Conn { id, authed: false, room: None, tx, kick: Arc::new(Notify::new()) };
+    let mut conn = Conn {
+        id,
+        authed: false,
+        room: None,
+        tx,
+        kick: Arc::new(Notify::new()),
+    };
     let hello_deadline = tokio::time::sleep(HELLO_TIMEOUT);
     tokio::pin!(hello_deadline);
 
@@ -334,7 +408,11 @@ fn handle_text(app: &Arc<AppState>, conn: &mut Conn, text: &str) -> bool {
             conn.send(protocol::reply("ping", *rid, json!({"unix": now_unix()})));
         }
         (Kind::Request(rid), other) => {
-            conn.send(protocol::fail(other, *rid, &format!("unknown request '{other}'")));
+            conn.send(protocol::fail(
+                other,
+                *rid,
+                &format!("unknown request '{other}'"),
+            ));
         }
         (Kind::Event, "op") => op(app, conn, &env.payload),
         (Kind::Event, "presence") => presence(app, conn, env.payload),
@@ -381,9 +459,17 @@ fn peer_json(id: u32, p: &Peer) -> Value {
 }
 
 fn join(app: &Arc<AppState>, conn: &mut Conn, rid: u64, p: &Value) {
-    let room = p.get("room").and_then(Value::as_str).unwrap_or("").to_string();
+    let room = p
+        .get("room")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if !protocol::valid_room(&room) {
-        conn.send(protocol::fail("room.join", rid, "room name must be 1-64 of A-Z a-z 0-9 _ - ."));
+        conn.send(protocol::fail(
+            "room.join",
+            rid,
+            "room name must be 1-64 of A-Z a-z 0-9 _ - .",
+        ));
         return;
     }
     let mut name: String = p
@@ -406,7 +492,11 @@ fn join(app: &Arc<AppState>, conn: &mut Conn, rid: u64, p: &Value) {
 
     let mut rooms = app.rooms();
     if !rooms.contains_key(&room) && rooms.len() >= app.cfg.max_rooms {
-        conn.send(protocol::fail("room.join", rid, "server is full (too many rooms)"));
+        conn.send(protocol::fail(
+            "room.join",
+            rid,
+            "server is full (too many rooms)",
+        ));
         return;
     }
     let r = rooms.entry(room.clone()).or_default();
@@ -448,7 +538,9 @@ fn join(app: &Arc<AppState>, conn: &mut Conn, rid: u64, p: &Value) {
 fn leave_room(app: &Arc<AppState>, conn: &mut Conn, reason: &str) {
     let Some(room) = conn.room.take() else { return };
     let mut rooms = app.rooms();
-    let Some(r) = rooms.get_mut(&room) else { return };
+    let Some(r) = rooms.get_mut(&room) else {
+        return;
+    };
     if r.peers.remove(&conn.id).is_none() {
         return; // already dropped (too slow)
     }
@@ -462,18 +554,26 @@ fn leave_room(app: &Arc<AppState>, conn: &mut Conn, reason: &str) {
 
 fn op(app: &Arc<AppState>, conn: &mut Conn, p: &Value) {
     let Some(room) = conn.room.clone() else {
-        conn.send(protocol::event("notice", json!({"level": "warn", "message": "op ignored: join a room first"})));
+        conn.send(protocol::event(
+            "notice",
+            json!({"level": "warn", "message": "op ignored: join a room first"}),
+        ));
         return;
     };
     let parsed = match OpIn::parse(p) {
         Ok(o) => o,
         Err(e) => {
-            conn.send(protocol::event("notice", json!({"level": "warn", "message": e})));
+            conn.send(protocol::event(
+                "notice",
+                json!({"level": "warn", "message": e}),
+            ));
             return;
         }
     };
     let mut rooms = app.rooms();
-    let Some(r) = rooms.get_mut(&room) else { return };
+    let Some(r) = rooms.get_mut(&room) else {
+        return;
+    };
     if !r.peers.contains_key(&conn.id) {
         return;
     }
@@ -487,20 +587,32 @@ fn op(app: &Arc<AppState>, conn: &mut Conn, p: &Value) {
         }
         Err(e) => {
             drop(rooms);
-            conn.send(protocol::event("notice", json!({"level": "error", "message": e})));
+            conn.send(protocol::event(
+                "notice",
+                json!({"level": "error", "message": e}),
+            ));
         }
     }
 }
 
 fn presence(app: &Arc<AppState>, conn: &mut Conn, data: Value) {
-    let Some(room) = conn.room.clone() else { return };
+    let Some(room) = conn.room.clone() else {
+        return;
+    };
     if data.to_string().len() > app.cfg.max_presence_bytes {
-        conn.send(protocol::event("notice", json!({"level": "warn", "message": "presence too large"})));
+        conn.send(protocol::event(
+            "notice",
+            json!({"level": "warn", "message": "presence too large"}),
+        ));
         return;
     }
     let mut rooms = app.rooms();
-    let Some(r) = rooms.get_mut(&room) else { return };
-    let Some(me) = r.peers.get_mut(&conn.id) else { return };
+    let Some(r) = rooms.get_mut(&room) else {
+        return;
+    };
+    let Some(me) = r.peers.get_mut(&conn.id) else {
+        return;
+    };
     me.presence = data.clone();
     let text = protocol::event("presence", json!({"from": conn.id, "data": data}));
     let slow = r.broadcast(Some(conn.id), &text);
@@ -508,10 +620,14 @@ fn presence(app: &Arc<AppState>, conn: &mut Conn, data: Value) {
 }
 
 fn lock(app: &Arc<AppState>, conn: &mut Conn, p: &Value, acquire: bool) {
-    let Some(room) = conn.room.clone() else { return };
+    let Some(room) = conn.room.clone() else {
+        return;
+    };
     let key = p.get("key").and_then(Value::as_str).unwrap_or("");
     let mut rooms = app.rooms();
-    let Some(r) = rooms.get_mut(&room) else { return };
+    let Some(r) = rooms.get_mut(&room) else {
+        return;
+    };
     if !r.peers.contains_key(&conn.id) {
         return;
     }
@@ -520,7 +636,10 @@ fn lock(app: &Arc<AppState>, conn: &mut Conn, p: &Value, acquire: bool) {
             Ok(c) => c,
             Err(e) => {
                 drop(rooms);
-                conn.send(protocol::event("notice", json!({"level": "warn", "message": e})));
+                conn.send(protocol::event(
+                    "notice",
+                    json!({"level": "warn", "message": e}),
+                ));
                 return;
             }
         }

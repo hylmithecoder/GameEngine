@@ -221,6 +221,7 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/WsTransport.cpp
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
+    src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
@@ -239,6 +240,10 @@ target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
 # ILMEEE_RT_TOKEN), e.g. `make -C server/realtime run` in another shell.
 add_executable(TestCollabClient test/net/TestCollabClient.cpp)
 target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
+
+# Portable child process (Hub -> editor launch); spawns itself as the child.
+add_executable(TestProcess test/TestProcess.cpp)
+target_link_libraries(TestProcess PRIVATE ilmeee_net)
 
 add_executable(TestMcpServer test/net/TestMcpServer.cpp)
 target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
@@ -831,6 +836,7 @@ target_link_libraries(IlmeeeHub PRIVATE
     ${XCB_LIBRARIES}
     ${X11_LIBRARIES}
     glm::glm
+    ilmeee_net
     dl
     pthread
 )

@@ -62,6 +62,12 @@ struct WsClientOptions {
 // True when this build can dial wss:// (IXWebSocket built with OpenSSL).
 bool WsTlsAvailable();
 
+// CA bundle for TLS: `configured`, else $SSL_CERT_FILE / $NIX_SSL_CERT_FILE,
+// else cacert.pem next to the executable (Windows packages ship one: MSYS2's
+// OpenSSL looks for CAs in the MSYS2 tree, which users don't have), else the
+// usual distro paths, else "SYSTEM" (OpenSSL's built-in default).
+std::string ResolveCaFile(const std::string &configured);
+
 // Connects in the background and keeps reconnecting until Stop(). Close()
 // drops the current connection but the client will dial again; call Stop()
 // to go away for good.

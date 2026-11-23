@@ -195,4 +195,29 @@ private:
   std::shared_ptr<Shared> shared_;
 };
 
+// ---- room directory (HTTP GET /rooms, used by the Hub) ----------------------
+
+struct CollabRoomInfo {
+  std::string name;
+  std::vector<std::pair<std::string, std::uint32_t>> peers; // name, color
+  std::size_t objects = 0;
+  std::uint64_t seq = 0;
+  std::uint64_t updatedUnix = 0;
+};
+
+struct CollabRoomList {
+  bool ok = false;
+  int status = 0;    // HTTP status (0 = no answer)
+  std::string error; // why !ok
+  std::vector<CollabRoomInfo> rooms; // most recently active first
+};
+
+// "wss://host/ws" -> "https://host", "ws://h:9230/ws" -> "http://h:9230".
+// Empty when the URL is not ws:// or wss://.
+std::string CollabHttpBase(const std::string &wsUrl);
+
+// Blocking (up to timeoutSecs); call it off the UI thread.
+CollabRoomList FetchCollabRooms(const std::string &wsUrl, const std::string &token,
+                                int timeoutSecs = 8);
+
 } // namespace ilmeee::net

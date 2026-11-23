@@ -258,6 +258,14 @@ int main(int argc, char *argv[]) {
     } else if (a == "--mcp-port") {
       Log("Missing --mcp-port value", Debug::LogLevel::ERROR);
       return 1;
+    } else if (a == "--collab-room" && i + 1 < argc) {
+      // Realtime collab: join this room as soon as the project is open
+      // (Hub "Online workspaces"). Read by MainWindow::UpdateCollab.
+#ifdef _WIN32
+      _putenv_s("ILMEEE_COLLAB_ROOM", argv[++i]);
+#else
+      setenv("ILMEEE_COLLAB_ROOM", argv[++i], 1);
+#endif
     }
   }
   if (Debug::g_DebugMode) {

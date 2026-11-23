@@ -1,4 +1,5 @@
 #include "../../../../include/core_engine/net/WsTransport.hpp"
+#include "../../../../include/core_engine/Process.hpp"
 
 #include <ixwebsocket/IXGetFreePort.h>
 #include <ixwebsocket/IXNetSystem.h>
@@ -218,7 +219,6 @@ bool WsTlsAvailable() {
 #endif
 }
 
-namespace {
 // OpenSSL's compiled-in CA directory is often empty on NixOS (and inside the
 // portable bundle), so prefer an explicit bundle file when one exists.
 std::string ResolveCaFile(const std::string &configured) {
@@ -228,6 +228,12 @@ std::string ResolveCaFile(const std::string &configured) {
     return env;
   if (const char *env = std::getenv("NIX_SSL_CERT_FILE"); env && *env)
     return env;
+  if (const std::string exe = ilmeee::CurrentExecutablePath(); !exe.empty()) {
+    std::error_code ec;
+    const auto bundled = std::filesystem::path(exe).parent_path() / "cacert.pem";
+    if (std::filesystem::exists(bundled, ec))
+      return bundled.string();
+  }
   for (const char *candidate :
        {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
         "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}) {
@@ -237,7 +243,6 @@ std::string ResolveCaFile(const std::string &configured) {
   }
   return "SYSTEM";
 }
-} // namespace
 
 bool WsClientTransport::Start() {
   if (impl_->started)

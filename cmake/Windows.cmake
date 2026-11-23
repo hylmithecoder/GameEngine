@@ -91,6 +91,7 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/WsTransport.cpp
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
+    src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ilmeee_net PRIVATE ixwebsocket PUBLIC ws2_32)
@@ -102,8 +103,10 @@ endif()
 
 set(ILMEEE_WINDOWS_TESTS
     TestNetProtocol TestWsTransport TestCollabClient TestMcpServer
-    TestSceneFormat TestTransformMath TestPhysics TestMovementScripts)
+    TestSceneFormat TestTransformMath TestPhysics TestMovementScripts TestProcess)
 
+add_executable(TestProcess test/TestProcess.cpp)
+target_link_libraries(TestProcess PRIVATE ilmeee_net)
 add_executable(TestNetProtocol test/net/TestNetProtocol.cpp)
 target_link_libraries(TestNetProtocol PRIVATE ilmeee_net)
 add_executable(TestWsTransport test/net/TestWsTransport.cpp)
@@ -182,9 +185,52 @@ target_link_libraries(IlmeeePlayer PRIVATE
     Threads::Threads
 )
 
+# ---- stage 4 (early): IlmeeeHub (project launcher + online workspaces) ------
+# SDL3 + OpenGL + ImGui, NFD's Win32 backend for the folder picker. Launches
+# GameEngineSDL.exe next to it (editor port = stage 3; until then the Hub
+# reports "editor binary not found" when opening a project).
+
+find_package(OpenGL REQUIRED)
+enable_language(RC)
+# res/resources.rc names its icon relative to the repo root.
+set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I${CMAKE_SOURCE_DIR}")
+add_executable(IlmeeeHub
+    src/cpp/Hub.cpp
+    res/resources.rc
+    vendor/nfd/src/nfd_win.cpp
+    vendor/glad4.4/src/glad.c
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(IlmeeeHub PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
+    ${CMAKE_SOURCE_DIR}/vendor/nfd/include
+    ${CMAKE_SOURCE_DIR}/vendor/glad4.4/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${JSON_DIR}
+)
+target_link_libraries(IlmeeeHub PRIVATE
+    PkgConfig::SDL3
+    OpenGL::GL
+    ilmeee_net
+    Threads::Threads
+    ole32 uuid shell32
+)
+# A GUI app: no console window when started from the Start menu. Output still
+# goes to a pipe when something captures it.
+target_link_options(IlmeeeHub PRIVATE -mwindows)
+
 # ---- install layout (consumed by installer/windows/package.sh) --------------
 
-set(ILMEEE_WINDOWS_RELEASE_TARGETS IlmeeePlayer)
+set(ILMEEE_WINDOWS_RELEASE_TARGETS IlmeeePlayer IlmeeeHub)
 install(TARGETS ${ILMEEE_WINDOWS_RELEASE_TARGETS}
     RUNTIME DESTINATION ${ILMEEE_WIN_BIN_DIR})
 # Authoring sources (.blend, archives) are not runtime data: keep them out of

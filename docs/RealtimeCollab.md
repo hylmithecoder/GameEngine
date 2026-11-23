@@ -125,6 +125,22 @@ Presence dikirim maks. 10x/detik dan hanya saat berubah.
 **Undo (Ctrl+Z) bersifat lokal**: snapshot undo berisi seluruh scene, jadi
 undo bisa ikut membatalkan perubahan orang lain yang datang setelahnya.
 
+### Dari Ilmeee Hub: Online Workspaces
+
+Halaman **Online Workspaces** di Hub (berbagi pengaturan dengan editor lewat
+`~/.ilmeeeengine/collab.json`):
+- Isi **Server**, **Token**, **Your name** sekali; daftar workspace di server
+  muncul dan diperbarui tiap 5 detik (siapa yang online + warnanya, jumlah
+  objek, kapan terakhir aktif).
+- **Put a project online**: pilih project + nama workspace → **Go online**
+  membuka editor dan langsung join (workspace kosong mengambil scene project
+  itu).
+- **Join** di kartu workspace: membuka salinan lokal yang sudah ditautkan;
+  belum ada → pilih folder project-mu (salinan project yang sama) sekali,
+  tautan disimpan.
+- Editor dibuka dengan `--collab-room <nama>` dan join otomatis ±1,5 s setelah
+  scene termuat.
+
 ## 3. Jalankan lokal (dev)
 
 ```bash
@@ -158,6 +174,7 @@ Envelope sama dengan IPC engine (`include/core_engine/net/Message.hpp`):
 | S→C | `presence` | `{from, data}` |
 | S→C | `peer.joined` / `peer.left` | `{id, name, color, presence}` / `{id, reason}` |
 | S→C | `notice` | `{level, message}` |
+| HTTP | `GET /rooms` + `Authorization: Bearer <token>` | `{rooms:[{name, peers:[{name,color}], objects, seq, updated_unix}]}` (terbaru dulu; 401 bila token salah) |
 | C→S | `ping` (request) | `{}` → `{unix}` |
 | C→S | `lock.acquire` / `lock.release` | `{key}` (maks. 16 lock/antrian per peer) |
 | S→C | `lock` (ke semua) | `{key, holder, queue[]}` — holder 0 = bebas; tabel lock juga ada di reply `room.join` sebagai `locks[]` |

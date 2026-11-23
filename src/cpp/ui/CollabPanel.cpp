@@ -217,6 +217,23 @@ void MainWindow::StopCollab() {
 }
 
 void MainWindow::UpdateCollab(float deltaTime) {
+  // Opened from the Hub's "Online workspaces": join that room once the
+  // project's scene is up (an empty room takes this scene, so wait for it).
+  if (!collabAutoJoinDone && sceneRenderer && !SceneStructureLocked()) {
+    const char *room = std::getenv("ILMEEE_COLLAB_ROOM");
+    if (!room || !*room) {
+      collabAutoJoinDone = true;
+    } else if ((collabAutoJoinWait += deltaTime) >= 1.5f) {
+      collabAutoJoinDone = true;
+      if (!collabSettingsLoaded)
+        LoadCollabSettings();
+      const std::string clean = SanitizeRoom(room);
+      std::snprintf(collabRoom, sizeof collabRoom, "%s", clean.c_str());
+      showCollab = true;
+      PushMessage("Realtime collab: joining workspace '" + clean + "' (from the Hub)");
+      StartCollab();
+    }
+  }
   if (!collab)
     return;
   collab->Poll();

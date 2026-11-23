@@ -2,6 +2,9 @@
 #include "../../../../include/core_engine/net/MessageBus.hpp"
 #include "../../../../include/core_engine/net/WsTransport.hpp"
 
+#include <ixwebsocket/IXHttpClient.h>
+#include <ixwebsocket/IXNetSystem.h>
+
 #include <algorithm>
 #include <chrono>
 #include <deque>
@@ -406,6 +409,92 @@ bool CollabClient::SetPresence(json data) {
   if (state_ != CollabState::Joined || !bus_)
     return false;
   return bus_->Emit("presence", std::move(data));
+}
+
+// ---- room directory ----------------------------------------------------------
+
+std::string CollabHttpBase(const std::string &wsUrl) {
+  std::string scheme, rest;
+  if (wsUrl.rfind("wss://", 0) == 0) {
+    scheme = "https://";
+    rest = wsUrl.substr(6);
+  } else if (wsUrl.rfind("ws://", 0) == 0) {
+    scheme = "http://";
+    rest = wsUrl.substr(5);
+  } else {
+    return {};
+  }
+  rest = rest.substr(0, rest.find_first_of("/?#")); // host[:port]
+  return rest.empty() ? std::string() : scheme + rest;
+}
+
+CollabRoomList FetchCollabRooms(const std::string &wsUrl, const std::string &token,
+                                int timeoutSecs) {
+  CollabRoomList out;
+  const std::string base = CollabHttpBase(wsUrl);
+  if (base.empty()) {
+    out.error = "server URL must start with ws:// or wss://";
+    return out;
+  }
+  const bool secure = base.rfind("https://", 0) == 0;
+  if (secure && !WsTlsAvailable()) {
+    out.error = "https needs TLS, but this build has no OpenSSL";
+    return out;
+  }
+  ix::initNetSystem();
+  ix::HttpClient client;
+  if (secure) {
+    ix::SocketTLSOptions tls;
+    tls.caFile = ResolveCaFile("");
+    client.setTLSOptions(tls);
+  }
+  const std::string url = base + "/rooms";
+  auto args = client.createRequest(url);
+  args->connectTimeout = timeoutSecs;
+  args->transferTimeout = timeoutSecs;
+  if (!token.empty())
+    args->extraHeaders["Authorization"] = "Bearer " + token;
+  args->extraHeaders["Accept"] = "application/json";
+  const auto resp = client.get(url, args);
+  if (!resp) {
+    out.error = "no response";
+    return out;
+  }
+  out.status = resp->statusCode;
+  if (resp->statusCode == 401) {
+    out.error = "invalid token";
+    return out;
+  }
+  if (resp->statusCode != 200) {
+    out.error = resp->errorMsg.empty() ? "HTTP " + std::to_string(resp->statusCode)
+                                       : resp->errorMsg;
+    if (resp->statusCode == 404)
+      out.error += " (server too old for the room list?)";
+    return out;
+  }
+  const json j = json::parse(resp->body, nullptr, false);
+  if (!j.is_object() || !j.contains("rooms") || !j["rooms"].is_array()) {
+    out.error = "unexpected answer from " + url;
+    return out;
+  }
+  for (const auto &r : j["rooms"]) {
+    if (!r.is_object())
+      continue;
+    CollabRoomInfo info;
+    info.name = r.value("name", std::string());
+    info.objects = r.value("objects", std::size_t{0});
+    info.seq = r.value("seq", std::uint64_t{0});
+    info.updatedUnix = r.value("updated_unix", std::uint64_t{0});
+    if (auto p = r.find("peers"); p != r.end() && p->is_array())
+      for (const auto &peer : *p)
+        if (peer.is_object())
+          info.peers.emplace_back(peer.value("name", std::string()),
+                                  peer.value("color", std::uint32_t{0}));
+    if (!info.name.empty())
+      out.rooms.push_back(std::move(info));
+  }
+  out.ok = true;
+  return out;
 }
 
 } // namespace ilmeee::net
