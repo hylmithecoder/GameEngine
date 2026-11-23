@@ -226,7 +226,9 @@ target_link_libraries(IlmeeeHub PRIVATE
 )
 # A GUI app: no console window when started from the Start menu. Output still
 # goes to a pipe when something captures it.
-target_link_options(IlmeeeHub PRIVATE -mwindows)
+# UNICODE is defined project-wide, so SDL_main.h emits wWinMain (not WinMain);
+# -municode makes the MinGW CRT call that entry point.
+target_link_options(IlmeeeHub PRIVATE -mwindows -municode)
 
 # ---- install layout (consumed by installer/windows/package.sh) --------------
 
