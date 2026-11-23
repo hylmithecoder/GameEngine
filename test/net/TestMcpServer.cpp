@@ -5,6 +5,7 @@
 #include <iostream>
 #include <ixwebsocket/IXGetFreePort.h>
 #include <ixwebsocket/IXHttpClient.h>
+#include <ixwebsocket/IXNetSystem.h>
 #include <thread>
 
 using namespace ilmeee::net;
@@ -43,6 +44,7 @@ static json Modern(int id, const std::string &method,
 }
 
 int main() {
+  ix::initNetSystem(); // getFreePort() opens a socket before the server does
   const int port = ix::getFreePort();
   assert(port > 0);
   std::atomic<int> calls{0};
@@ -51,7 +53,10 @@ int main() {
     return json{{"name", name}, {"arguments", args}};
   });
   std::string error;
-  assert(server.Start(port, "test-secret", error));
+  if (!server.Start(port, "test-secret", error)) {
+    std::cerr << "McpServer::Start failed on port " << port << ": " << error << "\n";
+    return 1;
+  }
   McpServer collision(
       [](const std::string &, const json &) { return json::object(); });
   std::string collisionError;

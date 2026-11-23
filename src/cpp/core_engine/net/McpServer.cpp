@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <ixwebsocket/IXHttpServer.h>
+#include <ixwebsocket/IXNetSystem.h>
 #ifdef _WIN32
 #include <winsock2.h> // AF_INET
 #else
@@ -573,6 +574,7 @@ bool McpServer::Start(int port, std::string token, std::string &error,
   token_ = std::move(token);
   publicHost_ = Lowercase(std::move(publicHost));
   stopping_ = false;
+  ix::initNetSystem(); // WSAStartup on Windows; no-op elsewhere
   server_ = std::make_unique<ix::HttpServer>(
       port, "127.0.0.1", 16, 8, AF_INET, 10,
       ix::WebSocketServer::kDefaultHandShakeTimeoutSecs,
