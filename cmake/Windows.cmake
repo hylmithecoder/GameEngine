@@ -123,6 +123,9 @@ add_executable(TestMovementScripts test/TestMovementScripts.cpp
 target_link_libraries(TestMovementScripts PRIVATE glm::glm)
 foreach(_t IN LISTS ILMEEE_WINDOWS_TESTS)
     target_include_directories(${_t} PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    # Tests run in the Release CI build, but several call the code under test
+    # inside assert() (e.g. assert(server.Start(...))): keep assert alive.
+    target_compile_options(${_t} PRIVATE -UNDEBUG)
 endforeach()
 
 # ---- stage 2: IlmeeePlayer (game runtime) -----------------------------------
