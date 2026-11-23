@@ -28,6 +28,68 @@ std::string ProjectRelative(const std::string &path,
 }
 } // namespace
 
+void ApplySceneEntityState(SceneRenderer &renderer, size_t idx,
+                           const SceneEntity &e, const fs::path &projectRoot,
+                           bool applyTextures) {
+  if (idx >= renderer.GetMesh3DCount())
+    return;
+  auto &mesh = renderer.meshes3d[idx];
+  // Model loaders name the mesh after its file; the scene's name (possibly
+  // renamed by the user) wins.
+  if (!e.name.empty())
+    mesh.displayName = e.name;
+  renderer.SetMesh3DTransform(idx, e.position, e.rotationEuler, e.scale);
+  mesh.movable = e.movable;
+  mesh.objectId = e.objectId ? e.objectId : NewObjectId();
+  mesh.scripts = e.scripts;
+  mesh.movementScript = e.movementScript;
+  mesh.movementSpeed = e.movementSpeed;
+  mesh.movementRig = e.movementRig;
+  mesh.movementRig.camera = -1; // entity index; linked by the caller
+  mesh.audio = e.audio;
+  mesh.video = e.video;
+  mesh.dialog = e.dialog;
+  mesh.animation = e.animation;
+  mesh.springBones = e.springBones;
+  mesh.hasPhysics = e.rigidBody.enabled;
+  mesh.useGravity = e.rigidBody.useGravity;
+  mesh.isKinematic = e.rigidBody.isKinematic;
+  mesh.mass = e.rigidBody.mass;
+  mesh.drag = e.rigidBody.drag;
+  mesh.gravityY = e.rigidBody.gravityY;
+  mesh.collider = e.collider;
+  // Loaders already got these; repeated so an in-place update (realtime
+  // collab) changes them without recreating the object.
+  if (mesh.isLight) {
+    mesh.lightType = e.lightType;
+    mesh.lightColor = e.lightColor;
+    mesh.lightIntensity = e.lightIntensity;
+    mesh.lightRange = e.lightRange;
+    mesh.lightSpotAngle = e.lightSpotAngle;
+    mesh.lightGamma = e.lightGamma;
+  }
+  if (mesh.isCamera) {
+    mesh.camProjection = e.camProjection;
+    mesh.camFov = e.camFov;
+    mesh.camOrthoSize = e.camOrthoSize;
+    mesh.camNear = e.camNear;
+    mesh.camFar = e.camFar;
+  }
+  if (!applyTextures)
+    return;
+  // Re-apply per-surface texture bindings saved in the scene. Paths stored
+  // relative to the project resolve against it; absolute paths (textures
+  // outside the project) load as-is.
+  for (const auto &st : e.surfaceTextures) {
+    if (st.texturePath.empty())
+      continue;
+    const fs::path tp(st.texturePath);
+    const std::string full =
+        tp.is_absolute() ? st.texturePath : (projectRoot / tp).string();
+    renderer.BindMesh3DSubmeshTexture(idx, st.surfaceIndex, full);
+  }
+}
+
 int LoadSceneEntity(SceneRenderer &renderer, const SceneEntity &e,
                     const fs::path &projectRoot) {
   if (e.kind == PrimitiveKind::Canvas || IsUiElementKind(e.kind))
@@ -83,45 +145,10 @@ int LoadSceneEntity(SceneRenderer &renderer, const SceneEntity &e,
     return -1;
 
   const size_t idx = renderer.GetMesh3DCount() - 1;
-  auto &mesh = renderer.meshes3d[idx];
-  // Model loaders name the mesh after its file; the scene's name (possibly
-  // renamed by the user) wins.
-  if (!e.name.empty())
-    mesh.displayName = e.name;
-  renderer.SetMesh3DTransform(idx, e.position, e.rotationEuler, e.scale);
-  mesh.movable = e.movable;
-  mesh.objectId = e.objectId ? e.objectId : NewObjectId();
-  mesh.scripts = e.scripts;
-  mesh.movementScript = e.movementScript;
-  mesh.movementSpeed = e.movementSpeed;
-  mesh.movementRig = e.movementRig;
-  mesh.movementRig.camera = -1; // entity index; linked by the caller
-  mesh.audio = e.audio;
-  mesh.video = e.video;
-  mesh.dialog = e.dialog;
-  mesh.animation = e.animation;
-  mesh.springBones = e.springBones;
-  mesh.hasPhysics = e.rigidBody.enabled;
-  mesh.useGravity = e.rigidBody.useGravity;
-  mesh.isKinematic = e.rigidBody.isKinematic;
-  mesh.mass = e.rigidBody.mass;
-  mesh.drag = e.rigidBody.drag;
-  mesh.gravityY = e.rigidBody.gravityY;
-  mesh.collider = e.collider;
+  ApplySceneEntityState(renderer, idx, e, projectRoot, true);
   // Inspect Mode: every scene-bootstrap-spawned object remembers this loop
   // so hover-to-source lands users on the deserializer.
   renderer.SetMesh3DDebugSource(idx, __FILE__, __LINE__);
-  // Re-apply per-surface texture bindings saved in the scene. Paths stored
-  // relative to the project resolve against it; absolute paths (textures
-  // outside the project) load as-is.
-  for (const auto &st : e.surfaceTextures) {
-    if (st.texturePath.empty())
-      continue;
-    const fs::path tp(st.texturePath);
-    const std::string full =
-        tp.is_absolute() ? st.texturePath : (projectRoot / tp).string();
-    renderer.BindMesh3DSubmeshTexture(idx, st.surfaceIndex, full);
-  }
   return (int)idx;
 }
 

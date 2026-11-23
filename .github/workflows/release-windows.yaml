@@ -1,0 +1,120 @@
+name: Windows — Build, Test & Release
+
+# Builds the Windows version with MSYS2 UCRT64 (GCC), runs the portable tests,
+# and packages a portable zip + an Inno Setup installer.
+#   - push a tag v*        -> GitHub Release with both files attached
+#   - Run workflow (manual) -> files kept as run artifacts only
+#
+# The Windows port is staged (cmake/Windows.cmake): what gets built and
+# installed grows with each stage; the installer only adds shortcuts for the
+# programs present. Plan: .roadmap/claude/18-Roadmap_Port_Windows-23112026.md
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for a manual build (default: 0.0.0-dev.<run>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write # create the GitHub Release on tags
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+          pacboy: >-
+            gcc:p
+            cmake:p
+            ninja:p
+            pkgconf:p
+            sdl3:p
+            vulkan-headers:p
+            vulkan-loader:p
+            glm:p
+            ktx-software:p
+            ffmpeg:p
+            curl:p
+            openssl:p
+            stb:p
+            ntldd:p
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
+          else
+            v="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+          gcc --version | head -1; cmake --version | head -1
+
+      # Release build for distribution (local development stays Debug).
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: |
+          set -uo pipefail
+          tests=$(sed -n 's/^tests=//p' build/windows-targets.txt | tr ';' ' ')
+          failed=0
+          for t in $tests; do
+            echo "::group::$t"
+            if ./build/bin/$t.exe; then echo "PASS $t"; else echo "::error::$t failed"; failed=1; fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+      # Inno Setup is not part of every runner image; choco is a no-op when present.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Package (zip + installer)
+        run: installer/windows/package.sh build "${{ steps.version.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IlmeeeEngine-${{ steps.version.outputs.version }}-windows-x64
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+          if-no-files-found: error
+
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Ilmeee Engine ${{ steps.version.outputs.version }}
+          files: |
+            dist/*.zip
+            dist/*-setup.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

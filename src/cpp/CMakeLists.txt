@@ -24,6 +24,7 @@ set(MAIN_PROJECT_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/MainWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/McpTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/CollabPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/LightingPanel.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/RocketInterfaces.cpp
     # ${CMAKE_CURRENT_SOURCE_DIR}/SimpleRenderer.cpp

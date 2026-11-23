@@ -8,8 +8,8 @@
 #include <system_error>
 #include <vector>
 #ifdef _WIN32
+#include "../../../include/core_engine/Platform.hpp"
 #include <shellapi.h>
-#include <windows.h>
 #else
 #include <spawn.h>
 #include <sys/wait.h>

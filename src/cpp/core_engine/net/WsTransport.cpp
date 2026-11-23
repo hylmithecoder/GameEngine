@@ -6,6 +6,8 @@
 #include <ixwebsocket/IXWebSocketServer.h>
 
 #include <atomic>
+#include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <unordered_map>
 
@@ -208,6 +210,35 @@ void WsClientTransport::SetCallbacks(TransportCallbacks callbacks) {
   impl_->callbacks = std::move(callbacks);
 }
 
+bool WsTlsAvailable() {
+#ifdef ILMEEE_NET_HAVE_TLS
+  return true;
+#else
+  return false;
+#endif
+}
+
+namespace {
+// OpenSSL's compiled-in CA directory is often empty on NixOS (and inside the
+// portable bundle), so prefer an explicit bundle file when one exists.
+std::string ResolveCaFile(const std::string &configured) {
+  if (!configured.empty())
+    return configured;
+  if (const char *env = std::getenv("SSL_CERT_FILE"); env && *env)
+    return env;
+  if (const char *env = std::getenv("NIX_SSL_CERT_FILE"); env && *env)
+    return env;
+  for (const char *candidate :
+       {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}) {
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec))
+      return candidate;
+  }
+  return "SYSTEM";
+}
+} // namespace
+
 bool WsClientTransport::Start() {
   if (impl_->started)
     return true;
@@ -221,7 +252,21 @@ bool WsClientTransport::Start() {
   Impl *impl = impl_.get();
   impl->stopping = false;
   ix::WebSocket &ws = impl->socket;
+  const bool secure = impl->options.url.rfind("wss://", 0) == 0;
+  if (secure && !WsTlsAvailable()) {
+    if (impl->callbacks.onError)
+      impl->callbacks.onError("wss:// needs TLS, but this build has no OpenSSL "
+                              "(configure with ILMEEE_NET_TLS=ON)");
+    return false;
+  }
   ws.setUrl(impl->options.url);
+  if (secure) {
+    ix::SocketTLSOptions tls;
+    tls.caFile = ResolveCaFile(impl->options.caFile);
+    ws.setTLSOptions(tls);
+  }
+  if (impl->options.pingIntervalSecs > 0)
+    ws.setPingInterval(impl->options.pingIntervalSecs);
   ws.setHandshakeTimeout(impl->options.handshakeTimeoutSecs);
   ws.disablePerMessageDeflate();
   ws.enableAutomaticReconnection();

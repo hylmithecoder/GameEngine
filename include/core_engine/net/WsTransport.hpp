@@ -51,7 +51,16 @@ struct WsClientOptions {
   std::uint32_t minRetryMs = 100;
   std::uint32_t maxRetryMs = 2000;
   int handshakeTimeoutSecs = 5;
+  // WebSocket ping every N seconds (0 = off). Keeps idle connections through
+  // proxies/tunnels alive; the loopback IPC bus does not need it.
+  int pingIntervalSecs = 0;
+  // wss:// only: PEM bundle of trusted CAs. Empty = $SSL_CERT_FILE, then the
+  // usual distro bundle paths, then OpenSSL's built-in default.
+  std::string caFile;
 };
+
+// True when this build can dial wss:// (IXWebSocket built with OpenSSL).
+bool WsTlsAvailable();
 
 // Connects in the background and keeps reconnecting until Stop(). Close()
 // drops the current connection but the client will dial again; call Stop()

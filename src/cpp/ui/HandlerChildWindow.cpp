@@ -3361,6 +3361,7 @@ void MainWindow::RenderMenuBar() {
       MenuItem(ICON_UI_ANIMATION " Animation", nullptr, &showAnimation);
       MenuItem(ICON_UI_LIGHTING " Lighting", nullptr, &showLighting);
       MenuItem(ICON_UI_DEVICE " Device Monitor", nullptr, &showDeviceMonitor);
+      MenuItem("Realtime Collab", nullptr, &showCollab);
       panelManager.RenderWindowMenuItems();
       Separator();
       if (MenuItem("Reset Default Layout")) {

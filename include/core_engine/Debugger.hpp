@@ -12,10 +12,9 @@
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <gtk/gtk.h>
 #include <libnotify/notify.h>
-#ifdef __WIN32__
-#include <windows.h>
 #endif
-#endif
+#include "Platform.hpp" // windows.h, outside namespace Debug
+#include <cstdint>
 using namespace std;
 
 #define TITLE "Ilmeee Engine"
@@ -118,9 +117,9 @@ template <typename T>
 static void LogPointer(const string &name, T handle,
                        LogLevel level = LogLevel::INFO) {
   char buffer[256];
-  snprintf(buffer, sizeof(buffer), "%s | Type: %s | Address: %p | Decimal: %lu",
+  snprintf(buffer, sizeof(buffer), "%s | Type: %s | Address: %p | Decimal: %llu",
            name.c_str(), typeid(handle).name(), (void *)handle,
-           (unsigned long)handle);
+           (unsigned long long)(uintptr_t)handle);
   Log(buffer, level);
 }
 
@@ -187,7 +186,6 @@ static void LogPointer(const string &name, T handle,
   } while (0)
 
 #if defined(__WIN32__) || defined(__WIN64__)
-#include <windows.h>
 
 // ============================================
 // WINDOW MESSAGE BOX MACROS

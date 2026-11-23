@@ -49,6 +49,7 @@ pkgs.mkShell {
     discord-gamesdk
     discord-gamesdk.dev
     curl
+    openssl         # wss:// for the realtime collab client (IXWebSocket TLS)
 
     # Optimizer
     clinfo          # Useful tool to verify OpenCL capabilities

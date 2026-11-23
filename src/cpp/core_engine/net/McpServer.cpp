@@ -4,7 +4,11 @@
 #include <chrono>
 #include <exception>
 #include <ixwebsocket/IXHttpServer.h>
+#ifdef _WIN32
+#include <winsock2.h> // AF_INET
+#else
 #include <sys/socket.h>
+#endif
 #include <utility>
 
 namespace ilmeee::net {

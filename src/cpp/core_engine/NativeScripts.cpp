@@ -10,7 +10,32 @@
 #include <set>
 #include <stdexcept>
 #ifdef _WIN32
-#include <windows.h>
+#include "../../../include/core_engine/Platform.hpp"
+// dlopen-style shim so module loading below is one code path.
+namespace {
+constexpr int RTLD_NOW = 0, RTLD_LOCAL = 0;
+thread_local std::string g_dlError;
+// Takes path::c_str() (UTF-16 on Windows), so non-ASCII project paths work.
+void *dlopen(const wchar_t *path, int) {
+  // Resolve the module's own dependencies next to it, like $ORIGIN on Linux.
+  HMODULE h = LoadLibraryExW(path, nullptr,
+                             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                 LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  if (!h)
+    g_dlError = "LoadLibrary failed for " +
+                std::filesystem::path(path).string() + ", error " +
+                std::to_string(GetLastError());
+  return reinterpret_cast<void *>(h);
+}
+void *dlsym(void *library, const char *name) {
+  return reinterpret_cast<void *>(
+      GetProcAddress(reinterpret_cast<HMODULE>(library), name));
+}
+int dlclose(void *library) {
+  return FreeLibrary(reinterpret_cast<HMODULE>(library)) ? 0 : -1;
+}
+const char *dlerror() { return g_dlError.c_str(); }
+} // namespace
 #else
 #include <cerrno>
 #include <cstring>
@@ -540,10 +565,8 @@ struct NativeScripts::Module {
       destroy(prototype);
     if (assetPrototype && destroyAsset)
       destroyAsset(assetPrototype);
-#ifndef _WIN32
     if (library)
       dlclose(library);
-#endif
   }
 };
 struct NativeScripts::LoadedAsset {
@@ -694,10 +717,6 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
     error = result.diagnostics;
     return false;
   }
-#ifdef _WIN32
-  error = "Native project script loading currently requires Linux.";
-  return false;
-#else
   auto module = std::make_shared<Module>();
   module->library = dlopen(result.library.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (!module->library) {
@@ -779,7 +798,6 @@ bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
   modules_[result.source] = std::move(module);
   errors_[result.source].clear();
   return true;
-#endif
 }
 bool NativeScripts::Ready(const std::string &source) const {
   return modules_.contains(source) && Diagnostics(source).empty();

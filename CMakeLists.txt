@@ -62,6 +62,14 @@ set(ILMEEE_ASSET_DIR  assets)
 set(ILMEEE_SHARE_DIR  share/ilmeeeengine)
 # Set output directories specifically for library targets
 
+# Windows (MSYS2/MinGW) has its own, staged target graph: everything below
+# hard-requires GTK, libnotify, X11 and POSIX process APIs. See
+# cmake/Windows.cmake and .roadmap/claude/18-Roadmap_Port_Windows-23112026.md.
+if(WIN32)
+    include(${CMAKE_SOURCE_DIR}/cmake/Windows.cmake)
+    return()
+endif()
+
 add_subdirectory(test)
 add_subdirectory(src)
 add_subdirectory(include)
@@ -179,9 +187,25 @@ target_link_libraries(stb_impl PUBLIC m)
 #
 # IXWebSocket (vendored, see vendor/ixwebsocket/VENDORED.txt) is built static
 # so it disappears into ilmeee_net instead of becoming one more .so to bundle.
-# BUILD_SHARED_LIBS is shadowed only for this subdirectory. No TLS/zlib: the
-# bus is loopback IPC and per-message deflate is disabled anyway.
-set(USE_TLS OFF CACHE BOOL "" FORCE)
+# BUILD_SHARED_LIBS is shadowed only for this subdirectory. No zlib:
+# per-message deflate is disabled anyway.
+#
+# TLS (OpenSSL) is on for desktop builds: the IPC bus stays plain ws:// on
+# loopback, but the realtime collaboration client (CollabClient) dials the
+# public server over wss:// through the tunnel. ILMEEE_NET_TLS=OFF builds
+# without it (wss:// URLs then fail to connect with a clear error).
+option(ILMEEE_NET_TLS "Build IXWebSocket with OpenSSL (wss:// for realtime collab)" ON)
+set(ILMEEE_HAVE_TLS OFF)
+if(ILMEEE_NET_TLS)
+    find_package(OpenSSL QUIET)
+    if(OPENSSL_FOUND)
+        set(ILMEEE_HAVE_TLS ON)
+    else()
+        message(WARNING "OpenSSL not found: realtime collab will only support ws:// (add openssl to shell.nix)")
+    endif()
+endif()
+set(USE_TLS ${ILMEEE_HAVE_TLS} CACHE BOOL "" FORCE)
+set(USE_OPEN_SSL ${ILMEEE_HAVE_TLS} CACHE BOOL "" FORCE)
 set(USE_ZLIB OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF)
@@ -196,15 +220,25 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/LoopbackTransport.cpp
     src/cpp/core_engine/net/WsTransport.cpp
     src/cpp/core_engine/net/McpServer.cpp
+    src/cpp/core_engine/net/CollabClient.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
+if(ILMEEE_HAVE_TLS)
+    target_compile_definitions(ilmeee_net PRIVATE ILMEEE_NET_HAVE_TLS=1)
+endif()
 
 add_executable(TestNetProtocol test/net/TestNetProtocol.cpp)
 target_link_libraries(TestNetProtocol PRIVATE ilmeee_net)
 
 add_executable(TestWsTransport test/net/TestWsTransport.cpp)
 target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
+
+# Realtime collab client. The offline part (conflict rules, entity codec)
+# always runs; the online part needs a server: set ILMEEE_RT_URL (and
+# ILMEEE_RT_TOKEN), e.g. `make -C server/realtime run` in another shell.
+add_executable(TestCollabClient test/net/TestCollabClient.cpp)
+target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
 
 add_executable(TestMcpServer test/net/TestMcpServer.cpp)
 target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)

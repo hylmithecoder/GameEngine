@@ -82,6 +82,8 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <sstream>
+#include <string_view>
 #include "DialogComponent.hpp"
 #include "MediaComponents.hpp"
 #include "MovementScript.hpp"
@@ -212,54 +214,54 @@ struct IlmeeeScene {
 
 namespace detail {
 
-inline void WriteBytes(std::ofstream &f, const void *data, size_t n) {
+inline void WriteBytes(std::ostream &f, const void *data, size_t n) {
   f.write(reinterpret_cast<const char *>(data), (std::streamsize)n);
 }
-inline bool ReadBytes(std::ifstream &f, void *data, size_t n) {
+inline bool ReadBytes(std::istream &f, void *data, size_t n) {
   f.read(reinterpret_cast<char *>(data), (std::streamsize)n);
   return f.good() || (f.eof() && (size_t)f.gcount() == n);
 }
 
-inline void WriteU16(std::ofstream &f, uint16_t v) { WriteBytes(f, &v, 2); }
-inline void WriteU32(std::ofstream &f, uint32_t v) { WriteBytes(f, &v, 4); }
-inline void WriteU64(std::ofstream &f, uint64_t v) { WriteBytes(f, &v, 8); }
-inline void WriteF32(std::ofstream &f, float v) { WriteBytes(f, &v, 4); }
-inline void WriteVec3(std::ofstream &f, const glm::vec3 &v) {
+inline void WriteU16(std::ostream &f, uint16_t v) { WriteBytes(f, &v, 2); }
+inline void WriteU32(std::ostream &f, uint32_t v) { WriteBytes(f, &v, 4); }
+inline void WriteU64(std::ostream &f, uint64_t v) { WriteBytes(f, &v, 8); }
+inline void WriteF32(std::ostream &f, float v) { WriteBytes(f, &v, 4); }
+inline void WriteVec3(std::ostream &f, const glm::vec3 &v) {
   WriteF32(f, v.x);
   WriteF32(f, v.y);
   WriteF32(f, v.z);
 }
-inline void WriteVec4(std::ofstream &f, const glm::vec4 &v) {
+inline void WriteVec4(std::ostream &f, const glm::vec4 &v) {
   for (int i = 0; i < 4; ++i) WriteF32(f, v[i]);
 }
-inline void WriteString(std::ofstream &f, const std::string &s) {
+inline void WriteString(std::ostream &f, const std::string &s) {
   uint16_t n = (uint16_t)std::min<size_t>(s.size(), 65535);
   WriteU16(f, n);
   if (n)
     f.write(s.data(), n);
 }
 
-inline bool ReadU16(std::ifstream &f, uint16_t &v) {
+inline bool ReadU16(std::istream &f, uint16_t &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 2);
 }
-inline bool ReadU32(std::ifstream &f, uint32_t &v) {
+inline bool ReadU32(std::istream &f, uint32_t &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 4);
 }
-inline bool ReadU64(std::ifstream &f, uint64_t &v) {
+inline bool ReadU64(std::istream &f, uint64_t &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 8);
 }
-inline bool ReadF32(std::ifstream &f, float &v) {
+inline bool ReadF32(std::istream &f, float &v) {
   return (bool)f.read(reinterpret_cast<char *>(&v), 4);
 }
-inline bool ReadVec3(std::ifstream &f, glm::vec3 &v) {
+inline bool ReadVec3(std::istream &f, glm::vec3 &v) {
   return ReadF32(f, v.x) && ReadF32(f, v.y) && ReadF32(f, v.z);
 }
-inline bool ReadVec4(std::ifstream &f, glm::vec4 &v) {
+inline bool ReadVec4(std::istream &f, glm::vec4 &v) {
   for (int i = 0; i < 4; ++i)
     if (!ReadF32(f, v[i])) return false;
   return true;
 }
-inline bool ReadString(std::ifstream &f, std::string &out) {
+inline bool ReadString(std::istream &f, std::string &out) {
   uint16_t n = 0;
   if (!ReadU16(f, n))
     return false;
@@ -270,7 +272,7 @@ inline bool ReadString(std::ifstream &f, std::string &out) {
 }
 
 // Payload shared by script values and List items (v1.9+ / v1.10+ / v1.14+).
-inline void WriteScriptScalar(std::ofstream &f, const ScriptValue &value) {
+inline void WriteScriptScalar(std::ostream &f, const ScriptValue &value) {
   WriteF32(f, value.number);
   WriteU32(f, value.boolean ? 1 : 0);
   WriteBytes(f, &value.object, sizeof(value.object));
@@ -278,7 +280,7 @@ inline void WriteScriptScalar(std::ofstream &f, const ScriptValue &value) {
     WriteF32(f, component);
   WriteString(f, value.string);
 }
-inline bool ReadScriptScalar(std::ifstream &f, ScriptValue &value) {
+inline bool ReadScriptScalar(std::istream &f, ScriptValue &value) {
   uint32_t boolean = 0;
   if (!ReadF32(f, value.number) || !ReadU32(f, boolean) ||
       !ReadBytes(f, &value.object, sizeof(value.object)))
@@ -289,7 +291,7 @@ inline bool ReadScriptScalar(std::ifstream &f, ScriptValue &value) {
   return ReadString(f, value.string);
 }
 // One named script value (v1.14+ layout), shared with .ilmeeeasset files.
-inline void WriteScriptValue(std::ofstream &f, const ScriptValue &value) {
+inline void WriteScriptValue(std::ostream &f, const ScriptValue &value) {
   WriteString(f, value.name);
   WriteU32(f, static_cast<uint32_t>(value.type));
   WriteScriptScalar(f, value);
@@ -300,7 +302,7 @@ inline void WriteScriptValue(std::ofstream &f, const ScriptValue &value) {
     WriteScriptScalar(f, value.items[i]);
 }
 // `newest`: the highest type the file's version may contain.
-inline bool ReadScriptValue(std::ifstream &f, ScriptValue &value,
+inline bool ReadScriptValue(std::istream &f, ScriptValue &value,
                             ScriptValueType newest) {
   uint32_t type = 0, element = 0, items = 0;
   if (!ReadString(f, value.name) || !ReadU32(f, type) ||
@@ -325,11 +327,8 @@ inline bool ReadScriptValue(std::ifstream &f, ScriptValue &value,
 
 namespace detail {
 // Scenes ('ILMS') and prefabs ('ILMP') share one body layout.
-inline bool SaveSceneContainer(const std::string &path,
-                               const IlmeeeScene &scene, const char *magic) {
-  std::ofstream f(path, std::ios::binary | std::ios::trunc);
-  if (!f.is_open())
-    return false;
+inline bool WriteSceneContainer(std::ostream &f, const IlmeeeScene &scene,
+                                const char *magic) {
   detail::WriteBytes(f, magic, 4);
   detail::WriteU16(f, 1); // major
   detail::WriteU16(f, kSceneFormatMinor); // minor
@@ -517,11 +516,8 @@ inline bool SaveSceneContainer(const std::string &path,
   return f.good();
 }
 
-inline bool LoadSceneContainer(const std::string &path, IlmeeeScene &out,
+inline bool ReadSceneContainer(std::istream &f, IlmeeeScene &out,
                                const char *expectedMagic) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f.is_open())
-    return false;
   char magic[4];
   if (!f.read(magic, 4))
     return false;
@@ -879,7 +875,36 @@ inline bool LoadSceneContainer(const std::string &path, IlmeeeScene &out,
   return true;
 }
 
+inline bool SaveSceneContainer(const std::string &path,
+                               const IlmeeeScene &scene, const char *magic) {
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  return f.is_open() && WriteSceneContainer(f, scene, magic);
+}
+
+inline bool LoadSceneContainer(const std::string &path, IlmeeeScene &out,
+                               const char *expectedMagic) {
+  std::ifstream f(path, std::ios::binary);
+  return f.is_open() && ReadSceneContainer(f, out, expectedMagic);
+}
+
 } // namespace detail
+
+// In-memory form of a scene file (same bytes as SaveScene writes). Used to
+// ship scene entities over the network (realtime collaboration).
+inline std::string SaveSceneToBytes(const IlmeeeScene &scene) {
+  std::ostringstream f(std::ios::binary);
+  if (!detail::WriteSceneContainer(f, scene, "ILMS"))
+    return {};
+  return std::move(f).str();
+}
+inline bool LoadSceneFromBytes(std::string_view bytes, IlmeeeScene &out) {
+  std::istringstream f(std::string(bytes), std::ios::binary);
+  IlmeeeScene loaded;
+  if (!detail::ReadSceneContainer(f, loaded, "ILMS"))
+    return false;
+  out = std::move(loaded);
+  return true;
+}
 
 inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
   return detail::SaveSceneContainer(path, scene, "ILMS");

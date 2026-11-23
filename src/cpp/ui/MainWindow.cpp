@@ -61,6 +61,7 @@ void MainWindow::StartEditorSession() {
 void MainWindow::RecordEditorHistory() {
   if (sceneRenderer && editorSessionHistory.IsActive())
     editorSessionHistory.Push(CaptureEditorSnapshot());
+  collabDirty = true; // realtime collab: diff the scene on the next update
 }
 
 void MainWindow::ApplyEditorSnapshot(
@@ -69,6 +70,7 @@ void MainWindow::ApplyEditorSnapshot(
     return;
 
   const bool restored = sceneRenderer->RestoreEditorSnapshot(snapshot.renderer);
+  collabDirty = true; // undo/redo changes are shared like any other edit
   projectHandler.currentScene.sceneName = snapshot.sceneName;
   projectHandler.currentScene.objects = snapshot.sceneObjects;
   gameUi = snapshot.ui;
@@ -205,6 +207,7 @@ void MainWindow::OnUpdate(float deltaTime) {
   if (builder.IsStopped()) nativeScripts.Poll();
   if (mcpServer)
     mcpServer->Poll();
+  UpdateCollab(deltaTime);
   PollGameBuild();
   // Each play session starts with fresh rig angles and jump state; Builder
   // restores the transforms (camera included) on Stop.
@@ -343,6 +346,8 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
     RenderDeviceMonitorWindow();
   if (showLighting)
     RenderLightingWindow();
+  if (showCollab)
+    RenderCollabWindow();
 
   // Modular panels (e.g. VideoPlayerPanel). Each panel renders into
   // its own ImGui window via PanelManager — dockable like the rest.
@@ -360,6 +365,10 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
 void MainWindow::OnCleanup() {
   animationEditor.reset(); // preview owns Vulkan resources; release before device shutdown
   ::Log("MainWindow::OnCleanup");
+  if (collab) { // say goodbye to the room before the scene goes away
+    collab->Stop();
+    collab.reset();
+  }
   projectHandler.StopFileWatcher();
   nativeScripts.Stop();
 

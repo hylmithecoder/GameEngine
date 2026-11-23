@@ -4,6 +4,8 @@
 #include "../core_engine/net/MessageBus.hpp"
 #include "../core_engine/DeviceMonitor.hpp"
 #include "../core_engine/net/McpServer.hpp"
+#include "../core_engine/net/CollabClient.hpp"
+#include "../core_engine/CollabCodec.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
 #include "../core_engine/DialogSystem.hpp"
@@ -284,6 +286,46 @@ public:
   ilmeee::DeviceMonitor deviceMonitor;
   bool showDeviceMonitor = false;
   bool showLighting = false;
+
+  // ---- Realtime collaboration (CollabPanel.cpp) ----------------------------
+  // Windows > Realtime Collab: join a room on the realtime server
+  // (server/realtime) and edit the scene together. Local edits are diffed
+  // against what was last sent/applied per object (objectId) and shipped as
+  // ops; remote ops are applied to the scene in server order.
+  struct CollabBaseline {
+    std::string data; // EncodeEntityData(...).dump() as last sent/applied
+    ilmeee::collab::Xform xform;
+  };
+  std::unique_ptr<ilmeee::net::CollabClient> collab;
+  std::unordered_map<uint64_t, CollabBaseline> collabBaseline;
+  std::string collabEnvBaseline;
+  std::unordered_map<uint64_t, ilmeee::collab::Xform> collabPendingXform; // xform before data
+  std::unordered_map<uint64_t, uint64_t> collabOrphans; // child -> parent not here yet
+  std::vector<ilmeee::net::CollabOp> collabQueue; // remote ops held during Play
+  bool collabResetPending = false; // join state waiting for Play to stop
+  bool collabDirty = false;        // an edit was recorded: diff everything
+  float collabXformTimer = 0.0f, collabFullTimer = 0.0f, collabPresenceTimer = 0.0f;
+  std::string collabLastPresence;
+  size_t collabOpsSent = 0, collabOpsApplied = 0;
+  bool showCollab = false;
+  bool collabSettingsLoaded = false;
+  char collabUrl[256] = {};
+  char collabToken[128] = {};
+  char collabRoom[64] = {};
+  char collabName[64] = {};
+  float collabColor[3] = {0.31f, 0.76f, 0.97f};
+  bool CollabJoined() const;
+  void UpdateCollab(float deltaTime);
+  void RenderCollabWindow();
+  void StartCollab();
+  void StopCollab();
+  void CollabSync(bool full);
+  void CollabOnJoined(const std::vector<ilmeee::net::CollabOp> &state, bool fresh);
+  void CollabApply(const ilmeee::net::CollabOp &op);
+  void CollabRebaseline(size_t meshIndex);
+  int CollabFindMesh(uint64_t objectId) const;
+  void LoadCollabSettings();
+  void SaveCollabSettings();
   std::thread gameBuildThread;
   std::atomic<bool> gameBuildRunning{false};
   std::atomic<bool> gameBuildFinished{false};

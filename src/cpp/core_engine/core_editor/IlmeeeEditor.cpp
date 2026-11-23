@@ -16,7 +16,7 @@
 #include <json.hpp>
 // #include <gtk/gtk.h>
 #ifdef _WIN32
-#include <windows.h>
+#include "../../../../include/core_engine/Platform.hpp"
 #endif
 using json = nlohmann::json;
 namespace fs = std::filesystem;

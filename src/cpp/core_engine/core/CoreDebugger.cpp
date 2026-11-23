@@ -5,7 +5,7 @@
 #include <string>
 
 #ifdef _WIN32
-#include <windows.h>
+#include "../../../../include/core_engine/Platform.hpp"
 #endif
 
 namespace GameEngine {

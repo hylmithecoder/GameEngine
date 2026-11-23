@@ -14,7 +14,7 @@
 
 #include <cstdlib>
 #ifdef _WIN32
-#include <windows.h>
+#include "Platform.hpp"
 #endif
 #include <filesystem>
 #include <string>

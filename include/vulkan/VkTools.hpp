@@ -26,7 +26,7 @@
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
-#include <windows.h>
+#include "../core_engine/Platform.hpp"
 #elif defined(__ANDROID__)
 // Android reads shaders from files like desktop: the player extracts the
 // APK's assets to internal storage before the renderer starts.

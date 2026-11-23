@@ -1,0 +1,127 @@
+name: Realtime Server — Test & Deploy
+
+# The realtime collaboration server (server/realtime, Rust) is built here and
+# uploaded to the servertunnel app "Realtime Protokol"
+# (https://realtimeprotokol.ilmeee.com). Editors connect to wss://<domain>/ws.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/realtime/**"
+      - ".github/workflows/deploy.yaml"
+  pull_request:
+    paths:
+      - "server/realtime/**"
+      - ".github/workflows/deploy.yaml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: server/realtime
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/realtime
+
+      - name: Clippy
+        run: make lint
+
+      - name: Unit + end-to-end tests
+        run: make test
+
+  deploy:
+    needs: test
+    # Pull requests only run the tests.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Settings → Environments → production:
+    #   DEPLOY_TOKEN (secret)   deploy token from the servertunnel dashboard (Aplikasi → Realtime Protokol)
+    #   DEPLOY_URL   (variable) https://<dashboard host>/deploy/v1/apps/<slug>/releases
+    # Server-side settings (ILMEEE_RT_TOKEN, RT_MAX_ROOMS, ...) go in the app's
+    # Environment box on the dashboard, not here.
+    environment: production
+    timeout-minutes: 20
+    # One deploy at a time; a newer push waits instead of cancelling a running upload.
+    concurrency:
+      group: deploy-realtime-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # The server is Alpine Linux (musl): build a fully static musl binary.
+      # No C dependencies (no OpenSSL; TLS ends at the tunnel edge), so the
+      # self-contained musl target from rustup is enough.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/realtime
+          key: musl
+
+      - name: Build static binary
+        run: |
+          make build TARGET=x86_64-unknown-linux-musl
+          file build/ilmeee-realtime
+          # Must not need a dynamic loader on the server.
+          if file build/ilmeee-realtime | grep -q "dynamically linked"; then
+            echo "::error::binary is dynamically linked"; exit 1
+          fi
+
+      - name: Smoke test the release binary
+        run: |
+          set -euo pipefail
+          PORT=39230 HOST=127.0.0.1 RT_DATA_DIR= ./build/ilmeee-realtime > smoke.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 50); do
+            curl -fsS http://127.0.0.1:39230/health && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:39230/health | jq -e '.status == "ok"'
+          kill "$pid"; wait "$pid" || true
+          cat smoke.log
+
+      - name: Deploy to servertunnel
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_URL" ] || { echo "::error::Set the DEPLOY_URL variable in the production environment"; exit 1; }
+          [ -n "$DEPLOY_TOKEN" ] || { echo "::error::Set the DEPLOY_TOKEN secret in the production environment"; exit 1; }
+
+          BIN=build/ilmeee-realtime
+          VERSION="$(date -u +%Y%m%d)-${GITHUB_SHA::7}-r${GITHUB_RUN_NUMBER}"
+          echo "Uploading $VERSION ($(du -h "$BIN" | cut -f1))"
+
+          # The server answers after the new release passed its health check (201),
+          # or with 422 and the log tail if it failed (the previous release keeps serving).
+          code=$(curl -sS -o response.json -w '%{http_code}' --max-time 900 \
+            -X POST "$DEPLOY_URL" \
+            -H "Authorization: Bearer $DEPLOY_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            -H "X-Release-Version: $VERSION" \
+            -H "X-Release-Commit: $GITHUB_SHA" \
+            -H "X-Content-Sha256: $(sha256sum "$BIN" | cut -d' ' -f1)" \
+            --data-binary @"$BIN") || code=000
+
+          jq . response.json 2>/dev/null || cat response.json 2>/dev/null || true
+          if [ "$code" != "201" ]; then
+            echo "::error::Deploy failed (HTTP $code)"
+            exit 1
+          fi
+          echo "### Deployed ilmeee-realtime $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.data.urls[]? | "- " + .' response.json >> "$GITHUB_STEP_SUMMARY" || true

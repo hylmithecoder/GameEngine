@@ -29,8 +29,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #ifdef _WIN32
+#include "../core_engine/Platform.hpp"
 #include <shellapi.h>
-#include <windows.h>
 #endif
 using namespace std;
 namespace fs = filesystem;

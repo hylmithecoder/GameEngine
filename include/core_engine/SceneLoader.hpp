@@ -33,6 +33,16 @@ SceneLoadReport InstantiateScene(SceneRenderer &renderer,
 int LoadSceneEntity(SceneRenderer &renderer, const SceneEntity &entity,
                     const std::filesystem::path &projectRoot);
 
+// Everything per-instance of `entity` (name, transform, objectId, scripts,
+// components, light/camera parameters, and optionally surface textures)
+// applied to the existing mesh `index`, keeping its geometry. LoadSceneEntity
+// uses it after loading; realtime collab uses it to update an object in place.
+// Parent and rig camera are not touched.
+void ApplySceneEntityState(SceneRenderer &renderer, size_t index,
+                           const SceneEntity &entity,
+                           const std::filesystem::path &projectRoot,
+                           bool applyTextures);
+
 // The reverse: mesh `index` as a scene entity (parent / rig camera stay
 // mesh indices; asset paths become project-relative when inside it).
 SceneEntity CaptureSceneEntity(const SceneRenderer &renderer, size_t index,
