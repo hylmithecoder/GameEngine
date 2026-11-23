@@ -10,12 +10,16 @@
 //!   server: event op {seq, from, key, slot, data, del} to the whole room
 //!   client: event presence {...}  → others get presence {from, data}
 //!   client: request room.leave    → others get peer.left
+//!   client: event lock.acquire {key} | lock.release {key}
+//!   server: event lock {key, holder, queue} to the whole room (holder 0 = free);
+//!           the join reply carries locks[] (see locks.rs)
 //!
 //! Every room mutation and the broadcast it causes happen under one lock with
 //! non-blocking sends, so all peers see ops in the same order and a join reply
 //! always lands before the first op broadcast that follows it.
 
 use crate::config::Config;
+use crate::locks::Locks;
 use crate::persist;
 use crate::protocol::{self, Envelope, Kind, PROTOCOL_VERSION};
 use crate::room::{OpIn, RoomState, now_unix};
@@ -36,6 +40,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const OUTBOX: usize = 2048;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_NAME: usize = 64;
+const MAX_LOCKS_PER_PEER: usize = 16;
 
 enum Out {
     Text(String),
@@ -54,6 +59,7 @@ struct Peer {
 struct Room {
     state: RoomState,
     peers: HashMap<u32, Peer>,
+    locks: Locks,
     dirty: bool,
 }
 
@@ -69,6 +75,16 @@ impl Room {
             if p.tx.try_send(Out::Text(text.to_string())).is_err() {
                 slow.push(*id);
             }
+        }
+        slow
+    }
+
+    /// Frees `peer`'s locks and announces the new holders to everyone left.
+    fn drop_locks(&mut self, peer: u32) -> Vec<u32> {
+        let mut slow = Vec::new();
+        for key in self.locks.release_peer(peer) {
+            let text = protocol::event("lock", self.locks.describe(&key));
+            slow.extend(self.broadcast(None, &text));
         }
         slow
     }
@@ -156,6 +172,7 @@ impl AppState {
                 p.kick.notify_one();
                 let left = protocol::event("peer.left", json!({"id": id, "reason": "too slow"}));
                 r.broadcast(None, &left);
+                r.drop_locks(id); // a second slow peer is caught on its next send
             }
         }
     }
@@ -321,6 +338,8 @@ fn handle_text(app: &Arc<AppState>, conn: &mut Conn, text: &str) -> bool {
         }
         (Kind::Event, "op") => op(app, conn, &env.payload),
         (Kind::Event, "presence") => presence(app, conn, env.payload),
+        (Kind::Event, "lock.acquire") => lock(app, conn, &env.payload, true),
+        (Kind::Event, "lock.release") => lock(app, conn, &env.payload, false),
         (Kind::Event, other) => tracing::debug!(conn = conn.id, ty = other, "ignoring event"),
         (Kind::Response(_), _) => {} // the server never sends requests
     }
@@ -407,6 +426,7 @@ fn join(app: &Arc<AppState>, conn: &mut Conn, rid: u64, p: &Value) {
             "fresh": fresh,
             "peers": peers,
             "state": r.state.replay(),
+            "locks": r.locks.all(),
         }),
     ));
     let peer = Peer {
@@ -434,7 +454,8 @@ fn leave_room(app: &Arc<AppState>, conn: &mut Conn, reason: &str) {
     }
     r.state.updated_unix = now_unix();
     let left = protocol::event("peer.left", json!({"id": conn.id, "reason": reason}));
-    let slow = r.broadcast(None, &left);
+    let mut slow = r.broadcast(None, &left);
+    slow.extend(r.drop_locks(conn.id));
     app.kick_slow(&mut rooms, &room, slow);
     tracing::info!(conn = conn.id, room = %room, reason, "left");
 }
@@ -484,6 +505,37 @@ fn presence(app: &Arc<AppState>, conn: &mut Conn, data: Value) {
     let text = protocol::event("presence", json!({"from": conn.id, "data": data}));
     let slow = r.broadcast(Some(conn.id), &text);
     app.kick_slow(&mut rooms, &room, slow);
+}
+
+fn lock(app: &Arc<AppState>, conn: &mut Conn, p: &Value, acquire: bool) {
+    let Some(room) = conn.room.clone() else { return };
+    let key = p.get("key").and_then(Value::as_str).unwrap_or("");
+    let mut rooms = app.rooms();
+    let Some(r) = rooms.get_mut(&room) else { return };
+    if !r.peers.contains_key(&conn.id) {
+        return;
+    }
+    let changed = if acquire {
+        match r.locks.acquire(key, conn.id, MAX_LOCKS_PER_PEER) {
+            Ok(c) => c,
+            Err(e) => {
+                drop(rooms);
+                conn.send(protocol::event("notice", json!({"level": "warn", "message": e})));
+                return;
+            }
+        }
+    } else {
+        r.locks.release(key, conn.id)
+    };
+    // Unchanged: still tell the asker, its view may be stale (e.g. after a reconnect).
+    let text = protocol::event("lock", r.locks.describe(key));
+    if changed {
+        let slow = r.broadcast(None, &text);
+        app.kick_slow(&mut rooms, &room, slow);
+    } else {
+        drop(rooms);
+        conn.send(text);
+    }
 }
 
 /// Saves dirty rooms and expires idle ones until the process stops.

@@ -24,8 +24,16 @@
 //   request room.leave {}
 //   event   op {key, slot, data} | {key, del:true}  (server echoes with seq, from)
 //   event   presence {...}                          (server relays as {from, data})
+//   event   lock.acquire {key} | lock.release {key}
 //   server events: peer.joined {id,name,color,presence}, peer.left {id,reason},
-//                  notice {level, message}
+//                  notice {level, message},
+//                  lock {key, holder, queue[]} (holder 0 = free; also in the
+//                  join reply as locks[])
+//
+// Locks: an edit lock per key with a FIFO queue. Asking for a held key puts
+// you at the back of its queue; when the holder releases (or leaves) the next
+// one gets it. The server does not reject ops on locked keys — the editor
+// enforces locks in its UI.
 
 #include "Message.hpp"
 #include <cstdint>
@@ -67,6 +75,11 @@ struct CollabOp {
   bool del = false;
 
   static CollabOp FromJson(const json &j);
+};
+
+struct CollabLock {
+  std::uint32_t holder = 0; // 0 = free
+  std::vector<std::uint32_t> queue;
 };
 
 enum class CollabState {
@@ -134,6 +147,17 @@ public:
   bool SetPresence(json data);
   bool HasPending(const std::string &key) const { return lww_.HasPending(key); }
 
+  // Edit locks. Requests are fire-and-forget; the result arrives as a `lock`
+  // event that updates Locks() and fires onLocksChanged. Locks die with the
+  // connection, so after a reconnect ask again.
+  bool AcquireLock(const std::string &key);
+  bool ReleaseLock(const std::string &key);
+  const std::unordered_map<std::string, CollabLock> &Locks() const { return locks_; }
+  // Holder of `key`, 0 when free.
+  std::uint32_t LockHolder(const std::string &key) const;
+  // 1-based place in the queue of `key`, 0 when not waiting.
+  std::size_t QueuePosition(const std::string &key) const;
+
   // Joined (again): the room's current values in replay order. `fresh` = the
   // room was empty, so this client should seed it with its own scene.
   std::function<void(const std::vector<CollabOp> &state, bool fresh)> onJoined;
@@ -143,12 +167,15 @@ public:
   std::function<void(const std::string &key)> onResend;
   // Peer list or a peer's presence changed.
   std::function<void()> onPeersChanged;
+  // A lock changed holder or queue.
+  std::function<void(const std::string &key)> onLockChanged;
   // Connection-level messages for the editor console.
   std::function<void(const std::string &message, bool error)> onLog;
 
 private:
   void SendJoin();
   void HandleOp(const json &payload);
+  void HandleLock(const json &payload, bool notify);
   void Log(const std::string &message, bool error);
   void SetState(CollabState s);
 
@@ -161,6 +188,7 @@ private:
   std::uint64_t seq_ = 0;
   std::uint64_t joinGeneration_ = 0;
   std::vector<CollabPeer> peers_;
+  std::unordered_map<std::string, CollabLock> locks_;
   CollabLww lww_;
   // Set from the bus log sink (may run on the IO thread), read in Poll().
   struct Shared;

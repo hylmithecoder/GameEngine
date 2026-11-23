@@ -325,6 +325,11 @@ void MainWindow::DeleteSceneObject(size_t index) {
   if (!sceneRenderer || index >= sceneRenderer->GetMesh3DCount() ||
       SceneStructureLocked() || DeletingRemovesLastCamera(index))
     return;
+  if (const std::string who = CollabSubtreeHeldBy(index); !who.empty()) {
+    PushMessage("[WARNING] Can't delete '" + sceneRenderer->GetMesh3DName(index) +
+                "': " + who + " is editing it (Realtime Collab)");
+    return;
+  }
   std::string name = sceneRenderer->GetMesh3DName(index);
   size_t removed = sceneRenderer->RemoveMesh3D(index);
   objectName[0] = '\0';
@@ -483,22 +488,24 @@ void MainWindow::RenderHierarchyWindow() {
         flags |= ImGuiTreeNodeFlags_Selected;
 
       PushID((int)i);
+      const bool itemLocked = locked || CollabLockedByOther(i);
       const std::string &label = meshName;
       const bool renaming = renamingMesh == (int)i;
       SetNextItemOpen(true, ImGuiCond_Once);
       bool open = renaming ? TreeNodeEx("##node", flags, "%s", "")
                            : TreeNodeEx(label.c_str(), flags);
       DEBUG_TRACE_ITEM("Hierarchy: scene mesh entry");
+      DrawCollabHierarchyTag(i);
       if (IsItemClicked(ImGuiMouseButton_Left) ||
           IsItemClicked(ImGuiMouseButton_Right)) {
         std::snprintf(objectName, sizeof(objectName), "%s", meshName.c_str());
         selectedUiElement = -1;
       }
-      if (!locked && IsItemHovered() &&
+      if (!itemLocked && IsItemHovered() &&
           IsMouseDoubleClicked(ImGuiMouseButton_Left))
         BeginHierarchyRename((int)i, -1);
 
-      if (!locked && BeginDragDropSource()) {
+      if (!itemLocked && BeginDragDropSource()) {
         int payload = (int)i;
         SetDragDropPayload("ILMEEE_MESH", &payload, sizeof(payload));
         Text("%s", label.c_str());
@@ -507,14 +514,14 @@ void MainWindow::RenderHierarchyWindow() {
       dropTarget((int)i);
 
       if (BeginPopupContextItem("HierarchyItemMenu")) {
-        if (MenuItem("Rename", "F2", false, !locked))
+        if (MenuItem("Rename", "F2", false, !itemLocked))
           BeginHierarchyRename((int)i, -1);
-        if (BeginMenu("Create Child", !locked)) {
+        if (BeginMenu("Create Child", !itemLocked)) {
           createMenu((int)i);
           EndMenu();
         }
         if (sceneRenderer->GetMesh3DParent(i) >= 0 &&
-            MenuItem("Unparent", nullptr, false, !locked)) {
+            MenuItem("Unparent", nullptr, false, !itemLocked)) {
           op = Op::Reparent;
           opIndex = (int)i;
           opParent = -1;
@@ -528,7 +535,7 @@ void MainWindow::RenderHierarchyWindow() {
                      "(or drag it onto a folder in the Explorer)");
         Separator();
         bool lastCam = DeletingRemovesLastCamera(i);
-        if (MenuItem("Delete", "Del", false, !locked && !lastCam)) {
+        if (MenuItem("Delete", "Del", false, !itemLocked && !lastCam)) {
           op = Op::Delete;
           opIndex = (int)i;
         }
@@ -536,6 +543,8 @@ void MainWindow::RenderHierarchyWindow() {
           SetTooltip("The scene needs at least one camera");
         if (locked)
           TextDisabled("Stop the game to edit the scene");
+        else if (itemLocked)
+          TextDisabled("Being edited by someone else in the room");
         EndPopup();
       }
       if (renaming)
@@ -710,8 +719,9 @@ void MainWindow::RenderHierarchyWindow() {
         !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_F2, false)) {
       if (selectedUiElement >= 0)
         BeginHierarchyRename(-1, selectedUiElement);
-      else
-        BeginHierarchyRename(SelectedMeshIndex(), -1);
+      else if (const int m = SelectedMeshIndex();
+               m >= 0 && !CollabLockedByOther((size_t)m))
+        BeginHierarchyRename(m, -1);
     }
     if (op == Op::None && IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !GetIO().WantTextInput && IsKeyPressed(ImGuiKey_Delete, false)) {
@@ -1001,6 +1011,9 @@ void MainWindow::RenderInspectorWindow() {
   }
 
   if (SceneStructureLocked()) BeginDisabled();
+  // Realtime collab: someone else holds this object → banner + read-only.
+  const bool collabHeld = RenderCollabInspectorBanner(SelectedMeshIndex());
+  if (collabHeld) BeginDisabled();
 
   // Unity-style GameObject Header Card
   int meshIdx = SelectedMeshIndex();
@@ -1875,6 +1888,7 @@ void MainWindow::RenderInspectorWindow() {
     EndPopup();
     // }
   }
+  if (collabHeld) EndDisabled();
   if (SceneStructureLocked()) EndDisabled();
   End();
 }
@@ -2338,7 +2352,8 @@ void MainWindow::RenderSceneWindow() {
               sceneRenderer->SetEditMode((SceneRenderer::EditMode)k);
         }
         const int sel = SelectedMeshIndex();
-        if (sel >= 0 && !SceneStructureLocked()) {
+        if (sel >= 0 && !SceneStructureLocked() &&
+            !CollabLockedByOther((size_t)sel)) {
           const ilmeee::GizmoResult g = ilmeee::TransformGizmo(
               *sceneRenderer, (size_t)sel, sceneRenderer->GetEditMode(), vpMin,
               vpSize, vpFree, transformGizmo);
@@ -2358,6 +2373,8 @@ void MainWindow::RenderSceneWindow() {
         gizmoOwnsMouse |= o.usingMouse;
         if (o.editFinished)
           RecordEditorHistory();
+        // Realtime collab: other editors' cameras, cursors and selections.
+        DrawCollabViewportOverlay(vpMin, vpSize, vpIn.hovered);
       }
 
       // Inspect Mode: raycast the cursor against the loaded meshes and

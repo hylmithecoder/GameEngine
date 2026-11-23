@@ -154,6 +154,7 @@ bool CollabClient::Start(const CollabOptions &options) {
       return;
     Log("collab: connection lost (" + reason + "), reconnecting", true);
     peers_.clear();
+    locks_.clear();
     self_ = 0;
     lww_.Reset();
     SetState(CollabState::Connecting);
@@ -192,6 +193,7 @@ bool CollabClient::Start(const CollabOptions &options) {
     if (onPeersChanged)
       onPeersChanged();
   });
+  bus_->On("lock", [this](ConnectionId, const json &p) { HandleLock(p, true); });
   bus_->On("notice", [this](ConnectionId, const json &p) {
     Log("collab server: " + p.value("message", std::string()),
         p.value("level", std::string()) == "error");
@@ -223,6 +225,7 @@ void CollabClient::Stop() {
   bus_.reset();
   transport_.reset();
   peers_.clear();
+  locks_.clear();
   self_ = 0;
   seq_ = 0;
   lww_.Reset();
@@ -265,6 +268,10 @@ void CollabClient::SendJoin() {
             if (peer.id != self_)
               peers_.push_back(std::move(peer));
           }
+        locks_.clear();
+        if (auto it = p.find("locks"); it != p.end() && it->is_array())
+          for (const auto &j : *it)
+            HandleLock(j, false);
         std::vector<CollabOp> state;
         if (auto it = p.find("state"); it != p.end() && it->is_array())
           for (const auto &j : *it)
@@ -324,6 +331,7 @@ void CollabClient::Poll() {
     if (bus_)
       bus_->Stop();
     peers_.clear();
+    locks_.clear();
     SetState(CollabState::Failed);
   }
 }
@@ -345,6 +353,53 @@ bool CollabClient::Delete(const std::string &key) {
     return false;
   lww_.NoteSent(key, "");
   return true;
+}
+
+void CollabClient::HandleLock(const json &p, bool notify) {
+  if (!p.is_object())
+    return;
+  const std::string key = p.value("key", std::string());
+  if (key.empty())
+    return;
+  CollabLock lock;
+  lock.holder = p.value("holder", std::uint32_t{0});
+  if (auto it = p.find("queue"); it != p.end() && it->is_array())
+    for (const auto &q : *it)
+      if (q.is_number_unsigned())
+        lock.queue.push_back(q.get<std::uint32_t>());
+  if (lock.holder == 0 && lock.queue.empty())
+    locks_.erase(key);
+  else
+    locks_[key] = std::move(lock);
+  if (notify && onLockChanged)
+    onLockChanged(key);
+}
+
+bool CollabClient::AcquireLock(const std::string &key) {
+  if (state_ != CollabState::Joined || !bus_ || key.empty())
+    return false;
+  return bus_->Emit("lock.acquire", {{"key", key}});
+}
+
+bool CollabClient::ReleaseLock(const std::string &key) {
+  if (state_ != CollabState::Joined || !bus_ || key.empty())
+    return false;
+  return bus_->Emit("lock.release", {{"key", key}});
+}
+
+std::uint32_t CollabClient::LockHolder(const std::string &key) const {
+  auto it = locks_.find(key);
+  return it == locks_.end() ? 0 : it->second.holder;
+}
+
+std::size_t CollabClient::QueuePosition(const std::string &key) const {
+  auto it = locks_.find(key);
+  if (it == locks_.end())
+    return 0;
+  for (std::size_t i = 0; i < it->second.queue.size(); ++i)
+    if (it->second.queue[i] == self_)
+      return i + 1;
+  return 0;
 }
 
 bool CollabClient::SetPresence(json data) {

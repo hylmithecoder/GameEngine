@@ -90,6 +90,38 @@ Last-writer-wins per objek per *slot* (`data` = semua kecuali transform,
 Dua orang mengubah komponen berbeda di objek yang sama → slot `data` yang sama,
 jadi yang terakhir menang untuk seluruh komponen objek itu.
 
+### Lock & antrian edit
+
+- **Memilih objek = mengunci objek itu untukmu.** Orang lain yang memilih
+  objek yang sama masuk **antrian** (FIFO): inspector-nya read-only dengan
+  banner *"Locked: X is editing this — You are #1 in the queue"*, gizmo tidak
+  muncul, rename/drag/delete di Hierarchy dimatikan, dan di Hierarchy ada tag
+  nama + warna pemegang lock.
+- Lock pindah ke antrian berikutnya saat pemegang **memilih objek lain /
+  deselect / keluar room / putus koneksi**. Yang mendapat giliran dapat pesan
+  *"your turn"* di Console.
+- Pemegang yang diam **30 detik** padahal ada yang antri otomatis menyerahkan
+  lock (dan ikut antri lagi di belakang). Tombol **Hand over** di inspector
+  menyerahkan langsung.
+- Hapus objek ditolak bila objek itu atau salah satu anaknya sedang dipegang
+  orang lain.
+- Lock bersifat *advisory* di server (op tetap diterima); yang menegakkan
+  adalah UI editor. Perubahan tidak lewat seleksi (mis. reparent anak ke objek
+  yang dikunci, tool MCP) tetap last-writer-wins.
+
+### Kehadiran di Scene view
+
+Tiap peer terlihat dengan warnanya sendiri:
+- **Kamera editor** mereka sebagai frustum kecil + nama (tombol **Go to view**
+  di jendela Collab memindahkan kameramu ke posisi mereka).
+- **Kursor** mereka di dunia 3D (titik kena objek/lantai) + nama.
+- **Seleksi** mereka sebagai kotak bounding + "(editing)" / "(waiting)".
+- Di jendela Collab: objek yang sedang mereka edit dan panel yang sedang mereka
+  sentuh (*in Inspector*, *in Hierarchy*, ...). Masing-masing bisa
+  dimatikan lewat checkbox *Cameras / Cursors / Selections*.
+
+Presence dikirim maks. 10x/detik dan hanya saat berubah.
+
 **Undo (Ctrl+Z) bersifat lokal**: snapshot undo berisi seluruh scene, jadi
 undo bisa ikut membatalkan perubahan orang lain yang datang setelahnya.
 
@@ -118,15 +150,17 @@ Envelope sama dengan IPC engine (`include/core_engine/net/Message.hpp`):
 |------|-------|---------|
 | C→S | `hello` (event, pertama) | `{protocol:1, role, pid, token}` |
 | S→C | `welcome` / `bye` | `{protocol, role:"realtime", connection, server}` / `{reason, retry:false}` |
-| C→S | `room.join` (request) | `{room, name, color}` → `{self, room, seq, fresh, peers[], state[]}` |
+| C→S | `room.join` (request) | `{room, name, color}` → `{self, room, seq, fresh, peers[], state[], locks[]}` |
 | C→S | `room.leave` (request) | `{}` |
 | C→S | `op` | `{key, slot, data}` atau `{key, del:true}` |
 | S→C | `op` (ke semua, termasuk pengirim) | `{seq, from, key, slot, data, del}` |
-| C→S | `presence` | objek bebas ≤ 4 KB |
+| C→S | `presence` | objek bebas ≤ 4 KB; editor: `{selection, selectionName, cam:[x,y,z,yaw,pitch,fov], cursor:[x,y,z]\|null, panel}` |
 | S→C | `presence` | `{from, data}` |
 | S→C | `peer.joined` / `peer.left` | `{id, name, color, presence}` / `{id, reason}` |
 | S→C | `notice` | `{level, message}` |
 | C→S | `ping` (request) | `{}` → `{unix}` |
+| C→S | `lock.acquire` / `lock.release` | `{key}` (maks. 16 lock/antrian per peer) |
+| S→C | `lock` (ke semua) | `{key, holder, queue[]}` — holder 0 = bebas; tabel lock juga ada di reply `room.join` sebagai `locks[]` |
 
 Key editor: objek = `o<objectId 16 hex>` dengan slot `data`
 (`{blob, parent, rigCamera, name}`, blob = base64 `.ilmeeescene` 1 entity) dan

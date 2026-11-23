@@ -326,6 +326,32 @@ public:
   int CollabFindMesh(uint64_t objectId) const;
   void LoadCollabSettings();
   void SaveCollabSettings();
+  // Edit locks + live presence (cameras, cursors, selections) of the other
+  // editors in the room. The selected object is locked for us while we keep
+  // it selected; others queue behind and see the inspector read-only.
+  struct CollabPeerView {
+    glm::vec3 cursor{0.0f}, camPos{0.0f};
+    float yaw = 0.0f, pitch = 0.0f;
+    bool hasCursor = false, hasCam = false, primed = false;
+  };
+  std::unordered_map<uint32_t, CollabPeerView> collabPeerViews;
+  std::string collabWantLock;    // key of our selection, "" = none
+  bool collabHeldLock = false;   // we held collabWantLock last frame
+  float collabLockIdle = 0.0f;   // seconds since our last edit on it
+  float collabLockAsk = 0.0f;    // seconds since we last asked for it
+  glm::vec3 collabCursor{0.0f};  // our scene cursor (world), for presence
+  bool collabCursorValid = false;
+  bool collabShowCameras = true, collabShowCursors = true, collabShowSelections = true;
+  std::string CollabKeyOf(size_t meshIndex) const;
+  std::string CollabPeerName(uint32_t id) const;
+  bool CollabLockedByOther(size_t meshIndex) const;
+  std::string CollabSubtreeHeldBy(size_t meshIndex) const;
+  void UpdateCollabLock(float deltaTime);
+  void SendCollabPresence();
+  void CollabYieldLock();
+  bool RenderCollabInspectorBanner(int meshIndex);
+  void DrawCollabHierarchyTag(size_t meshIndex);
+  void DrawCollabViewportOverlay(ImVec2 vpMin, ImVec2 vpSize, bool hovered);
   std::thread gameBuildThread;
   std::atomic<bool> gameBuildRunning{false};
   std::atomic<bool> gameBuildFinished{false};

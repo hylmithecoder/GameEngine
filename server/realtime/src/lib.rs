@@ -6,6 +6,7 @@
 //! in the engine: include/core_engine/net/CollabClient.hpp.
 
 pub mod config;
+pub mod locks;
 pub mod persist;
 pub mod protocol;
 pub mod room;

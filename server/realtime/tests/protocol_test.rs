@@ -274,3 +274,55 @@ async fn rooms_survive_a_restart() {
     s2.stop().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn locks_queue_and_hand_off() {
+    let s = Server::start(cfg("")).await;
+    let mut a = Client::connect(s.addr).await;
+    a.hello("").await;
+    let alice = a.join("locks", "Alice").await["self"].as_u64().unwrap();
+    let mut b = Client::connect(s.addr).await;
+    b.hello("").await;
+    let bob = b.join("locks", "Bob").await["self"].as_u64().unwrap();
+    a.expect("peer.joined").await;
+
+    // Alice takes the object, everyone (Alice included) hears about it
+    a.event("lock.acquire", json!({"key":"o1"})).await;
+    let l = a.expect("lock").await["payload"].clone();
+    assert_eq!(l["holder"], alice);
+    assert_eq!(b.expect("lock").await["payload"], l);
+
+    // Bob queues behind her
+    b.event("lock.acquire", json!({"key":"o1"})).await;
+    let l = b.expect("lock").await["payload"].clone();
+    assert_eq!(l["holder"], alice);
+    assert_eq!(l["queue"], json!([bob]));
+    a.expect("lock").await;
+
+    // a late joiner sees the lock table in the join reply
+    let mut c = Client::connect(s.addr).await;
+    c.hello("").await;
+    let jc = c.join("locks", "Carol").await;
+    assert_eq!(jc["locks"][0]["key"], "o1");
+    assert_eq!(jc["locks"][0]["holder"], alice);
+
+    // Alice releases → Bob holds it
+    a.event("lock.release", json!({"key":"o1"})).await;
+    assert_eq!(b.expect("lock").await["payload"]["holder"], bob);
+    assert_eq!(c.expect("lock").await["payload"]["holder"], bob);
+
+    // asking again for a key you hold only answers you
+    b.event("lock.acquire", json!({"key":"o1"})).await;
+    assert_eq!(b.expect("lock").await["payload"]["holder"], bob);
+
+    // Bob disconnects → the lock is freed for everyone
+    drop(b);
+    let l = c.expect("lock").await["payload"].clone();
+    assert_eq!(l["holder"], 0);
+    assert_eq!(l["key"], "o1");
+
+    // bad keys are refused with a notice
+    a.event("lock.acquire", json!({"key":""})).await;
+    assert_eq!(a.expect("notice").await["payload"]["level"], "warn");
+    s.stop().await;
+}

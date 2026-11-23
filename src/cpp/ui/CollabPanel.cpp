@@ -11,9 +11,17 @@
 //                   is unchanged, recreates them otherwise, and rebases the
 //                   baseline from the result so nothing echoes back.
 // Remote ops that arrive during Play are held and applied after Stop.
+//
+// Locks + presence: the selected object is locked for us (server FIFO queue,
+// see server/realtime/src/locks.rs). Objects held by someone else are
+// read-only here (inspector, gizmo, hierarchy rename/drag, delete). Presence
+// carries our selection, editor camera, scene cursor and hovered panel; the
+// Scene viewport draws everyone else's (DrawCollabViewportOverlay).
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/core_engine/SceneLoader.hpp"
 #include "../../../include/core_engine/UserDataDir.hpp"
+
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cctype>
@@ -24,6 +32,7 @@
 
 using namespace ImGui;
 using ilmeee::net::CollabOp;
+using ilmeee::net::CollabPeer;
 using ilmeee::net::CollabState;
 namespace collab = ilmeee::collab;
 namespace fs = std::filesystem;
@@ -32,7 +41,8 @@ namespace {
 
 constexpr float kXformInterval = 0.05f;  // live transform rate (20 Hz)
 constexpr float kFullInterval = 1.0f;    // safety full diff
-constexpr float kPresenceInterval = 0.25f;
+constexpr float kPresenceInterval = 0.1f; // cursor/camera rate (10 Hz, only on change)
+constexpr float kLockIdleYield = 30.0f;   // hand a held lock to the queue after this idle
 
 fs::path CollabSettingsPath() { return ilmeee::UserDataRoot() / "collab.json"; }
 
@@ -159,6 +169,18 @@ void MainWindow::StartCollab() {
     else
       CollabApply(op);
   };
+  collab->onLockChanged = [this](const std::string &key) {
+    if (key != collabWantLock || !collab)
+      return;
+    const bool mine = collab->LockHolder(key) == collab->Self();
+    if (mine && !collabHeldLock) {
+      collabLockIdle = 0.0f;
+      if (const int i = CollabFindMesh(collab::ParseObjectKey(key)); i >= 0)
+        PushMessage("[SUCCESS] Realtime collab: your turn, '" +
+                    sceneRenderer->GetMesh3DName((size_t)i) + "' is editable now");
+    }
+    collabHeldLock = mine;
+  };
   collab->onResend = [this](const std::string &key) {
     // A remote delete lost against our write: send the whole object again.
     if (const uint64_t id = collab::ParseObjectKey(key))
@@ -179,6 +201,10 @@ void MainWindow::StartCollab() {
   collabEnvBaseline.clear();
   collabResetPending = false;
   collabOpsSent = collabOpsApplied = 0;
+  collabWantLock.clear();
+  collabHeldLock = false;
+  collabPeerViews.clear();
+  collabLastPresence.clear();
   if (!collab->Start(o))
     PushMessage("[ERROR] Realtime collab: " + collab->LastError());
 }
@@ -196,6 +222,13 @@ void MainWindow::UpdateCollab(float deltaTime) {
   collab->Poll();
   if (!CollabJoined() || !sceneRenderer)
     return;
+
+  UpdateCollabLock(deltaTime);
+  collabPresenceTimer += deltaTime;
+  if (collabPresenceTimer >= kPresenceInterval) {
+    collabPresenceTimer = 0.0f;
+    SendCollabPresence();
+  }
 
   if (SceneStructureLocked())
     return; // Play mode: neither send runtime changes nor apply remote ones
@@ -215,7 +248,6 @@ void MainWindow::UpdateCollab(float deltaTime) {
 
   collabXformTimer += deltaTime;
   collabFullTimer += deltaTime;
-  collabPresenceTimer += deltaTime;
   const bool full = collabDirty || collabFullTimer >= kFullInterval;
   if (full || collabXformTimer >= kXformInterval) {
     CollabSync(full);
@@ -226,20 +258,6 @@ void MainWindow::UpdateCollab(float deltaTime) {
     }
   }
 
-  if (collabPresenceTimer >= kPresenceInterval) {
-    collabPresenceTimer = 0.0f;
-    std::string selection;
-    for (size_t i = 0; i < sceneRenderer->GetMesh3DCount(); ++i)
-      if (objectName[0] && sceneRenderer->GetMesh3DName(i) == objectName) {
-        selection = collab::ObjectKey(sceneRenderer->meshes3d[i].objectId);
-        break;
-      }
-    ilmeee::net::json presence = {{"selection", selection},
-                                  {"selectionName", std::string(objectName)}};
-    std::string dumped = presence.dump();
-    if (dumped != collabLastPresence && collab->SetPresence(presence))
-      collabLastPresence = std::move(dumped);
-  }
 }
 
 // ---- local -> room ----------------------------------------------------------
@@ -306,6 +324,8 @@ void MainWindow::CollabSync(bool full) {
       if (it == collabBaseline.end() || it->second.data != dumped) {
         if (collab->Put(key, collab::kSlotData, std::move(data))) {
           ++collabOpsSent;
+          if (key == collabWantLock)
+            collabLockIdle = 0.0f;
           auto &b = collabBaseline[mesh.objectId];
           const bool created = it == collabBaseline.end();
           b.data = std::move(dumped);
@@ -321,6 +341,8 @@ void MainWindow::CollabSync(bool full) {
     if (!(it->second.xform == x) &&
         collab->Put(key, collab::kSlotXform, collab::EncodeXform(x))) {
       ++collabOpsSent;
+      if (key == collabWantLock)
+        collabLockIdle = 0.0f;
       it->second.xform = x;
     }
   }
@@ -607,19 +629,488 @@ void MainWindow::RenderCollabWindow() {
       ColorButton("##c", UnpackColor(peer.color), ImGuiColorEditFlags_NoTooltip,
                   ImVec2(12, 12));
       SameLine();
-      std::string selected;
+      std::string selected, panel;
+      bool held = false;
+      float cam[6] = {};
+      bool hasCam = false;
       if (peer.presence.is_object()) {
-        const uint64_t sel =
-            collab::ParseObjectKey(peer.presence.value("selection", std::string()));
-        if (const int i = CollabFindMesh(sel); i >= 0)
+        const std::string key = peer.presence.value("selection", std::string());
+        if (const int i = CollabFindMesh(collab::ParseObjectKey(key)); i >= 0) {
           selected = sceneRenderer->GetMesh3DName((size_t)i);
+          held = collab->LockHolder(key) == peer.id;
+        }
+        panel = peer.presence.value("panel", std::string());
+        if (auto c = peer.presence.find("cam"); c != peer.presence.end() && c->is_array() &&
+                                                 c->size() >= 5) {
+          hasCam = true;
+          for (size_t n = 0; n < 5; ++n)
+            cam[n] = (*c)[n].is_number() ? (*c)[n].get<float>() : 0.0f;
+        }
       }
       if (selected.empty())
         Text("%s", peer.name.c_str());
       else
-        Text("%s  -  editing %s", peer.name.c_str(), selected.c_str());
+        Text("%s  -  %s %s", peer.name.c_str(), held ? "editing" : "waiting for",
+             selected.c_str());
+      if (hasCam) {
+        SameLine();
+        if (SmallButton("Go to view")) {
+          sceneRenderer->camera3d.position = glm::vec3(cam[0], cam[1], cam[2]);
+          sceneRenderer->camera3d.yaw = cam[3];
+          sceneRenderer->camera3d.pitch = cam[4];
+        }
+        SetItemTooltip("Move your editor camera to where %s is looking from", peer.name.c_str());
+      }
+      if (!panel.empty())
+        TextDisabled("    in %s", panel.c_str());
       PopID();
     }
+
+    SeparatorText("Show in Scene view");
+    Checkbox("Cameras", &collabShowCameras);
+    SameLine();
+    Checkbox("Cursors", &collabShowCursors);
+    SameLine();
+    Checkbox("Selections", &collabShowSelections);
+    TextDisabled("Selecting an object locks it for you; others queue and see it\n"
+                 "read-only until you select something else (or after %d s idle\n"
+                 "while someone waits).", (int)kLockIdleYield);
   }
   End();
+}
+
+// ---- locks ------------------------------------------------------------------
+
+std::string MainWindow::CollabKeyOf(size_t i) const {
+  if (!sceneRenderer || i >= sceneRenderer->GetMesh3DCount() ||
+      !sceneRenderer->meshes3d[i].objectId)
+    return {};
+  return collab::ObjectKey(sceneRenderer->meshes3d[i].objectId);
+}
+
+std::string MainWindow::CollabPeerName(uint32_t id) const {
+  if (collab)
+    if (const auto *p = collab->FindPeer(id))
+      return p->name;
+  return "someone";
+}
+
+bool MainWindow::CollabLockedByOther(size_t i) const {
+  if (!CollabJoined())
+    return false;
+  const std::string key = CollabKeyOf(i);
+  if (key.empty())
+    return false;
+  const uint32_t holder = collab->LockHolder(key);
+  return holder != 0 && holder != collab->Self();
+}
+
+// Name of whoever holds `i` or one of its descendants ("" = nobody else).
+std::string MainWindow::CollabSubtreeHeldBy(size_t i) const {
+  if (!CollabJoined() || !sceneRenderer)
+    return {};
+  const SceneRenderer &r = *sceneRenderer;
+  for (size_t j = 0; j < r.GetMesh3DCount(); ++j) {
+    bool inside = false;
+    for (int k = (int)j, guard = 0; k >= 0 && guard < 4096; k = r.GetMesh3DParent((size_t)k), ++guard)
+      if ((size_t)k == i) {
+        inside = true;
+        break;
+      }
+    if (inside && CollabLockedByOther(j))
+      return CollabPeerName(collab->LockHolder(CollabKeyOf(j)));
+  }
+  return {};
+}
+
+// Selection == the lock we want. Level-triggered: whenever we are neither the
+// holder nor in the queue (first select, lock event lost, reconnect) ask again.
+void MainWindow::UpdateCollabLock(float dt) {
+  const int sel = SelectedMeshIndex();
+  const std::string want = sel >= 0 ? CollabKeyOf((size_t)sel) : std::string();
+  if (want != collabWantLock) {
+    if (!collabWantLock.empty())
+      collab->ReleaseLock(collabWantLock);
+    collabWantLock = want;
+    collabHeldLock = false;
+    collabLockIdle = 0.0f;
+    collabLockAsk = 1e9f; // ask right away
+  }
+  if (want.empty())
+    return;
+  const bool mine = collab->LockHolder(want) == collab->Self();
+  collabLockAsk += dt;
+  if (!mine && collab->QueuePosition(want) == 0 && collabLockAsk >= 1.0f) {
+    collab->AcquireLock(want);
+    collabLockAsk = 0.0f;
+  }
+  if (!mine) {
+    collabHeldLock = false;
+    return;
+  }
+  collabHeldLock = true;
+  // Holding an object nobody waits for costs nothing; holding one others
+  // queue for without touching it blocks them, so give it up after a while.
+  const auto &locks = collab->Locks();
+  const auto it = locks.find(want);
+  if (it == locks.end() || it->second.queue.empty()) {
+    collabLockIdle = 0.0f;
+    return;
+  }
+  collabLockIdle += dt;
+  if (collabLockIdle >= kLockIdleYield) {
+    PushMessage("[WARNING] Realtime collab: handed '" + std::string(objectName) + "' to " +
+                CollabPeerName(it->second.queue.front()) + " (idle " +
+                std::to_string((int)kLockIdleYield) + " s); you are back in the queue");
+    CollabYieldLock();
+  }
+}
+
+// Give the lock to the next in line and queue up behind them.
+void MainWindow::CollabYieldLock() {
+  if (!CollabJoined() || collabWantLock.empty())
+    return;
+  collab->ReleaseLock(collabWantLock);
+  collab->AcquireLock(collabWantLock); // processed in order: lands at the back
+  collabHeldLock = false;
+  collabLockIdle = 0.0f;
+  collabLockAsk = 0.0f;
+}
+
+// ---- presence ---------------------------------------------------------------
+
+namespace {
+float Round2(float v) { return std::round(v * 100.0f) / 100.0f; }
+
+// "<icon> Inspector###Inspector" -> "Inspector"
+std::string PanelName(const ImGuiWindow *w) {
+  if (!w)
+    return {};
+  while (w->ParentWindow && (w->Flags & ImGuiWindowFlags_ChildWindow))
+    w = w->ParentWindow;
+  std::string name = w->Name;
+  if (const auto hash = name.find("###"); hash != std::string::npos)
+    name = name.substr(hash + 3);
+  else if (const auto hash2 = name.find("##"); hash2 != std::string::npos)
+    name = name.substr(0, hash2);
+  std::string out;
+  for (unsigned char c : name) // drop icon-font glyphs
+    if (c < 0x80)
+      out += (char)c;
+  while (!out.empty() && out.front() == ' ')
+    out.erase(out.begin());
+  if (out.size() > 40)
+    out.resize(40);
+  return out;
+}
+} // namespace
+
+void MainWindow::SendCollabPresence() {
+  const int sel = SelectedMeshIndex();
+  const auto &cam = sceneRenderer->camera3d;
+  ilmeee::net::json presence = {
+      {"selection", sel >= 0 ? CollabKeyOf((size_t)sel) : std::string()},
+      {"selectionName", sel >= 0 ? std::string(objectName) : std::string()},
+      {"cam",
+       {Round2(cam.position.x), Round2(cam.position.y), Round2(cam.position.z),
+        Round2(cam.yaw), Round2(cam.pitch), Round2(cam.fovDeg)}},
+      {"panel", PanelName(GImGui ? GImGui->HoveredWindow : nullptr)},
+  };
+  if (collabCursorValid)
+    presence["cursor"] = {Round2(collabCursor.x), Round2(collabCursor.y),
+                          Round2(collabCursor.z)};
+  else
+    presence["cursor"] = nullptr;
+  std::string dumped = presence.dump();
+  if (dumped != collabLastPresence && collab->SetPresence(presence))
+    collabLastPresence = std::move(dumped);
+}
+
+// ---- inspector / hierarchy --------------------------------------------------
+
+bool MainWindow::RenderCollabInspectorBanner(int meshIndex) {
+  if (meshIndex < 0 || !CollabJoined())
+    return false;
+  const std::string key = CollabKeyOf((size_t)meshIndex);
+  const auto &locks = collab->Locks();
+  const auto it = locks.find(key);
+  if (it == locks.end())
+    return false;
+  const auto &lock = it->second;
+  const uint32_t self = collab->Self();
+
+  if (lock.holder == self) {
+    if (lock.queue.empty())
+      return false;
+    std::string waiting;
+    for (uint32_t id : lock.queue)
+      waiting += (waiting.empty() ? "" : ", ") + CollabPeerName(id);
+    TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%zu waiting: %s", lock.queue.size(),
+                waiting.c_str());
+    SameLine();
+    if (SmallButton("Hand over"))
+      CollabYieldLock();
+    SetItemTooltip("Let the next person edit this object; you queue behind them.\n"
+                   "Happens on its own after %d s without changes.",
+                   (int)kLockIdleYield);
+    Separator();
+    return false;
+  }
+
+  const CollabPeer *holder = collab->FindPeer(lock.holder);
+  const ImVec4 color = holder ? UnpackColor(holder->color) : ImVec4(1, 0.5f, 0.3f, 1);
+  ColorButton("##holder", color, ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+  SameLine();
+  TextColored(color, "Locked: %s is editing this", CollabPeerName(lock.holder).c_str());
+  if (const size_t pos = collab->QueuePosition(key))
+    TextDisabled("You are #%zu in the queue - it unlocks when it's your turn.", pos);
+  else
+    TextDisabled("Joining the queue...");
+  Separator();
+  return true;
+}
+
+void MainWindow::DrawCollabHierarchyTag(size_t i) {
+  if (!CollabJoined())
+    return;
+  const std::string key = CollabKeyOf(i);
+  const uint32_t holder = collab->LockHolder(key);
+  if (holder == 0 || holder == collab->Self())
+    return;
+  const CollabPeer *p = collab->FindPeer(holder);
+  const std::string tag = (p ? p->name : std::string("someone"));
+  const ImU32 col = ColorConvertFloat4ToU32(p ? UnpackColor(p->color) : ImVec4(1, 0.5f, 0.3f, 1));
+  const ImVec2 mn = GetItemRectMin(), mx = GetItemRectMax();
+  const ImVec2 ts = CalcTextSize(tag.c_str());
+  const float right = GetWindowPos().x + GetWindowContentRegionMax().x;
+  const ImVec2 at(std::max(mn.x, right - ts.x - 6.0f), mn.y + (mx.y - mn.y - ts.y) * 0.5f);
+  ImDrawList *dl = GetWindowDrawList();
+  dl->AddRectFilled(ImVec2(at.x - 12, at.y - 1), ImVec2(at.x + ts.x + 4, at.y + ts.y + 1),
+                    IM_COL32(20, 20, 24, 220), 4.0f);
+  dl->AddCircleFilled(ImVec2(at.x - 6, at.y + ts.y * 0.5f), 3.5f, col);
+  dl->AddText(at, col, tag.c_str());
+}
+
+// ---- scene viewport overlay -------------------------------------------------
+
+namespace {
+struct OverlayView {
+  glm::mat4 viewProj;
+  ImVec2 min, size;
+  bool Project(const glm::vec3 &p, ImVec2 &out) const {
+    const glm::vec4 c = viewProj * glm::vec4(p, 1.0f);
+    if (c.w <= 1e-4f)
+      return false;
+    out.x = min.x + (c.x / c.w * 0.5f + 0.5f) * size.x;
+    out.y = min.y + (0.5f - c.y / c.w * 0.5f) * size.y; // image is V-flipped
+    return true;
+  }
+  void Line(ImDrawList *dl, const glm::vec3 &a, const glm::vec3 &b, ImU32 col, float t) const {
+    ImVec2 pa, pb;
+    if (Project(a, pa) && Project(b, pb))
+      dl->AddLine(pa, pb, col, t);
+  }
+};
+
+glm::vec3 YawPitchForward(float yawDeg, float pitchDeg) {
+  const float y = glm::radians(yawDeg), p = glm::radians(pitchDeg);
+  return glm::normalize(glm::vec3(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p)));
+}
+
+void NameTag(ImDrawList *dl, ImVec2 at, ImU32 col, const std::string &text) {
+  const ImVec2 ts = CalcTextSize(text.c_str());
+  dl->AddRectFilled(at, ImVec2(at.x + ts.x + 8, at.y + ts.y + 4), col, 4.0f);
+  dl->AddText(ImVec2(at.x + 4, at.y + 2), IM_COL32(15, 15, 18, 255), text.c_str());
+}
+
+bool ReadVec(const ilmeee::net::json &j, size_t n, float *out) {
+  if (!j.is_array() || j.size() < n)
+    return false;
+  for (size_t k = 0; k < n; ++k) {
+    if (!j[k].is_number())
+      return false;
+    out[k] = j[k].get<float>();
+  }
+  return true;
+}
+
+// Nearest hit of the ray with any mesh's oriented bounding box.
+bool RayHitBoxes(const SceneRenderer &r, const glm::vec3 &ro, const glm::vec3 &rd, float &bestT) {
+  bool hit = false;
+  for (size_t i = 0; i < r.GetMesh3DCount(); ++i) {
+    if (r.IsMesh3DLight(i) || r.IsMesh3DCamera(i))
+      continue;
+    glm::vec3 bmin, bmax;
+    if (!r.GetMesh3DLocalBounds(i, bmin, bmax))
+      continue;
+    const glm::mat4 inv = glm::inverse(r.GetMesh3DWorldModel(i));
+    const glm::vec3 o = glm::vec3(inv * glm::vec4(ro, 1.0f));
+    const glm::vec3 d = glm::vec3(inv * glm::vec4(rd, 0.0f));
+    float t0 = 0.0f, t1 = 1e30f;
+    bool ok = true;
+    for (int a = 0; a < 3 && ok; ++a) {
+      if (std::fabs(d[a]) < 1e-8f) {
+        ok = o[a] >= bmin[a] && o[a] <= bmax[a];
+        continue;
+      }
+      float ta = (bmin[a] - o[a]) / d[a], tb = (bmax[a] - o[a]) / d[a];
+      if (ta > tb)
+        std::swap(ta, tb);
+      t0 = std::max(t0, ta);
+      t1 = std::min(t1, tb);
+      ok = t0 <= t1;
+    }
+    // t0 is measured in the box's (scaled) space: map the hit back to world.
+    if (ok && t0 > 0.0f) {
+      const glm::vec3 local = o + d * t0;
+      const glm::vec3 world = glm::vec3(r.GetMesh3DWorldModel(i) * glm::vec4(local, 1.0f));
+      const float t = glm::dot(world - ro, rd);
+      if (t > 0.0f && t < bestT) {
+        bestT = t;
+        hit = true;
+      }
+    }
+  }
+  return hit;
+}
+} // namespace
+
+void MainWindow::DrawCollabViewportOverlay(ImVec2 vpMin, ImVec2 vpSize, bool hovered) {
+  if (!sceneRenderer || !CollabJoined()) {
+    collabCursorValid = false;
+    return;
+  }
+  SceneRenderer &r = *sceneRenderer;
+
+  // Our own cursor, as a world point other editors can draw.
+  collabCursorValid = false;
+  if (hovered) {
+    const ImVec2 m = GetIO().MousePos;
+    glm::vec3 ro, rd;
+    if (r.ScreenToRay(m.x - vpMin.x, m.y - vpMin.y, ro, rd)) {
+      float t = 1e30f;
+      RayHitBoxes(r, ro, rd, t);
+      if (std::fabs(rd.y) > 1e-5f) { // ground plane y = 0
+        const float tg = -ro.y / rd.y;
+        if (tg > 0.0f && tg < t)
+          t = tg;
+      }
+      if (t > 1e29f)
+        t = 5.0f; // looking at the sky: a point ahead of the camera
+      collabCursor = ro + rd * std::min(t, 500.0f);
+      collabCursorValid = true;
+    }
+  }
+
+  const OverlayView v{r.GetCamera3DProj() * r.GetCamera3DView(), vpMin, vpSize};
+  ImDrawList *dl = GetWindowDrawList();
+  dl->PushClipRect(vpMin, ImVec2(vpMin.x + vpSize.x, vpMin.y + vpSize.y), true);
+  const float k = 1.0f - std::exp(-GetIO().DeltaTime * 14.0f); // smoothing
+
+  for (auto it = collabPeerViews.begin(); it != collabPeerViews.end();)
+    it = collab->FindPeer(it->first) ? std::next(it) : collabPeerViews.erase(it);
+
+  for (const auto &peer : collab->Peers()) {
+    if (!peer.presence.is_object())
+      continue;
+    const ImVec4 c4 = UnpackColor(peer.color);
+    const ImU32 col = ColorConvertFloat4ToU32(c4);
+    const ImU32 colSoft = ColorConvertFloat4ToU32(ImVec4(c4.x, c4.y, c4.z, 0.35f));
+    auto &view = collabPeerViews[peer.id];
+
+    // targets from presence, smoothed so 10 Hz updates move fluidly
+    float cam[6], cur[3];
+    const bool hasCam = ReadVec(peer.presence.value("cam", ilmeee::net::json()), 6, cam);
+    const bool hasCur = ReadVec(peer.presence.value("cursor", ilmeee::net::json()), 3, cur);
+    if (hasCam) {
+      const glm::vec3 p(cam[0], cam[1], cam[2]);
+      if (!view.primed || !view.hasCam) {
+        view.camPos = p;
+        view.yaw = cam[3];
+        view.pitch = cam[4];
+      }
+      view.camPos += (p - view.camPos) * k;
+      float dy = std::fmod(cam[3] - view.yaw + 540.0f, 360.0f) - 180.0f;
+      view.yaw += dy * k;
+      view.pitch += (cam[4] - view.pitch) * k;
+    }
+    if (hasCur) {
+      const glm::vec3 p(cur[0], cur[1], cur[2]);
+      if (!view.hasCursor)
+        view.cursor = p;
+      view.cursor += (p - view.cursor) * k;
+    }
+    view.hasCam = hasCam;
+    view.hasCursor = hasCur;
+    view.primed = true;
+
+    // their selection: box around the object
+    if (collabShowSelections) {
+      const uint64_t selId =
+          collab::ParseObjectKey(peer.presence.value("selection", std::string()));
+      if (const int si = CollabFindMesh(selId); si >= 0) {
+        glm::vec3 bmin, bmax;
+        const glm::mat4 model = r.GetMesh3DWorldModel((size_t)si);
+        if (r.GetMesh3DLocalBounds((size_t)si, bmin, bmax)) {
+          glm::vec3 c[8];
+          for (int n = 0; n < 8; ++n)
+            c[n] = glm::vec3(model * glm::vec4(n & 1 ? bmax.x : bmin.x, n & 2 ? bmax.y : bmin.y,
+                                               n & 4 ? bmax.z : bmin.z, 1.0f));
+          static const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
+                                           {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+          for (const auto &e : edges)
+            v.Line(dl, c[e[0]], c[e[1]], col, 2.0f);
+          ImVec2 top(1e9f, 1e9f);
+          for (const auto &p : c)
+            if (ImVec2 s; v.Project(p, s) && s.y < top.y)
+              top = s;
+          if (top.y < 1e8f) {
+            const bool held = collab->LockHolder(collab::ObjectKey(selId)) == peer.id;
+            NameTag(dl, ImVec2(top.x - 4, top.y - 22), col,
+                    peer.name + (held ? " (editing)" : " (waiting)"));
+          }
+        } else if (ImVec2 s; v.Project(r.GetMesh3DWorldPosition((size_t)si), s)) {
+          dl->AddCircle(s, 14.0f, col, 0, 2.0f);
+          NameTag(dl, ImVec2(s.x + 16, s.y - 10), col, peer.name);
+        }
+      }
+    }
+
+    // their editor camera: a small frustum where they are looking from
+    if (collabShowCameras && view.hasCam &&
+        glm::length(view.camPos - r.camera3d.position) > 0.3f) {
+      const glm::vec3 f = YawPitchForward(view.yaw, view.pitch);
+      glm::vec3 right = glm::cross(f, glm::vec3(0, 1, 0));
+      right = glm::length(right) < 1e-4f ? glm::vec3(1, 0, 0) : glm::normalize(right);
+      const glm::vec3 up = glm::cross(right, f);
+      const float depth = 0.6f;
+      const float hh = std::tan(glm::radians(std::clamp(cam[5], 10.0f, 120.0f)) * 0.5f) * depth;
+      const float hw = hh * 16.0f / 9.0f;
+      const glm::vec3 o = view.camPos, m = o + f * depth;
+      const glm::vec3 q[4] = {m + right * hw + up * hh, m - right * hw + up * hh,
+                              m - right * hw - up * hh, m + right * hw - up * hh};
+      for (int n = 0; n < 4; ++n) {
+        v.Line(dl, o, q[n], col, 1.5f);
+        v.Line(dl, q[n], q[(n + 1) % 4], col, 1.5f);
+      }
+      v.Line(dl, m + up * hh, m + up * hh * 1.5f, col, 2.0f); // "up" tick
+      if (ImVec2 s; v.Project(o, s)) {
+        dl->AddCircleFilled(s, 4.0f, col);
+        NameTag(dl, ImVec2(s.x + 6, s.y + 4), col, peer.name + " (camera)");
+      }
+    }
+
+    // their cursor in the scene
+    if (collabShowCursors && view.hasCursor) {
+      if (ImVec2 s; v.Project(view.cursor, s)) {
+        dl->AddCircleFilled(s, 10.0f, colSoft);
+        const ImVec2 tip = s;
+        dl->AddTriangleFilled(tip, ImVec2(tip.x + 4, tip.y + 15), ImVec2(tip.x + 11, tip.y + 10), col);
+        dl->AddTriangle(tip, ImVec2(tip.x + 4, tip.y + 15), ImVec2(tip.x + 11, tip.y + 10),
+                        IM_COL32(15, 15, 18, 255), 1.0f);
+        NameTag(dl, ImVec2(tip.x + 12, tip.y + 12), col, peer.name);
+      }
+    }
+  }
+  dl->PopClipRect();
 }

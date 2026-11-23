@@ -299,6 +299,25 @@ static void TestOnline() {
   CHECK(Pump([&] { return !b.applied.empty() && !c.applied.empty(); }, a, b, c));
   CHECK(!b.applied.empty() && b.applied[0].del);
 
+  // edit locks: A holds, B queues, A releases -> B, B leaves -> free
+  {
+    const std::string lk = "o-lock-test";
+    CHECK(a.client.AcquireLock(lk));
+    CHECK(Pump([&] { return b.client.LockHolder(lk) == a.client.Self(); }, a, b, c));
+    CHECK(a.client.LockHolder(lk) == a.client.Self());
+    CHECK(b.client.AcquireLock(lk));
+    CHECK(Pump([&] { return b.client.QueuePosition(lk) == 1; }, a, b, c));
+    CHECK(c.client.Locks().count(lk) == 1 && c.client.Locks().at(lk).queue.size() == 1);
+    CHECK(a.client.ReleaseLock(lk));
+    CHECK(Pump([&] {
+      return c.client.LockHolder(lk) == b.client.Self() &&
+             b.client.LockHolder(lk) == b.client.Self();
+    }, a, b, c));
+    CHECK(b.client.QueuePosition(lk) == 0);
+    CHECK(b.client.ReleaseLock(lk));
+    CHECK(Pump([&] { return a.client.Locks().count(lk) == 0; }, a, b, c));
+  }
+
   // leaving
   c.client.Stop();
   CHECK(c.client.State() == CollabState::Offline);
