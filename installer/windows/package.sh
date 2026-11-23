@@ -53,7 +53,9 @@ copy_deps
 # build machine and fail on a user's PC.
 leaks=0
 while IFS= read -r -d '' bin; do
-    if ntldd "$bin" | grep -iE '\\(msys64|ucrt64)\\'; then
+    # vulkan-1.dll resolves into MSYS2 on the build machine only; it is left
+    # out on purpose (see copy_deps) and comes from the GPU driver at runtime.
+    if ntldd "$bin" | grep -iE '\\(msys64|ucrt64)\\' | grep -viE '^\s*vulkan-1\.dll\s'; then
         echo "::error::$bin still depends on the MSYS2 prefix"; leaks=1
     fi
 done < <(find "$STAGE" -maxdepth 1 \( -iname '*.exe' -o -iname '*.dll' \) -print0)
@@ -74,14 +76,20 @@ find "$STAGE" -maxdepth 1 -type f | sed "s|$STAGE/|  |" | sort
 echo "dist/$NAME.zip"
 
 # Installer.
-ISCC=""
-for c in "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/c/Program Files/Inno Setup 6/ISCC.exe"; do
-    [ -x "$c" ] && ISCC=$c && break
-done
+ISCC="$(command -v ISCC.exe || command -v iscc || true)"
 if [ -z "$ISCC" ]; then
+    for c in "/c/Program Files (x86)"/Inno\ Setup*/ISCC.exe "/c/Program Files"/Inno\ Setup*/ISCC.exe; do
+        [ -x "$c" ] && ISCC=$c && break
+    done
+fi
+if [ -z "$ISCC" ]; then
+    if [ -n "${CI:-}" ]; then
+        echo "::error::Inno Setup (ISCC.exe) not found"; exit 1
+    fi
     echo "Inno Setup not found: skipping the installer (zip only)"
     exit 0
 fi
+echo "Using $ISCC"
 "$ISCC" /Qp \
     "/DAppVersion=$VERSION" \
     "/DStageDir=$(cygpath -w "$STAGE")" \
