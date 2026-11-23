@@ -90,7 +90,10 @@ if [ -z "$ISCC" ]; then
     exit 0
 fi
 echo "Using $ISCC"
-"$ISCC" /Qp \
+# MSYS2 rewrites arguments that start with "/" into Windows paths
+# ("/Qp" -> "C:/msys64/Qp"), which ISCC then reads as extra script names.
+# The paths below are already Windows paths (cygpath -w), so turn that off.
+MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$ISCC" /Qp \
     "/DAppVersion=$VERSION" \
     "/DStageDir=$(cygpath -w "$STAGE")" \
     "/DOutputDir=$(cygpath -w "$ROOT/dist")" \
