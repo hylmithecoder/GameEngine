@@ -60,6 +60,8 @@ int main() {
   McpServer collision(
       [](const std::string &, const json &) { return json::object(); });
   std::string collisionError;
+  // A second server on a busy port must fail (on Windows this needs
+  // SO_EXCLUSIVEADDRUSE, see the patch in vendor IXSocketServer.cpp).
   assert(!collision.Start(port, "other-secret", collisionError));
   assert(!collisionError.empty());
   std::atomic<bool> running{true};
@@ -130,7 +132,13 @@ int main() {
   McpServer tunneled([](const std::string &, const json &) {
     return json{{"ok", true}};
   });
-  assert(tunneled.Start(port, "path-secret", error, "MCP.Example.com"));
+  // Fresh port: Windows (SO_EXCLUSIVEADDRUSE) may refuse to rebind the old
+  // one while its closed connections sit in TIME_WAIT.
+  const int tport = ix::getFreePort();
+  if (!tunneled.Start(tport, "path-secret", error, "MCP.Example.com")) {
+    std::cerr << "tunnel McpServer::Start failed on port " << tport << ": " << error << "\n";
+    return 1;
+  }
   running = true;
   std::thread tunnelEditor([&] {
     while (running) {
@@ -145,7 +153,7 @@ int main() {
     args->extraHeaders["Accept"] = "application/json, text/event-stream";
     args->extraHeaders["Content-Type"] = "application/json";
     args->extraHeaders["Host"] = host;
-    return client.post("http://127.0.0.1:" + std::to_string(port) + path,
+    return client.post("http://127.0.0.1:" + std::to_string(tport) + path,
                        body.dump(), args);
   };
   const json legacyInit = {{"jsonrpc", "2.0"},

@@ -87,8 +87,16 @@ namespace ix
         }
 
         // Make that socket reusable. (allow restarting this server at will)
+        // Ilmeee patch: on Windows SO_REUSEADDR lets *another* process bind
+        // the same port while we listen (port hijacking, and a second server
+        // "starts" fine). SO_EXCLUSIVEADDRUSE is the Windows equivalent of the
+        // POSIX behaviour: fast restart is unaffected, sharing is refused.
         int enable = 1;
+#ifdef _WIN32
+        if (setsockopt(_serverFd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char*) &enable, sizeof(enable)) < 0)
+#else
         if (setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, (char*) &enable, sizeof(enable)) < 0)
+#endif
         {
             std::stringstream ss;
             ss << "SocketServer::listen() error calling setsockopt(SO_REUSEADDR) "
