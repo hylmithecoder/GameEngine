@@ -551,8 +551,8 @@ json ToolList() {
                     {"attachTo", index}}, {"path"}));
   add("set_play_mode", "Start, pause, resume, or stop Play mode in the editor so AI agents can test gameplay, physics, scripts, dialogs, and animations live.",
       ObjectSchema({{"state", {{"type", "string"}, {"enum", {"play", "pause", "stop"}}}}}, {"state"}));
-  add("build_game", "Trigger a standalone Linux or Android APK game build for the active project (stopped editor). Use get_game_log and get_device_stats to monitor when run=true.",
-      ObjectSchema({{"target", {{"type", "string"}, {"enum", {"linux", "android"}}}},
+  add("build_game", "Trigger a standalone desktop (Linux or Windows: the OS the editor runs on) or Android APK game build for the active project (stopped editor). Use get_game_log and get_device_stats to monitor when run=true.",
+      ObjectSchema({{"target", {{"type", "string"}, {"enum", {"desktop", "linux", "windows", "android"}}}},
                     {"run", {{"type", "boolean"}, {"description", "Launch on desktop or connected Android device when build finishes (default false)"}}},
                     {"portable", {{"type", "boolean"}, {"description", "Bundle portable runtime libraries on Linux"}}},
                     {"includeUnusedAssets", {{"type", "boolean"}, {"description", "Package all project assets even if not referenced by scenes"}}},

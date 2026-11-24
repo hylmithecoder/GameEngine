@@ -4,15 +4,9 @@
 #include "../../../include/core_engine/UserDataDir.hpp"
 #include "../../../include/ui/MainWindow.hpp"
 #include "../../../include/ui/SvgIconManager.hpp"
+#include "../../../include/core_engine/Process.hpp"
 #include <cstring>
 #include <cerrno>
-#include <fcntl.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-extern char **environ;
 
 using namespace ImGui;
 namespace fs = std::filesystem;
@@ -51,8 +45,8 @@ fs::path DefaultBuildDir(const std::string &project,
                          ilmeee::BuildTarget target) {
   const std::string safe =
       ilmeee::SafeGameName(fs::path(project).filename().string());
-  return fs::path(project) / "build" /
-         (target == ilmeee::BuildTarget::Android ? "android" : "linux") / safe;
+  return fs::path(project) / "build" / ilmeee::BuildTargetFolder(target) /
+         safe;
 }
 
 fs::path DefaultLauncher(const std::string &project,
@@ -60,7 +54,9 @@ fs::path DefaultLauncher(const std::string &project,
   const std::string safe =
       ilmeee::SafeGameName(fs::path(project).filename().string());
   return DefaultBuildDir(project, target) /
-         (target == ilmeee::BuildTarget::Android ? safe + ".apk" : safe);
+         (target == ilmeee::BuildTarget::Android   ? safe + ".apk"
+          : target == ilmeee::BuildTarget::Windows ? safe + ".exe"
+                                                   : safe);
 }
 
 // Installs the APK on the connected device, starts it with live stats on
@@ -127,35 +123,21 @@ echo "Game process $pid ended."
 "$ADB" logcat -d -v brief -s AndroidRuntime:E DEBUG:E libc:F
 )sh";
 
-bool Spawn(const std::string &program, const std::vector<std::string> &args,
-           pid_t &pid, bool searchPath, int captureWrite = -1,
-           int captureRead = -1) {
-  std::vector<std::string> storage;
-  storage.push_back(program);
-  storage.insert(storage.end(), args.begin(), args.end());
-  std::vector<char *> argv;
-  for (auto &a : storage)
-    argv.push_back(a.data());
-  argv.push_back(nullptr);
-  posix_spawn_file_actions_t actions;
-  posix_spawn_file_actions_t *actionPtr = nullptr;
-  if (captureWrite >= 0) {
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, captureWrite, STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, captureWrite, STDERR_FILENO);
-    posix_spawn_file_actions_addclose(&actions, captureWrite);
-    if (captureRead >= 0)
-      posix_spawn_file_actions_addclose(&actions, captureRead);
-    actionPtr = &actions;
+// A file:// URL for SDL_OpenURL (file manager on Linux and Windows).
+std::string FileUrl(const fs::path &dir) {
+  std::string path = fs::absolute(dir).generic_string();
+  std::string url = "file://";
+  if (!path.empty() && path[0] != '/')
+    url += '/'; // C:/... -> file:///C:/...
+  for (char c : path) {
+    if (c == ' ')
+      url += "%20";
+    else if (c == '#')
+      url += "%23";
+    else
+      url += c;
   }
-  int rc = searchPath
-               ? posix_spawnp(&pid, program.c_str(), actionPtr, nullptr,
-                              argv.data(), environ)
-               : posix_spawn(&pid, program.c_str(), actionPtr, nullptr,
-                             argv.data(), environ);
-  if (actionPtr) posix_spawn_file_actions_destroy(&actions);
-  errno = rc;
-  return rc == 0;
+  return url;
 }
 
 } // namespace
@@ -262,56 +244,66 @@ void MainWindow::LaunchBuiltGame() {
     PushBuildLog("There is no build to run yet.");
     return;
   }
-  if (gameProcess > 0) {
+  if (GameRunning()) {
     PushBuildLog("The game is already running.");
     return;
   }
-  if (gameOutputFd >= 0) {
-    close(gameOutputFd);
-    gameOutputFd = -1;
-    gameOutputPending.clear();
-  }
-  pid_t pid = -1;
-  int pipeFds[2] = {-1, -1};
-  if (pipe2(pipeFds, O_CLOEXEC) != 0) {
-    PushBuildLog("Could not create game log pipe: " +
-                 std::string(std::strerror(errno)));
-    return;
-  }
-  const int readFlags = fcntl(pipeFds[0], F_GETFL);
-  if (readFlags < 0 || fcntl(pipeFds[0], F_SETFL,
-                            readFlags | O_NONBLOCK) < 0) {
-    close(pipeFds[0]);
-    close(pipeFds[1]);
-    PushBuildLog("Could not configure game log pipe");
-    return;
-  }
   const bool android = lastGameTarget == ilmeee::BuildTarget::Android;
+#ifdef _WIN32
+  deviceMonitor.Reset(android ? "Android" : "Windows");
+#else
   deviceMonitor.Reset(android ? "Android" : "Linux");
+#endif
   showDeviceMonitor = true;
-  // Desktop games inherit it; on the phone the run script sets a property.
-  setenv("ILMEEE_STATS", "1", 1);
-  const bool started =
-      android ? Spawn("bash",
-                      {"-c", kAndroidRunScript, "ilmeee-android-run",
-                       lastGameLauncher.string(), lastGameApplicationId,
-                       ilmeee::kAndroidActivity},
-                      pid, true, pipeFds[1], pipeFds[0])
-              : Spawn(lastGameLauncher.string(), {}, pid, false, pipeFds[1],
-                      pipeFds[0]);
-  if (!started) {
-    close(pipeFds[0]);
-    close(pipeFds[1]);
-    PushBuildLog("Could not start " + lastGameLauncher.string() + ": " +
-                 std::strerror(errno));
+
+  ilmeee::ProcessOptions o;
+  if (android) {
+    o.program = "bash";
+    o.args = {"-c", kAndroidRunScript, "ilmeee-android-run",
+              lastGameLauncher.string(), lastGameApplicationId,
+              ilmeee::kAndroidActivity};
+  } else {
+    o.program = lastGameLauncher.string();
+  }
+  // Desktop games read it; on the phone the run script sets a property.
+  o.env = {{"ILMEEE_STATS", "1"}};
+  auto proc = std::make_shared<ilmeee::Process>();
+  std::string error;
+  if (!proc->Start(o, error)) {
+    PushBuildLog("Could not start " + lastGameLauncher.string() + ": " + error);
     return;
   }
-  close(pipeFds[1]);
-  gameOutputFd = pipeFds[0];
-  gameOutputPending.clear();
-  gameProcess = pid;
+  auto out = std::make_shared<GameOutput>();
+  std::thread([proc, out] {
+    std::string pending;
+    char buffer[4096];
+    long n;
+    auto push = [&](std::string line) {
+      if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+      std::lock_guard<std::mutex> lock(out->mutex);
+      out->lines.push_back(std::move(line));
+    };
+    while ((n = proc->Read(buffer, sizeof buffer)) > 0) {
+      pending.append(buffer, (size_t)n);
+      size_t newline;
+      while ((newline = pending.find('\n')) != std::string::npos) {
+        push(pending.substr(0, newline));
+        pending.erase(0, newline + 1);
+      }
+      if (pending.size() > 16384) {
+        push(pending.substr(0, 16384));
+        pending.clear();
+      }
+    }
+    if (!pending.empty())
+      push(pending);
+    out->eof = true;
+  }).detach();
+  gameProc = proc;
+  gameOutput = out;
   PushBuildLog("Started " + lastGameLauncher.filename().string() + " (pid " +
-               std::to_string(pid) + ")");
+               std::to_string(proc->Pid()) + ")");
 }
 
 void MainWindow::PollGameBuild() {
@@ -333,56 +325,24 @@ void MainWindow::PollGameBuild() {
     }
   }
 
-  for (auto it = gameProcessHelpers.begin(); it != gameProcessHelpers.end();)
-    it = waitpid(*it, nullptr, WNOHANG) == *it ? gameProcessHelpers.erase(it)
-                                                : it + 1;
 
-  if (gameOutputFd >= 0) {
-    char buffer[4096];
-    for (int chunks = 0; chunks < 8; ++chunks) {
-      const ssize_t n = read(gameOutputFd, buffer, sizeof(buffer));
-      if (n > 0) {
-        gameOutputPending.append(buffer, (size_t)n);
-        size_t newline;
-        while ((newline = gameOutputPending.find('\n')) != std::string::npos) {
-          std::string line = gameOutputPending.substr(0, newline);
-          if (!line.empty() && line.back() == '\r') line.pop_back();
-          HandleGameOutput(line);
-          gameOutputPending.erase(0, newline + 1);
-        }
-        if (gameOutputPending.size() > 16384) {
-          PushBuildLog("[GAME] " + gameOutputPending.substr(0, 16384));
-          gameOutputPending.clear();
-        }
-      } else if (n == 0) {
-        if (!gameOutputPending.empty()) {
-          HandleGameOutput(gameOutputPending);
-          gameOutputPending.clear();
-        }
-        close(gameOutputFd);
-        gameOutputFd = -1;
-        break;
-      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        break;
-      } else {
-        PushBuildLog("Game log read failed: " + std::string(std::strerror(errno)));
-        close(gameOutputFd);
-        gameOutputFd = -1;
-        break;
-      }
+  if (gameOutput) {
+    std::vector<std::string> lines;
+    {
+      std::lock_guard<std::mutex> lock(gameOutput->mutex);
+      lines.swap(gameOutput->lines);
     }
+    for (const auto &line : lines)
+      HandleGameOutput(line);
   }
 
-  if (gameProcess > 0) {
-    int status = 0;
-    if (waitpid(gameProcess, &status, WNOHANG) == gameProcess) {
-      if (WIFEXITED(status))
-        PushBuildLog("Game exited with code " +
-                     std::to_string(WEXITSTATUS(status)));
-      else if (WIFSIGNALED(status))
-        PushBuildLog("Game was killed by signal " +
-                     std::to_string(WTERMSIG(status)));
-      gameProcess = -1;
+  // Report the exit only after the last output line, so the log reads in order.
+  if (gameProc && (!gameOutput || gameOutput->eof)) {
+    int code = 0;
+    if (gameProc->TryWait(code)) {
+      PushBuildLog("Game exited with code " + std::to_string(code));
+      gameProc.reset();
+      gameOutput.reset();
       deviceMonitor.SetEnded();
     }
   }
@@ -407,12 +367,14 @@ void MainWindow::RenderBuildMenu() {
   if (MenuItem("Build and Run", "Ctrl+Shift+B", false, !busy && hasProject))
     StartGameBuild(true);
   if (MenuItem("Run Last Build", nullptr, false,
-               !busy && hasBuild && gameProcess <= 0))
+               !busy && hasBuild && !GameRunning()))
     LaunchBuiltGame();
   Separator();
-  if (MenuItem("Target: Linux", nullptr,
-               gameBuildTarget == ilmeee::BuildTarget::Linux, !busy))
-    gameBuildTarget = ilmeee::BuildTarget::Linux;
+  const std::string desktopItem =
+      std::string("Target: ") + ilmeee::BuildTargetName(ilmeee::kDesktopTarget);
+  if (MenuItem(desktopItem.c_str(), nullptr,
+               gameBuildTarget == ilmeee::kDesktopTarget, !busy))
+    gameBuildTarget = ilmeee::kDesktopTarget;
   if (MenuItem("Target: Android (APK)", nullptr,
                gameBuildTarget == ilmeee::BuildTarget::Android, !busy))
     gameBuildTarget = ilmeee::BuildTarget::Android;
@@ -437,13 +399,12 @@ void MainWindow::RenderBuildMenu() {
       hasProject ? DefaultBuildDir(project, gameBuildTarget) : fs::path();
   if (MenuItem("Open Build Folder", nullptr, false,
                hasProject && fs::exists(folder, ec))) {
-    pid_t pid;
-    if (Spawn("xdg-open", {folder.string()}, pid, true))
-      gameProcessHelpers.push_back(pid);
+    if (!SDL_OpenURL(FileUrl(folder).c_str()))
+      PushBuildLog("Could not open " + folder.string() + ": " + SDL_GetError());
   }
   if (!hasProject)
     TextDisabled("Open a project to build it");
-  EndMenu();
+  ImGui::EndMenu();
 }
 
 void MainWindow::RenderBuildTab() {
@@ -458,23 +419,29 @@ void MainWindow::RenderBuildTab() {
     StartGameBuild(true);
   EndDisabled();
   SameLine();
-  BeginDisabled(busy || gameProcess > 0);
+  BeginDisabled(busy || GameRunning());
   if (Button("Run"))
     LaunchBuiltGame();
   EndDisabled();
-  if (gameProcess > 0 && lastGameTarget == ilmeee::BuildTarget::Android) {
+  if (GameRunning() && lastGameTarget == ilmeee::BuildTarget::Android) {
     SameLine();
     if (Button("Stop Log"))
-      kill(gameProcess, SIGTERM); // the app keeps running on the phone
+      gameProc->Terminate(); // the app keeps running on the phone
   }
   SameLine();
   BeginDisabled(busy);
-  int target = (int)gameBuildTarget;
+  // 0 = this OS (desktop), 1 = Android.
+  int target = gameBuildTarget == ilmeee::BuildTarget::Android ? 1 : 0;
+  const char *targetLabels[] = {ilmeee::BuildTargetName(ilmeee::kDesktopTarget),
+                                "Android"};
   SetNextItemWidth(110);
-  if (Combo("##target", &target, "Linux\0Android\0"))
-    gameBuildTarget = (ilmeee::BuildTarget)target;
+  if (Combo("##target", &target, targetLabels, 2))
+    gameBuildTarget = target == 1 ? ilmeee::BuildTarget::Android
+                                  : ilmeee::kDesktopTarget;
   EndDisabled();
-  if (gameBuildTarget == ilmeee::BuildTarget::Linux) {
+  if (gameBuildTarget == ilmeee::BuildTarget::Windows) {
+    // Windows builds are always self-contained (DLLs copied next to the exe).
+  } else if (gameBuildTarget == ilmeee::BuildTarget::Linux) {
     SameLine();
     Checkbox("Portable", &gameBuildPortable);
   } else {
@@ -500,7 +467,7 @@ void MainWindow::RenderBuildTab() {
   SameLine();
   if (busy)
     TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Building...");
-  else if (gameProcess > 0)
+  else if (GameRunning())
     TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Game running");
 
   BeginChild("BuildLog", ImVec2(0, 0), true,

@@ -104,7 +104,7 @@ void MainWindow::RenderLightingMenu() {
     return;
   if (!sceneRenderer) {
     TextDisabled("No scene renderer");
-    EndMenu();
+    ImGui::EndMenu();
     return;
   }
   ilmeee::NprSettings npr = sceneRenderer->GetNpr();
@@ -118,7 +118,7 @@ void MainWindow::RenderLightingMenu() {
       if (IsItemHovered())
         SetTooltip("%s", preset.tooltip);
     }
-    EndMenu();
+    ImGui::EndMenu();
   }
   ilmeee::BloomSettings bloom = sceneRenderer->GetBloom();
   if (MenuItem("Bloom", nullptr, &bloom.enabled))
@@ -127,7 +127,7 @@ void MainWindow::RenderLightingMenu() {
   MenuItem("Lighting Settings...", nullptr, &showLighting);
   if (changed)
     sceneRenderer->SetNpr(npr);
-  EndMenu();
+  ImGui::EndMenu();
 }
 
 void MainWindow::RenderLightingWindow() {

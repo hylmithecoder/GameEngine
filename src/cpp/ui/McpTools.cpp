@@ -10,13 +10,9 @@
 #include <functional>
 #include <cmath>
 #include <limits>
-#include <spawn.h>
+#include "../../../include/core_engine/Process.hpp"
 #include <sstream>
-#include <sys/wait.h>
 #include <type_traits>
-#include <unistd.h>
-
-extern char **environ;
 
 namespace {
 using json = ilmeee::net::json;
@@ -166,44 +162,21 @@ bool RunProcessCapture(const std::vector<std::string> &argv, std::string &output
   exitCode = -1;
   if (argv.empty())
     return false;
-  int pipefd[2];
-  if (pipe(pipefd) != 0)
+  ilmeee::ProcessOptions o;
+  o.program = argv[0]; // bare names are looked up on PATH
+  o.args.assign(argv.begin() + 1, argv.end());
+  ilmeee::Process p;
+  std::string error;
+  if (!p.Start(o, error))
     return false;
-  posix_spawn_file_actions_t actions;
-  posix_spawn_file_actions_init(&actions);
-  posix_spawn_file_actions_addclose(&actions, pipefd[0]);
-  posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&actions, pipefd[1]);
-  std::vector<char *> cargs;
-  cargs.reserve(argv.size() + 1);
-  for (const auto &s : argv)
-    cargs.push_back(const_cast<char *>(s.c_str()));
-  cargs.push_back(nullptr);
-  pid_t pid = -1;
-  const int rc = posix_spawnp(&pid, argv[0].c_str(), &actions, nullptr,
-                              cargs.data(), environ);
-  posix_spawn_file_actions_destroy(&actions);
-  close(pipefd[1]);
-  if (rc != 0) {
-    close(pipefd[0]);
-    return false;
-  }
   char buf[4096];
-  ssize_t n;
-  while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+  long n;
+  while ((n = p.Read(buf, sizeof(buf))) > 0) {
     if (output.size() < 512 * 1024)
       output.append(buf, static_cast<size_t>(n));
   }
-  close(pipefd[0]);
-  int status = 0;
-  if (waitpid(pid, &status, 0) < 0)
-    return false;
-  if (WIFEXITED(status)) {
-    exitCode = WEXITSTATUS(status);
-    return exitCode == 0;
-  }
-  return false;
+  exitCode = p.Wait();
+  return exitCode == 0;
 }
 
 bool SafeArchiveEntries(const std::string &listing, std::string &badEntry) {
@@ -2327,8 +2300,7 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
       return Error("No project is open");
     if (gameBuildRunning.load())
       return Error("A game build is already running");
-    std::string target =
-        (gameBuildTarget == ilmeee::BuildTarget::Android) ? "android" : "linux";
+    std::string target = ilmeee::BuildTargetFolder(gameBuildTarget);
     bool runWhenDone = false;
     bool portable = gameBuildPortable;
     bool includeUnused = gameBuildIncludeUnused;
@@ -2339,12 +2311,16 @@ ilmeee::net::json MainWindow::HandleMcpTool(const std::string &name,
         !Optional(args, "includeUnusedAssets", includeUnused) ||
         !Optional(args, "androidMaxVideoHeight", maxVideoHeight))
       return Error("Invalid build_game argument");
-    if (target == "linux")
-      gameBuildTarget = ilmeee::BuildTarget::Linux;
-    else if (target == "android")
+    if (target == "android")
       gameBuildTarget = ilmeee::BuildTarget::Android;
+    else if (target == "desktop" ||
+             target == ilmeee::BuildTargetFolder(ilmeee::kDesktopTarget))
+      gameBuildTarget = ilmeee::kDesktopTarget;
     else
-      return Error("target must be linux or android");
+      return Error(std::string("target must be ") +
+                   ilmeee::BuildTargetFolder(ilmeee::kDesktopTarget) +
+                   ", desktop or android (a desktop game is built for the "
+                   "OS the editor runs on)");
     if (maxVideoHeight != 0 && maxVideoHeight != 720 && maxVideoHeight != 1080)
       return Error("androidMaxVideoHeight must be 0, 720 or 1080");
     gameBuildPortable = portable;

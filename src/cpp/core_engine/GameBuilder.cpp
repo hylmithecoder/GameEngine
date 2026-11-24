@@ -17,7 +17,17 @@
 #include <vector>
 #include <map>
 #include <set>
+#ifdef _WIN32
+// _pclose returns the command's exit code directly.
+#define popen _popen
+#define pclose _pclose
+static bool ExitedOk(int status) { return status == 0; }
+#else
 #include <sys/wait.h>
+static bool ExitedOk(int status) {
+  return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+#endif
 
 namespace ilmeee {
 
@@ -462,7 +472,7 @@ public:
     if (!line.empty())
       onLine(line);
     const int status = pclose(pipe);
-    return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return ExitedOk(status);
   }
 
   struct VideoInfo {
@@ -608,7 +618,7 @@ public:
       Say("  " + s);
     }
     int status = pclose(pipe);
-    return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return ExitedOk(status);
   }
 
   // ---- Android -----------------------------------------------------------
@@ -779,8 +789,9 @@ public:
                                  : o_.gameName;
     const std::string safe = SafeGameName(name);
     const bool android = o_.target == BuildTarget::Android;
+    const bool windows = o_.target == BuildTarget::Windows;
     fs::path out = o_.outputDir.empty()
-                       ? root_ / "build" / (android ? "android" : "linux") / safe
+                       ? root_ / "build" / BuildTargetFolder(o_.target) / safe
                        : fs::absolute(o_.outputDir);
     out = Canonical(out);
     out_ = out;
@@ -837,7 +848,7 @@ public:
     stage_ = out.parent_path() / (out.filename().string() + ".building");
     fs::remove_all(stage_);
     fs::create_directories(stage_);
-    Say("Building '" + name + "' (" + (android ? "Android" : "Linux") +
+    Say("Building '" + name + "' (" + BuildTargetName(o_.target) +
         ") from " + root_.string());
     gameDir_ = stage_;
     if (android) {
@@ -878,7 +889,8 @@ public:
       for (const auto &source : nativeSources_) {
         const auto className = fs::path(source).stem().string();
         const auto name = "libilmeee_script_" + className + "_" +
-                          std::to_string(NewObjectId()) + ".so";
+                          std::to_string(NewObjectId()) +
+                          (windows ? ".dll" : ".so");
         if (android) {
           // Libraries belong in APK jniLibs, not writable/extracted game assets.
           // One manifest entry resolves the same filename for the device's ABI.
@@ -920,7 +932,19 @@ public:
       CopyFile(textFont, gameDir_ / "assets/fonts/MiSansLatin-Regular.ttf");
 
     // ---- runtime ------------------------------------------------------
-    if (!android) {
+    if (windows) {
+      // Flat: Windows finds a program's DLLs in its own folder. The player's
+      // DLLs are the ones next to it (the editor's install folder).
+      CopyFile(o_.playerExecutable, stage_ / (safe + ".exe"));
+      for (const auto &entry :
+           fs::directory_iterator(o_.playerExecutable.parent_path(), ec)) {
+        const auto file = entry.path().filename().string();
+        if (entry.path().extension() != ".dll" ||
+            file.rfind("libIlmeee", 0) == 0) // engine-process DLLs: editor only
+          continue;
+        CopyFile(entry.path(), stage_ / file);
+      }
+    } else if (!android) {
       fs::path bin = stage_ / "bin" / safe;
       CopyFile(o_.playerExecutable, bin);
       fs::permissions(bin,
@@ -941,7 +965,7 @@ public:
 
     if (android) {
       PrepareAndroidProject(name, abis);
-    } else if (!o_.bundleScript.empty()) {
+    } else if (!windows && !o_.bundleScript.empty()) {
       Say("Bundling libraries (portable build) ...");
       r_.librariesBundled = Bundle();
       if (!r_.librariesBundled)
@@ -964,7 +988,7 @@ public:
                     out.string());
       }
     } else {
-      r_.launcher = out / safe;
+      r_.launcher = out / (windows ? safe + ".exe" : safe);
     }
     r_.ok = true;
     Say("Done: " + std::to_string(r_.filesCopied) + " files, " +

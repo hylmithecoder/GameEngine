@@ -9,15 +9,15 @@
 #
 #   stage 1  core libraries + portable tests                 (this file)
 #   stage 2  IlmeeePlayer (game runtime)                      (this file)
-#   stage 3  editor: GameEngineSDL + IlmeeeEngine/IlmeeeEditor DLLs
-#            + HandlerIlmeeeEngine (process/dlopen/GTK ports)  (todo)
-#   stage 4  IlmeeeHub                                         (todo)
+#   stage 3  editor: GameEngineSDL                             (this file)
+#            todo: IlmeeeEngine/IlmeeeEditor DLLs + HandlerIlmeeeEngine
+#   stage 4  IlmeeeHub                                         (this file)
 #
 # Layout of `cmake --install` (what the installer ships): a flat directory,
 #   <prefix>/IlmeeePlayer.exe, <prefix>/*.dll, <prefix>/assets/...
 # because Windows resolves DLLs from the executable's own folder.
 
-message(STATUS "Ilmeee: Windows build (MSYS2/MinGW) - stages 1-2: core, tests, IlmeeePlayer")
+message(STATUS "Ilmeee: Windows build (MSYS2/MinGW) - core, tests, IlmeeePlayer, IlmeeeHub, GameEngineSDL")
 
 if(NOT MINGW)
     message(FATAL_ERROR "The Windows build targets MSYS2 UCRT64 (MinGW GCC). "
@@ -233,17 +233,181 @@ target_link_libraries(IlmeeeHub PRIVATE
 # -municode makes the MinGW CRT call that entry point.
 target_link_options(IlmeeeHub PRIVATE -mwindows -municode)
 
+# ---- stage 3: GameEngineSDL (the editor) ------------------------------------
+# Same sources as MAIN_PROJECT_SOURCE in src/cpp/CMakeLists.txt. Windows
+# differences live in the sources (#ifdef _WIN32): ilmeee::Process instead of
+# fork/exec, SDL message boxes instead of GTK, Win32 system info, no Discord.
+# The engine process (HandlerIlmeeeEngine + libIlmeeeEngine.dll +
+# libIlmeeeEditor.dll) is defined below the editor.
+
+set(ILMEEE_EDITOR_SOURCES
+    src/cpp/core_engine/WorldText.cpp
+    src/cpp/core_engine/WorldTextRuntime.cpp
+    src/cpp/main.cpp
+    src/cpp/ui/MainWindow.cpp
+    src/cpp/ui/McpTools.cpp
+    src/cpp/ui/CollabPanel.cpp
+    src/cpp/ui/LightingPanel.cpp
+    src/cpp/ApplicationManager.cpp
+    src/cpp/ui/SecondaryWindow.cpp
+    src/cpp/ui/VideoPlayer.cpp
+    src/cpp/ui/assets.cpp
+    src/cpp/ui/HandlerProject.cpp
+    src/cpp/ui/ScriptDialogs.cpp
+    src/cpp/ui/NativeScriptInspector.cpp
+    src/cpp/ui/PrefabEditor.cpp
+    src/cpp/ui/DialogInspector.cpp
+    src/cpp/ui/AnimationEditor.cpp
+    src/cpp/ui/AnimationControllerEditor.cpp
+    src/cpp/ui/SpringBoneInspector.cpp
+    src/cpp/ui/HandlerChildWindow.cpp
+    src/cpp/ui/GameBuildPanel.cpp
+    src/cpp/ui/ViewportGizmo.cpp
+    src/cpp/core_engine/SceneSerializer.cpp
+    src/cpp/core_engine/SceneRenderer.cpp
+    src/cpp/core_engine/BloomPass.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp
+    src/cpp/core_engine/AnimationAuthoring.cpp
+    src/cpp/core_engine/AnimationTooling.cpp
+    src/cpp/core_engine/AnimationRuntime.cpp
+    src/cpp/core_engine/SpringBone.cpp
+    src/cpp/core_engine/AnimationController.cpp
+    src/cpp/core_engine/AudioEngine.cpp
+    src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaHttp.cpp
+    src/cpp/core_engine/MediaSystem.cpp
+    src/cpp/core_engine/SceneLoader.cpp
+    src/cpp/core_engine/GameUI.cpp
+    src/cpp/core_engine/DialogSystem.cpp
+    src/cpp/core_engine/MovementScript.cpp
+    src/cpp/core_engine/MovementRuntime.cpp
+    src/cpp/core_engine/PhysicsWorld.cpp
+    src/cpp/core_engine/PhysicsRuntime.cpp
+    src/cpp/core_engine/UserMovementScripts.cpp
+    src/cpp/core_engine/ScriptWorkspace.cpp
+    src/cpp/core_engine/NativeScripts.cpp
+    src/cpp/core_engine/NativeScriptScene.cpp
+    src/cpp/core_engine/GameBuilder.cpp
+    src/cpp/core_engine/ModelDependencies.cpp
+    src/cpp/core_engine/EditorSessionHistory.cpp
+    src/cpp/core_engine/Builder.cpp
+    src/cpp/core_engine/TextureManager.cpp
+    src/cpp/core_engine/Check_Environment.cpp
+    src/cpp/core_engine/Discordrich.cpp
+    src/cpp/core_engine/PMXLoader.cpp
+    src/cpp/core_engine/ModelThumbnail.cpp
+    src/cpp/core_engine/SoftwareRaster.cpp
+    src/cpp/ui/SvgIconManager.cpp
+    src/cpp/core_engine/core_editor/EditorDockSpace.cpp
+    src/cpp/core_engine/core_editor/EditorTheme.cpp
+    src/cpp/core_engine/core_editor/panels/PanelManager.cpp
+    src/cpp/core_engine/core_editor/panels/VideoPlayerPanel.cpp
+    src/cpp/optimizer/Optimizer.cpp
+    src/cpp/vulkan/texture.cpp
+    src/cpp/vulkan/VkBuffer.cpp
+    src/cpp/vulkan/VkDevice.cpp
+    src/cpp/vulkan/VkTools.cpp
+    src/cpp/vulkan/VulkanBase.cpp
+    src/cpp/vulkan/vulkanhandler.cpp
+    vendor/nfd/src/nfd_win.cpp
+    vendor/glad4.4/src/glad.c
+    res/resources.rc
+)
+add_executable(GameEngineSDL ${ILMEEE_EDITOR_SOURCES} ${IMGUI_SOURCES})
+target_include_directories(GameEngineSDL PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
+    ${CMAKE_SOURCE_DIR}/vendor/nfd/include
+    ${CMAKE_SOURCE_DIR}/vendor/glad4.4/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${JSON_DIR}
+    ${STB_INCLUDE_DIRS}
+)
+target_compile_definitions(GameEngineSDL PRIVATE
+    ILMEEE_HAS_FFMPEG
+    ILMEEE_SCRIPT_INCLUDE="${CMAKE_SOURCE_DIR}/include"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+target_link_libraries(GameEngineSDL PRIVATE
+    ilmeee_net
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    OpenGL::GL
+    glm::glm
+    ufbx
+    stb_impl
+    PkgConfig::FFMPEG
+    PkgConfig::CURL
+    Threads::Threads
+    ole32 uuid shell32 advapi32
+)
+
+# ---- stage 3: engine process -------------------------------------------------
+# GameEngineSDL starts HandlerIlmeeeEngine.exe, which loads the two DLLs
+# (ilmeee::OpenLibrary) and talks back over the IPC WebSocket. On Linux the
+# loading window is GTK; on Windows progress goes to the log instead.
+# Unlike a Linux .so a DLL must resolve every symbol at link time, so the
+# DLLs list only the sources their exports really need.
+
+add_library(IlmeeeEngine SHARED
+    src/cpp/core_engine/core/CoreDebugger.cpp
+    src/cpp/core_engine/core/GameEngine.cpp
+    src/cpp/core_engine/core/LifeCycleManager.cpp
+    res/IlmeeeEngine.rc
+)
+target_include_directories(IlmeeeEngine PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
+target_link_libraries(IlmeeeEngine PRIVATE Threads::Threads)
+
+add_library(IlmeeeEditor SHARED
+    src/cpp/core_engine/core_editor/IlmeeeEditor.cpp
+    vendor/nfd/src/nfd_win.cpp
+    vendor/glad4.4/src/glad.c
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    res/IlmeeeEditor.rc
+)
+target_include_directories(IlmeeeEditor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/vendor/nfd/include
+    ${CMAKE_SOURCE_DIR}/vendor/glad4.4/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${JSON_DIR}
+)
+target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
+target_link_libraries(IlmeeeEditor PRIVATE
+    ilmeee_net PkgConfig::SDL3 OpenGL::GL Threads::Threads ole32 uuid shell32)
+
+add_executable(HandlerIlmeeeEngine src/cpp/core_engine/core/Launcher.cpp)
+target_include_directories(HandlerIlmeeeEngine PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${JSON_DIR})
+target_link_libraries(HandlerIlmeeeEngine PRIVATE Threads::Threads)
+# Loaded at run time, but must be built (and installed) with the handler.
+add_dependencies(HandlerIlmeeeEngine IlmeeeEngine IlmeeeEditor)
+
 # ---- install layout (consumed by installer/windows/package.sh) --------------
 
-set(ILMEEE_WINDOWS_RELEASE_TARGETS IlmeeePlayer IlmeeeHub)
+set(ILMEEE_WINDOWS_RELEASE_TARGETS IlmeeePlayer IlmeeeHub GameEngineSDL
+    HandlerIlmeeeEngine IlmeeeEngine IlmeeeEditor)
 install(TARGETS ${ILMEEE_WINDOWS_RELEASE_TARGETS}
-    RUNTIME DESTINATION ${ILMEEE_WIN_BIN_DIR})
+    RUNTIME DESTINATION ${ILMEEE_WIN_BIN_DIR}
+    LIBRARY DESTINATION ${ILMEEE_WIN_BIN_DIR}
+    ARCHIVE DESTINATION lib EXCLUDE_FROM_ALL) # import libs: not shipped
 # Authoring sources (.blend, archives) are not runtime data: keep them out of
 # the installer (~100 MB).
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/ DESTINATION ${ILMEEE_WIN_ASSET_DIR}
     PATTERN "*.blend" EXCLUDE
     PATTERN "*.blend1" EXCLUDE
     PATTERN "*.zip" EXCLUDE)
+# Public headers: the SDK for project scripts (NativeScripts looks for
+# <exe dir>/include/core_engine/core/Component.hpp).
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE ${CMAKE_SOURCE_DIR}/README.md
     DESTINATION ${ILMEEE_WIN_BIN_DIR} OPTIONAL)
 

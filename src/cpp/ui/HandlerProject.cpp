@@ -509,9 +509,10 @@ void HandlerProject::OpenProject(const char *folderPath) {
 
   for (const auto &dir : directories) {
     string fullPath = string(folderPath) + dir;
-    if (mkdir(fullPath.c_str(), 0755) != 0 && errno != EEXIST) {
-      cerr << "Error creating directory: " << fullPath << endl;
-    }
+    std::error_code mkErr;
+    std::filesystem::create_directories(fullPath, mkErr);
+    if (mkErr)
+      cerr << "Error creating directory: " << fullPath << " (" << mkErr.message() << ")" << endl;
   }
 
   // Load project configuration if exists

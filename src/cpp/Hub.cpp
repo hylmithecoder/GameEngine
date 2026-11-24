@@ -515,6 +515,11 @@ public:
 
     ilmeee::ProcessOptions o;
     o.program = ResolveEditorBinary();
+#ifdef _WIN32
+    // The editor finds assets/ (shaders, icons, fonts) relative to its
+    // working directory; on Windows they sit next to the installed exe.
+    o.workingDir = fs::path(o.program).parent_path().string();
+#endif
     o.args = {"--project", projectPath};
     if (g_DebugMode)
       o.args.push_back("--debug");

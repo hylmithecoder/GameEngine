@@ -1,4 +1,5 @@
 #include "../../include/core_engine/Discordrich.hpp"
+#if ILMEEE_HAS_DISCORD
 
 #include <cstring>
 #include <iostream>
@@ -258,3 +259,5 @@ void DiscordRichPresence::ClearActivity() {
         });
   }
 }
+
+#endif // ILMEEE_HAS_DISCORD

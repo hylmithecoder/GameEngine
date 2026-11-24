@@ -46,6 +46,10 @@
 #if defined(__linux__)
 #include <unistd.h>
 #endif
+#if defined(_WIN32)
+#include "../../../include/core_engine/Platform.hpp"
+#include <psapi.h>
+#endif
 
 using namespace ImGui;
 
@@ -81,6 +85,11 @@ double ResidentMiB() {
     if (read == 2)
       return resident * (double)sysconf(_SC_PAGESIZE) / (1024.0 * 1024.0);
   }
+#elif defined(_WIN32)
+  // K32*: in kernel32 since Windows 7, no psapi.lib needed.
+  PROCESS_MEMORY_COUNTERS pmc{};
+  if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
+    return pmc.WorkingSetSize / (1024.0 * 1024.0);
 #endif
   return -1.0;
 }

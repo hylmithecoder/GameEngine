@@ -238,6 +238,15 @@ int Process::Wait() {
   return exitCode_;
 }
 
+bool Process::TryWait(int &exitCode) {
+  if (!process_)
+    return false;
+  if (!waited_ && WaitForSingleObject((HANDLE)process_, 0) != WAIT_OBJECT_0)
+    return false;
+  exitCode = Wait();
+  return true;
+}
+
 void Process::Terminate() {
   if (process_ && !waited_ && WaitForSingleObject((HANDLE)process_, 0) == WAIT_TIMEOUT)
     TerminateProcess((HANDLE)process_, 1);
@@ -357,6 +366,26 @@ int Process::Wait() {
     waited_ = true;
   }
   return exitCode_;
+}
+
+bool Process::TryWait(int &exitCode) {
+  if (pid_ <= 0)
+    return false;
+  if (!waited_) {
+    int status = 0;
+    pid_t r;
+    while ((r = ::waitpid((pid_t)pid_, &status, WNOHANG)) < 0 && errno == EINTR) {
+    }
+    if (r != (pid_t)pid_)
+      return false;
+    if (WIFEXITED(status))
+      exitCode_ = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status))
+      exitCode_ = 128 + WTERMSIG(status);
+    waited_ = true;
+  }
+  exitCode = exitCode_;
+  return true;
 }
 
 void Process::Terminate() {

@@ -15,6 +15,7 @@
 #if defined(__linux__)
 #include <unistd.h>
 #endif
+#include "../../include/core_engine/UserDataDir.hpp"
 
 namespace {
 
@@ -39,7 +40,7 @@ std::filesystem::path GetExecutableDir() {
     return std::filesystem::path(buf).parent_path();
   }
 #endif
-  return {};
+  return ilmeee::ExecutableDir();
 }
 
 } // namespace

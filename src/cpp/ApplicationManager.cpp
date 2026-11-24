@@ -7,7 +7,6 @@
 #include <cstring>
 #include <thread>
 
-extern char **environ;
 
 ApplicationManager::ApplicationManager() {
   environment = std::make_unique<Environment>();
@@ -164,42 +163,23 @@ bool ApplicationManager::LaunchEngine() {
     // happens to work in the last of those.
     const std::string handler = ilmeee::SiblingExecutable("HandlerIlmeeeEngine");
 
-    // Everything the child needs is built before fork(): between fork and
-    // exec only async-signal-safe calls are allowed, which rules out
-    // allocating. The URL travels in argv, the token in the environment.
-    std::string url = ipcTransport->Url();
-    std::string programName = "HandlerIlmeeeEngine";
-    std::string urlArg = proto::kIpcUrlArg;
-    std::vector<char *> childArgv = {programName.data(), urlArg.data(),
-                                     url.data(), nullptr};
-
-    const std::string tokenPrefix = std::string(proto::kIpcTokenEnv) + "=";
-    std::vector<std::string> envStorage;
-    for (char **e = environ; e && *e; ++e)
-      if (std::strncmp(*e, tokenPrefix.c_str(), tokenPrefix.size()) != 0)
-        envStorage.emplace_back(*e);
-    envStorage.push_back(tokenPrefix + ipcToken);
-    std::vector<char *> childEnv;
-    for (auto &entry : envStorage)
-      childEnv.push_back(entry.data());
-    childEnv.push_back(nullptr);
-
-    pid_t pid = fork();
-    if (pid == -1) {
-      ::Log("Failed to fork process: " + std::string(strerror(errno)),
+    // The URL travels in argv, the token in the environment (it stays out
+    // of `ps` / Task Manager). Output is inherited: the engine logs to the
+    // same console as the editor.
+    ilmeee::ProcessOptions opts;
+    opts.program = handler;
+    opts.args = {proto::kIpcUrlArg, ipcTransport->Url()};
+    opts.env = {{proto::kIpcTokenEnv, ipcToken}};
+    opts.captureOutput = false;
+    auto proc = std::make_unique<ilmeee::Process>();
+    std::string error;
+    if (!proc->Start(opts, error)) {
+      ::Log("Failed to start the engine process (" + handler + "): " + error,
             Debug::LogLevel::CRASH);
       return false;
-    } else if (pid == 0) {
-      execve(handler.c_str(), childArgv.data(), childEnv.data());
-      // exec only returns on failure. Leave with _exit, not exit: this child
-      // is a fork of the editor and still owns copies of its atexit handlers,
-      // static destructors and open sockets. Running them here would tear down
-      // the *parent's* state — the Discord session and the listening socket the
-      // engine is about to connect to.
-      _exit(1);
     }
-
-    engineProcessId = pid;
+    const long pid = proc->Pid();
+    engineProcess = std::move(proc);
     // No waiting here: the engine dials in on its own (retrying until we
     // listen, which we already do) and announces itself with a handshake.
     // OnPeerJoined sends it the session once that happens.
@@ -216,19 +196,14 @@ bool ApplicationManager::LaunchEngine() {
 }
 
 void ApplicationManager::ReapEngineIfExited() {
-  if (engineProcessId <= 0)
+  if (!engineProcess)
     return;
-  int status = 0;
-  if (waitpid(engineProcessId, &status, WNOHANG) != engineProcessId)
+  int code = 0;
+  if (!engineProcess->TryWait(code))
     return;
-  if (WIFEXITED(status))
-    ::Log("[IlmeeeEditor] Engine exited with code " +
-          std::to_string(WEXITSTATUS(status)));
-  else if (WIFSIGNALED(status))
-    ::Log("[IlmeeeEditor] Engine killed by signal " +
-              std::to_string(WTERMSIG(status)),
-          Debug::LogLevel::WARNING);
-  engineProcessId = -1;
+  ::Log("[IlmeeeEditor] Engine exited with code " + std::to_string(code),
+        code == 0 ? Debug::LogLevel::INFO : Debug::LogLevel::WARNING);
+  engineProcess.reset();
 }
 
 void ApplicationManager::Run() {
@@ -304,26 +279,26 @@ void ApplicationManager::CleanupNetwork() {
 }
 
 void ApplicationManager::CleanupEngine() {
-  if (engineProcessId <= 0)
+  if (!engineProcess)
     return;
 
   // Give an engine that was told to stop the chance to do it cleanly;
   // SIGTERM is the fallback, not the plan.
   if (engineStopRequested) {
-    for (int i = 0; i < 40 && engineProcessId > 0; ++i) {
+    for (int i = 0; i < 40 && engineProcess; ++i) {
       ReapEngineIfExited();
-      if (engineProcessId > 0)
+      if (engineProcess)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   }
 
-  if (engineProcessId > 0) {
+  if (engineProcess) {
     if (engineStopRequested)
-      ::Log("[IlmeeeEditor] Engine did not stop within 2 s; sending SIGTERM",
+      ::Log("[IlmeeeEditor] Engine did not stop within 2 s; terminating it",
             Debug::LogLevel::WARNING);
-    kill(engineProcessId, SIGTERM);
-    waitpid(engineProcessId, nullptr, 0);
-    engineProcessId = -1;
+    engineProcess->Terminate();
+    engineProcess->Wait();
+    engineProcess.reset();
   }
 }
 

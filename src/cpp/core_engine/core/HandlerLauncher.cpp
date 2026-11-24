@@ -1,22 +1,26 @@
 // #include <Windows.h>
 #include <chrono>
-#include <dlfcn.h>
 #include <functional>
+#ifndef _WIN32
 #include <gtk-3.0/gtk/gtk.h>
+#endif
 #include <iostream>
 #include <string>
 #include <thread>
 // #include <CommCtrl.h>
 #include "../../../../include/core_engine/Debugger.hpp"
 #include "../../../../include/core_engine/UserDataDir.hpp"
+#include "../../../../include/core_engine/DynamicLibrary.hpp"
 #include "../../../../include/core_engine/net/Protocol.hpp"
 #include <atomic>
 #include <mutex>
 // #include <windowsx.h>
+#ifndef _WIN32
 #include <gtk-3.0/gtk/gtkdialog.h>
 #include <gtk-3.0/gtk/gtktypes.h>
 #include <gtk-3.0/gtk/gtkwidget.h>
 #include <gtk-3.0/gtk/gtkwindow.h>
+#endif
 using namespace Debug;
 using namespace std;
 #pragma comment(lib, "comctl32.lib")
@@ -35,6 +39,30 @@ typedef void (*IpcPollFunc)();
 typedef void (*IpcOnFunc)(const char *type, IpcCallback callback, void *user);
 typedef void (*IpcDisconnectFunc)();
 
+#ifdef _WIN32
+// Windows: the handler runs in the background of the editor (no splash
+// window); progress goes to the log the editor already shows.
+class LoadingWindow {
+  bool isVisible = false;
+  int lastPercent = -1;
+
+public:
+  bool Create() { return true; }
+  void Show() { isVisible = true; }
+  void Hide() { isVisible = false; }
+  void SetProgress(double progress) {
+    const int p = (int)progress;
+    if (p != lastPercent)
+      std::cout << "[HandlerIlmeeeEngine] " << p << "%" << std::endl;
+    lastPercent = p;
+  }
+  void SetStatus(const string &status) {
+    std::cout << "[HandlerIlmeeeEngine] " << status << std::endl;
+  }
+  void Destroy() { isVisible = false; }
+  bool IsVisible() const { return isVisible; }
+};
+#else
 // Loading window class
 class LoadingWindow {
 private:
@@ -234,6 +262,7 @@ public:
 
   ~LoadingWindow() { Destroy(); }
 };
+#endif // _WIN32
 
 class LibraryManager {
 private:
@@ -241,8 +270,13 @@ private:
   void *editorLib = nullptr;
 
 public:
+#ifdef _WIN32
+  const vector<string> IlmeeEngine = {"libIlmeeeEngine.dll",
+                                      "libIlmeeeEditor.dll"};
+#else
   const vector<string> IlmeeEngine = {"libIlmeeeEngine.so",
                                       "libIlmeeeEditor.so"};
+#endif
 
   // Locate one of our shared libraries. The launcher is started from Hub,
   // from a shell in the repo root, or from an installed bin/, so resolving
@@ -266,19 +300,18 @@ public:
   bool LoadLibraries() {
     // Load engine library
     string enginePath = ResolveLibrary(IlmeeEngine[0]);
-    engineLib = dlopen(enginePath.c_str(), RTLD_LAZY);
+    std::string error;
+    engineLib = ilmeee::OpenLibrary(enginePath, error);
     if (!engineLib) {
-      ShowError(
-          ("Failed to load " + enginePath + ": " + dlerror()).c_str());
+      ShowError(("Failed to load " + enginePath + ": " + error).c_str());
       return false;
     }
 
     // Load editor library
     string editorPath = ResolveLibrary(IlmeeEngine[1]);
-    editorLib = dlopen(editorPath.c_str(), RTLD_LAZY);
+    editorLib = ilmeee::OpenLibrary(editorPath, error);
     if (!editorLib) {
-      ShowError(
-          ("Failed to load " + editorPath + ": " + dlerror()).c_str());
+      ShowError(("Failed to load " + editorPath + ": " + error).c_str());
       Cleanup();
       return false;
     }
@@ -287,12 +320,9 @@ public:
   }
 
   template <typename T> T GetFunction(void *lib, const char *functionName) {
-    // Clear any existing error
-    dlerror();
-
-    void *symbol = dlsym(lib, functionName);
-    char *error = dlerror();
-    if (error != nullptr) {
+    std::string error;
+    void *symbol = ilmeee::LibrarySymbol(lib, functionName, error);
+    if (!symbol) {
       ShowError(
           ("Failed to get function " + string(functionName) + ": " + error)
               .c_str());
@@ -303,14 +333,10 @@ public:
   }
 
   void Cleanup() {
-    if (editorLib) {
-      dlclose(editorLib);
-      editorLib = nullptr;
-    }
-    if (engineLib) {
-      dlclose(engineLib);
-      engineLib = nullptr;
-    }
+    ilmeee::CloseLibrary(editorLib);
+    editorLib = nullptr;
+    ilmeee::CloseLibrary(engineLib);
+    engineLib = nullptr;
   }
 
   void *GetEngineLib() const { return engineLib; }
@@ -322,6 +348,7 @@ public:
     // failed load would otherwise leave nothing at all in the log.
     std::cerr << "[HandlerIlmeeeEngine] " << message << std::endl;
 
+#ifndef _WIN32
     // Use GTK message dialog instead of MessageBox
     GtkWidget *dialog =
         gtk_message_dialog_new(nullptr, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
@@ -329,6 +356,7 @@ public:
     gtk_window_set_title(GTK_WINDOW(dialog), "Ilmee Launcher - Error");
     gtk_dialog_run(GTK_DIALOG(dialog));
     gtk_widget_destroy(dialog);
+#endif
   }
 };
 
@@ -461,8 +489,10 @@ private:
     while (messageThreadRunning) {
       if (IpcPoll)
         IpcPoll();
+#ifndef _WIN32
       while (messageThreadRunning && g_main_context_iteration(NULL, FALSE)) {
       }
+#endif
       std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
   }

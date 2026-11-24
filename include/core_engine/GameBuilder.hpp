@@ -11,10 +11,34 @@
 
 namespace ilmeee {
 
-enum class BuildTarget { Linux, Android };
+// Desktop targets build with the IlmeeePlayer of the OS the editor runs on
+// (a Linux editor cannot make a Windows game and vice versa).
+enum class BuildTarget { Linux, Android, Windows };
+
+#ifdef _WIN32
+inline constexpr BuildTarget kDesktopTarget = BuildTarget::Windows;
+#else
+inline constexpr BuildTarget kDesktopTarget = BuildTarget::Linux;
+#endif
+
+inline const char *BuildTargetName(BuildTarget t) {
+  switch (t) {
+  case BuildTarget::Android: return "Android";
+  case BuildTarget::Windows: return "Windows";
+  default: return "Linux";
+  }
+}
+// Folder under <project>/build/.
+inline const char *BuildTargetFolder(BuildTarget t) {
+  switch (t) {
+  case BuildTarget::Android: return "android";
+  case BuildTarget::Windows: return "windows";
+  default: return "linux";
+  }
+}
 
 struct GameBuildOptions {
-  BuildTarget target = BuildTarget::Linux;
+  BuildTarget target = kDesktopTarget;
   std::filesystem::path projectRoot;
   // Empty: <projectRoot>/build/<linux|android>/<SafeGameName>.
   std::filesystem::path outputDir;

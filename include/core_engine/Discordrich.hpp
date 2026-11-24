@@ -7,10 +7,30 @@
 #include <string>
 #include <thread>
 
+// The Discord Game SDK is optional: builds without its header (Windows CI,
+// minimal Linux setups) get a no-op presence with the same API.
+#if __has_include(<discord_game_sdk.h>)
+#define ILMEEE_HAS_DISCORD 1
 #define DISCORDAPP_IMPLEMENTATION
 #include <discord_game_sdk.h>
+#else
+#define ILMEEE_HAS_DISCORD 0
+#endif
 
 namespace Ilmeee {
+#if !ILMEEE_HAS_DISCORD
+class DiscordRichPresence {
+public:
+  void Init() {}
+  void Update() {}
+  void Shutdown() {}
+  void SetActivity(const std::string &, const std::string &) {}
+  void SetAssets(const std::string &, const std::string &, const std::string & = "",
+                 const std::string & = "") {}
+  void ClearActivity() {}
+  bool IsConnected() const { return false; }
+};
+#else
 class DiscordRichPresence {
 public:
   DiscordRichPresence() = default;
@@ -54,4 +74,5 @@ private:
   std::chrono::system_clock::time_point startTimestamp;
   std::chrono::steady_clock::time_point lastReconnectAttempt;
 };
+#endif // ILMEEE_HAS_DISCORD
 } // namespace Ilmeee

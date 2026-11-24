@@ -10,9 +10,17 @@
 #include <string>
 #include <algorithm>
 #include <filesystem>
+#ifdef _WIN32
+#include <cstdio>
+#define ILMEEE_POPEN _popen
+#define ILMEEE_PCLOSE _pclose
+#else
 #include <unistd.h>
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
+#define ILMEEE_POPEN popen
+#define ILMEEE_PCLOSE pclose
+#endif
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -176,7 +184,7 @@ inline vector<pair<string, string>> Environment::getSmartctlDevices() {
 }
 
 inline string Environment::runCommand(const string& command) {
-    FILE* pipe = popen(command.c_str(), "r");
+    FILE* pipe = ILMEEE_POPEN(command.c_str(), "r");
     if (!pipe) return "ERROR";
 
     string result;
@@ -184,7 +192,7 @@ inline string Environment::runCommand(const string& command) {
     while (fgets(buffer, sizeof(buffer), pipe)) {
         result += buffer;
     }
-    pclose(pipe);
+    ILMEEE_PCLOSE(pipe);
     return result;
 }
 
@@ -201,6 +209,9 @@ inline string Environment::readFile(const string& filename) {
 }
 
 inline void Environment::detectDriveInfo() {
+#ifdef _WIN32
+    return; // smartctl is a Linux tool here; Windows would flash a console per call
+#endif
     cout << "\n[Drive Info with TBW]" << endl;
     auto devices = getSmartctlDevices();
 
@@ -223,7 +234,8 @@ inline void Environment::detectDriveInfo() {
         cout << endl;
         
         // Check if we have permission to access the device
-        if (access(path.c_str(), R_OK) != 0) {
+        std::ifstream probe(path, std::ios::binary);
+        if (!probe.is_open()) {
             cout << "  Permission denied. Try running as root (sudo).\n";
             continue;
         }

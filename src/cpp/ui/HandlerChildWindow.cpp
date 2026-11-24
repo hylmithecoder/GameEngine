@@ -518,7 +518,7 @@ void MainWindow::RenderHierarchyWindow() {
           BeginHierarchyRename((int)i, -1);
         if (BeginMenu("Create Child", !itemLocked)) {
           createMenu((int)i);
-          EndMenu();
+          ImGui::EndMenu();
         }
         if (sceneRenderer->GetMesh3DParent(i) >= 0 &&
             MenuItem("Unparent", nullptr, false, !itemLocked)) {
@@ -569,7 +569,7 @@ void MainWindow::RenderHierarchyWindow() {
     if (BeginPopupContextItem("SceneRootMenu")) {
       if (BeginMenu("Create", !locked)) {
         createMenu(-1);
-        EndMenu();
+        ImGui::EndMenu();
       }
       EndPopup();
     }
@@ -610,7 +610,7 @@ void MainWindow::RenderHierarchyWindow() {
           if (MenuItem("Image")) op = Op::SpawnUiImage;
           if (MenuItem("Button")) op = Op::SpawnUiButton;
           if (MenuItem("Joystick")) op = Op::SpawnUiJoystick;
-          EndMenu();
+          ImGui::EndMenu();
         }
         Separator();
         if (MenuItem("Delete Canvas", "Del", false, !locked))
@@ -710,7 +710,7 @@ void MainWindow::RenderHierarchyWindow() {
                                     ImGuiPopupFlags_NoOpenOverItems)) {
       if (BeginMenu("Create", !locked)) {
         createMenu(-1);
-        EndMenu();
+        ImGui::EndMenu();
       }
       EndPopup();
     }
@@ -2716,7 +2716,7 @@ void MainWindow::RenderSceneWindow() {
           for (int k = 0; k < kSpawnObjectCount; ++k)
             if (MenuItem(kSpawnNames[k]))
               spawn(k);
-          EndMenu();
+          ImGui::EndMenu();
         }
         int sel = SelectedMeshIndex();
         if (sel >= 0) {
@@ -3302,7 +3302,7 @@ void MainWindow::RenderMenuBar() {
       Separator();
       if (MenuItem("Exit", "Alt+F4"))
         isRunning = false;
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     if (BeginMenu("Edit")) {
@@ -3322,7 +3322,7 @@ void MainWindow::RenderMenuBar() {
       Separator();
       if (MenuItem("Code Editor..."))
         projectHandler.RequestCodeEditorSettings();
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     if (BeginMenu("View")) {
@@ -3334,7 +3334,7 @@ void MainWindow::RenderMenuBar() {
         fullscreen = !fullscreen;
         SDL_SetWindowFullscreen(window, fullscreen);
       }
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     RenderBuildMenu();
@@ -3345,7 +3345,7 @@ void MainWindow::RenderMenuBar() {
       Separator();
       if (MenuItem("Secondary Window", nullptr, &showSecondary)) {
       }
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     if (BeginMenu("Help")) {
@@ -3353,7 +3353,7 @@ void MainWindow::RenderMenuBar() {
       }
       if (MenuItem("About")) {
       }
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     if (BeginMenu("Background")) {
@@ -3366,7 +3366,7 @@ void MainWindow::RenderMenuBar() {
       }
 
       SliderFloat("Opacity", &volume, 0.1f, 1.0f);
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     if (BeginMenu("Windows")) {
@@ -3384,7 +3384,7 @@ void MainWindow::RenderMenuBar() {
       if (MenuItem("Reset Default Layout")) {
         Ilmeee::EditorDockSpace::ResetLayout();
       }
-      EndMenu();
+      ImGui::EndMenu();
     }
 
     RenderLightingMenu();
@@ -3730,13 +3730,17 @@ void MainWindow::RenderPlayMenu() {
 
     const bool isAndroidTarget =
         (gameBuildTarget == ilmeee::BuildTarget::Android);
+    const std::string desktopLabel =
+        std::string(ICON_UI_GAME " ") +
+        ilmeee::BuildTargetName(ilmeee::kDesktopTarget);
     if (Button(isAndroidTarget ? ICON_UI_DEVICE " Android"
-                               : ICON_UI_GAME " Linux")) {
-      gameBuildTarget = isAndroidTarget ? ilmeee::BuildTarget::Linux
+                               : desktopLabel.c_str())) {
+      gameBuildTarget = isAndroidTarget ? ilmeee::kDesktopTarget
                                         : ilmeee::BuildTarget::Android;
     }
     if (IsItemHovered())
-      SetTooltip("Active Build Target (click to switch Linux / Android)");
+      SetTooltip("Active Build Target (click to switch %s / Android)",
+                 ilmeee::BuildTargetName(ilmeee::kDesktopTarget));
 
     SameLine(0, 4.0f);
     const bool building = gameBuildRunning.load();

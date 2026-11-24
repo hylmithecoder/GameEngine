@@ -5,6 +5,7 @@
 #include "../core_engine/DeviceMonitor.hpp"
 #include "../core_engine/net/McpServer.hpp"
 #include "../core_engine/net/CollabClient.hpp"
+#include "../core_engine/Process.hpp"
 #include "../core_engine/CollabCodec.hpp"
 #include "../core_engine/SceneRenderer.hpp"
 #include "../core_engine/GameUI.hpp"
@@ -24,9 +25,14 @@
 #include "imgui_impl_vulkan.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#ifndef _WIN32
 #include <glib.h>
 #include <gtk/gtk.h>
+#endif
+#include <atomic>
 #include <list>
+#include <mutex>
+#include <thread>
 #include <memory>
 #include <sys/types.h>
 #include <unordered_set>
@@ -265,7 +271,7 @@ public:
   void RenderHierarchyWindow();
 
   // ---- Game build (Build menu + Console > Build tab) -------------------
-  // Saves the scene, then builds <project>/build/<linux|android>/<Game> on a
+  // Saves the scene, then builds <project>/build/<linux|windows|android>/<Game> on a
   // worker thread; with runWhenDone the game is started once it succeeds
   // (Android: installed on the USB device with adb, logcat streamed back).
   void StartGameBuild(bool runWhenDone);
@@ -368,15 +374,21 @@ public:
   bool gameBuildIncludeUnused = false;
   // Android: re-encode videos taller than this to H.264 (0 = unchanged).
   int gameBuildAndroidVideoHeight = 720;
-  ilmeee::BuildTarget gameBuildTarget = ilmeee::BuildTarget::Linux;
+  ilmeee::BuildTarget gameBuildTarget = ilmeee::kDesktopTarget;
   std::filesystem::path lastGameLauncher; // binary, or .apk for Android
-  ilmeee::BuildTarget lastGameTarget = ilmeee::BuildTarget::Linux;
+  ilmeee::BuildTarget lastGameTarget = ilmeee::kDesktopTarget;
   std::string lastGameApplicationId;
-  pid_t gameProcess = -1;
-  int gameOutputFd = -1;
-  std::string gameOutputPending;
-  // Short-lived helpers (xdg-open) waiting to be reaped.
-  std::vector<pid_t> gameProcessHelpers;
+  // The running game (or the Android log script). Its output is read on a
+  // detached thread into gameOutput, so closing the editor never waits for
+  // the game; PollGameBuild hands the lines to the Build tab.
+  struct GameOutput {
+    std::mutex mutex;
+    std::vector<std::string> lines; // guarded by mutex
+    std::atomic<bool> eof{false};
+  };
+  std::shared_ptr<ilmeee::Process> gameProc;
+  std::shared_ptr<GameOutput> gameOutput;
+  bool GameRunning() const { return gameProc != nullptr; }
   bool focusBuildTab = false;
   // Scene-object operations shared by the Hierarchy panel and the viewport.
   // Selection is by name (objectName), as everywhere else in the editor.

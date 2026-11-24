@@ -54,7 +54,11 @@ private:
     time_t now = time(0);
     struct tm tstruct;
     char buf[80];
+#ifdef _WIN32
+    localtime_s(&tstruct, &now);
+#else
     localtime_r(&now, &tstruct);
+#endif
     strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
     return string(buf);
   }

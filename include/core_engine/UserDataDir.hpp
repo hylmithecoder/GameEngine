@@ -67,6 +67,10 @@ inline std::filesystem::path ExecutableDir() {
 inline std::string SiblingExecutable(const std::string &name) {
   std::error_code ec;
   std::filesystem::path p = ExecutableDir() / name;
+#ifdef _WIN32
+  if (!p.has_extension())
+    p += ".exe";
+#endif
   if (std::filesystem::exists(p, ec))
     return p.string();
   return name;

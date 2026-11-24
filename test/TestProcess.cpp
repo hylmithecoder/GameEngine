@@ -95,6 +95,37 @@ int main(int argc, char **argv) {
     p.Terminate(); // after the reap: must be a no-op
   }
 
+  // ---- TryWait: false while running, the exit code once done ----
+  {
+    ilmeee::Process p;
+    ilmeee::ProcessOptions o;
+    o.program = self;
+    o.args = {"--echo"};
+    o.captureOutput = false;
+    std::string err;
+    CHECK(p.Start(o, err));
+    int code = -1;
+    bool done = false;
+    for (int i = 0; i < 500 && !(done = p.TryWait(code)); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(done);
+    CHECK(code == 7);
+    CHECK(p.TryWait(code) && code == 7); // repeatable after the reap
+  }
+  {
+    ilmeee::Process p;
+    ilmeee::ProcessOptions o;
+    o.program = self;
+    o.args = {"--sleep"};
+    std::string err;
+    CHECK(p.Start(o, err));
+    int code = -1;
+    CHECK(!p.TryWait(code)); // still sleeping
+    p.Terminate();
+    ReadAll(p);
+    CHECK(p.Wait() != 0);
+  }
+
   // ---- missing program ----
   {
     ilmeee::Process p;

@@ -9,11 +9,8 @@
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <signal.h>
+#include "../core_engine/Process.hpp"
 #include <string>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <vector>
 
 using namespace Debug;
@@ -32,7 +29,8 @@ private:
   MainWindow *window;
   std::unique_ptr<Environment> environment;
   std::unique_ptr<DiscordRichPresence> discordRich;
-  pid_t engineProcessId = -1;
+  // HandlerIlmeeeEngine; null when not running.
+  std::unique_ptr<ilmeee::Process> engineProcess;
   std::atomic<bool> isRunning{false};
   std::atomic<bool> shouldExit{false};
   std::vector<std::function<void()>> cleanupTasks;

@@ -26,7 +26,11 @@ int main(int argc, char* argv[]) {
     if (const char *t = std::getenv(proto::kIpcTokenEnv)) {
         ipcToken = t;
         // Anything this process spawns has no business holding it.
+#ifdef _WIN32
+        _putenv_s(proto::kIpcTokenEnv, "");
+#else
         unsetenv(proto::kIpcTokenEnv);
+#endif
     }
 
     LoadingWindow loadingWindow;

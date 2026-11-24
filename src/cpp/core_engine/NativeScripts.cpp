@@ -35,6 +35,96 @@ int dlclose(void *library) {
   return FreeLibrary(reinterpret_cast<HMODULE>(library)) ? 0 : -1;
 }
 const char *dlerror() { return g_dlError.c_str(); }
+
+// CommandLineToArgvW quoting for one argument.
+std::wstring QuoteArg(const std::wstring &arg) {
+  if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos)
+    return arg;
+  std::wstring out = L"\"";
+  for (size_t i = 0;; ++i) {
+    size_t slashes = 0;
+    while (i < arg.size() && arg[i] == L'\\') {
+      ++i;
+      ++slashes;
+    }
+    if (i == arg.size()) {
+      out.append(slashes * 2, L'\\');
+      break;
+    }
+    if (arg[i] == L'"')
+      out.append(slashes * 2 + 1, L'\\');
+    else
+      out.append(slashes, L'\\');
+    out += arg[i];
+  }
+  return out + L"\"";
+}
+
+// Runs args[0] with stdout+stderr in `log`; returns the exit code, or -1
+// with `error` set when it could not start. No console window flashes up.
+int RunToLog(const std::vector<std::filesystem::path> &args,
+             const std::filesystem::path &log, std::string &error) {
+  std::wstring cmd;
+  for (const auto &a : args) {
+    if (!cmd.empty())
+      cmd += L' ';
+    cmd += QuoteArg(a.wstring());
+  }
+  SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+  HANDLE out = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (out == INVALID_HANDLE_VALUE) {
+    error = "cannot write " + log.string();
+    return -1;
+  }
+  STARTUPINFOW si{};
+  si.cb = sizeof si;
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = out;
+  si.hStdError = out;
+  PROCESS_INFORMATION pi{};
+  const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                 CREATE_NO_WINDOW, nullptr,
+                                 nullptr, &si, &pi);
+  CloseHandle(out);
+  if (!ok) {
+    error = "error " + std::to_string(GetLastError());
+    return -1;
+  }
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return (int)code;
+}
+
+// A MinGW g++ for project scripts: $ILMEEE_SCRIPT_CXX, then PATH, then the
+// default MSYS2 UCRT64 install (the toolchain the engine is built with, so
+// the C++ ABI matches).
+std::filesystem::path FindWindowsCompiler() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (const char *env = std::getenv("PATH")) {
+    std::string path = env;
+    size_t start = 0;
+    while (start <= path.size()) {
+      size_t end = path.find(';', start);
+      if (end == std::string::npos)
+        end = path.size();
+      const fs::path dir = path.substr(start, end - start);
+      for (const char *name : {"g++.exe", "c++.exe"})
+        if (!dir.empty() && fs::is_regular_file(dir / name, ec))
+          return dir / name;
+      start = end + 1;
+    }
+  }
+  for (const char *root : {"C:\\msys64\\ucrt64\\bin", "C:\\msys64\\mingw64\\bin"})
+    if (fs::is_regular_file(fs::path(root) / "g++.exe", ec))
+      return fs::path(root) / "g++.exe";
+  return {};
+}
 } // namespace
 #else
 #include <cerrno>
@@ -263,7 +353,8 @@ ScriptCompileOptions DefaultScriptCompileOptions(const fs::path &project) {
 #endif
   if (options.sdkInclude.empty()) {
     for (const auto &path : {ExecutableDir() / "../../include",
-                             ExecutableDir() / "../include/ilmeeeengine"})
+                             ExecutableDir() / "../include/ilmeeeengine",
+                             ExecutableDir() / "include"})
       if (fs::exists(path / "core_engine/core/Component.hpp")) {
         options.sdkInclude = fs::weakly_canonical(path);
         break;
@@ -276,6 +367,12 @@ ScriptCompileOptions DefaultScriptCompileOptions(const fs::path &project) {
   if (const char *compiler = std::getenv("ILMEEE_SCRIPT_CXX");
       compiler && *compiler)
     options.compiler = compiler;
+#ifdef _WIN32
+  // The portable default "c++" is not on a Windows PATH: find a real g++.
+  if (std::error_code ec; !fs::is_regular_file(options.compiler, ec))
+    if (auto found = FindWindowsCompiler(); !found.empty())
+      options.compiler = found.string();
+#endif
   return options;
 }
 
@@ -427,6 +524,9 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
     const auto &name = result.className;
     output << "#include \"" << name << ".hpp\"\n#include <string_view>\n"
            << "#include <type_traits>\n"
+           << "#ifdef _WIN32\n#define ILMEEE_EXPORT __declspec(dllexport)\n"
+           << "#else\n#define ILMEEE_EXPORT __attribute__((visibility(\"default\")))\n"
+           << "#endif\n"
            << "constexpr bool kIsAsset = std::is_base_of_v<ScriptableObject, "
            << name << ">;\n"
            << "static_assert(std::is_base_of_v<Component, " << name
@@ -449,21 +549,21 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
            << "template <class T, class B> B *Make() {\n"
            << "  if constexpr (std::is_base_of_v<B, T>) return new T();\n"
            << "  else return nullptr;\n}\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) unsigned "
+           << "extern \"C\" ILMEEE_EXPORT unsigned "
               "ilmeee_script_api() { return ilmeee::script::kApiVersion; }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) uint64_t "
+           << "extern \"C\" ILMEEE_EXPORT uint64_t "
               "ilmeee_script_abi() { return ilmeee::script::kComponentAbi; }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) unsigned "
+           << "extern \"C\" ILMEEE_EXPORT unsigned "
               "ilmeee_script_kind() { return kIsAsset ? 1u : 0u; }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) "
+           << "extern \"C\" ILMEEE_EXPORT "
               "Component* ilmeee_script_create() { return Make<"
            << name << ", Component>(); }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) void "
+           << "extern \"C\" ILMEEE_EXPORT void "
               "ilmeee_script_destroy(Component* value) { delete value; }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) "
+           << "extern \"C\" ILMEEE_EXPORT "
               "ScriptableObject* ilmeee_asset_create() { return Make<"
            << name << ", ScriptableObject>(); }\n"
-           << "extern \"C\" __attribute__((visibility(\"default\"))) void "
+           << "extern \"C\" ILMEEE_EXPORT void "
               "ilmeee_asset_destroy(ScriptableObject* value) { delete value; }\n";
     output.close();
     if (!output) {
@@ -471,9 +571,34 @@ CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
       return result;
     }
 #if defined(_WIN32)
-    result.diagnostics = "Native project script compilation currently requires "
-                         "the Linux desktop toolchain.";
-    return result;
+    if (options.compiler.empty() || !fs::is_regular_file(options.compiler)) {
+      result.diagnostics =
+          "No C++ compiler found for project scripts. Install MSYS2 "
+          "(https://www.msys2.org) and run: pacman -S "
+          "mingw-w64-ucrt-x86_64-gcc  - or set ILMEEE_SCRIPT_CXX to a MinGW "
+          "g++.exe.";
+      return result;
+    }
+    result.library = build / "component.dll";
+    const auto log = build / "compiler.log";
+    const std::vector<fs::path> args = {
+        options.compiler, "-Wall", "-Wextra", "-Werror=overloaded-virtual",
+        "-std=c++20", "-DILMEEE_SCRIPT_BUILD", "-shared", "-g",
+        // Self-contained DLL: no libstdc++/libgcc DLLs needed on PATH.
+        "-static-libgcc", "-static-libstdc++",
+        "-I", options.sdkInclude, "-I", path.parent_path(), path, wrapper,
+        "-o", result.library};
+    std::string startError;
+    const int code = RunToLog(args, log, startError);
+    if (code < 0) {
+      result.diagnostics = "Cannot start C++ compiler " +
+                           options.compiler + ": " + startError;
+      return result;
+    }
+    result.diagnostics = ReadLog(log);
+    result.ok = code == 0;
+    if (!result.ok && result.diagnostics.empty())
+      result.diagnostics = "C++ compiler did not finish successfully.";
 #else
     result.library = build / "component.so";
     const auto log = build / "compiler.log";

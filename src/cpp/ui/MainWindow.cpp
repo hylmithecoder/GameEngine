@@ -373,13 +373,12 @@ void MainWindow::OnCleanup() {
   nativeScripts.Stop();
 
   // A build still copying files finishes first: it holds `this`. A running
-  // game is left alone — it is a separate program.
+  // game is left alone — it is a separate program (its output reader is a
+  // detached thread that owns its own state).
   if (gameBuildThread.joinable())
     gameBuildThread.join();
-  if (gameOutputFd >= 0) {
-    close(gameOutputFd);
-    gameOutputFd = -1;
-  }
+  gameProc.reset();
+  gameOutput.reset();
 
   if (sceneRenderer) {
     media.Shutdown(*sceneRenderer);
@@ -401,6 +400,21 @@ void MainWindow::OnResize(int width, int height) {
 
 // Add this helper function at the top of your file
 bool MainWindow::showConfirmDialog(const char *message, const char *title) {
+#ifdef _WIN32
+  const SDL_MessageBoxButtonData buttons[] = {
+      {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "No"},
+      {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Yes"},
+  };
+  SDL_MessageBoxData box{};
+  box.flags = SDL_MESSAGEBOX_WARNING;
+  box.window = window;
+  box.title = title;
+  box.message = message;
+  box.numbuttons = 2;
+  box.buttons = buttons;
+  int pressed = 0;
+  return SDL_ShowMessageBox(&box, &pressed) && pressed == 1;
+#else
   GtkWidget *dialog;
   gint response;
 
@@ -419,6 +433,7 @@ bool MainWindow::showConfirmDialog(const char *message, const char *title) {
   gtk_widget_destroy(dialog);
 
   return response == GTK_RESPONSE_YES;
+#endif
 }
 
 void MainWindow::set_window_icon() {

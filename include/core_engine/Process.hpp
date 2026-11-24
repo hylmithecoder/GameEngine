@@ -45,6 +45,8 @@ public:
   long Read(char *buffer, unsigned long size);
   // Exit code; on POSIX a signal death returns 128 + signal number.
   int Wait();
+  // Non-blocking Wait(): true (and the exit code) once the child has ended.
+  bool TryWait(int &exitCode);
   // Ask the child to stop (SIGTERM / TerminateProcess). Safe to repeat.
   void Terminate();
   long Pid() const { return pid_; }

@@ -2,6 +2,7 @@
 #include "../../include/core_engine/SceneRenderer.hpp"
 #include "../../include/core_engine/TextureManager.hpp"
 #include "../../include/ui/Application.hpp"
+#include "../../include/core_engine/UserDataDir.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_platform.h>
 #include <atomic>
@@ -14,10 +15,15 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 // Global state management
 atomic<bool> g_shutdown_requested{false};
@@ -39,12 +45,14 @@ void SignalHandler(int signal) {
   case SIGABRT:
     signal_name = "SIGABRT";
     break;
+#ifndef _WIN32
   case SIGQUIT:
     signal_name = "SIGQUIT";
     break;
   case SIGHUP:
     signal_name = "SIGHUP";
     break;
+#endif
   }
 
   Log("Received signal: " + string(signal_name) + " (" + to_string(signal) +
@@ -65,6 +73,14 @@ void SignalHandler(int signal) {
 
 // Setup signal handlers for Linux
 void SetupSignalHandlers() {
+#ifdef _WIN32
+  // The CRT only knows these; closing the console arrives as SIGINT/SIGTERM.
+  std::signal(SIGINT, SignalHandler);
+  std::signal(SIGTERM, SignalHandler);
+  std::signal(SIGABRT, SignalHandler);
+  Log("Signal handlers configured for Windows");
+  return;
+#else
   struct sigaction sa;
   sa.sa_handler = SignalHandler;
   sigemptyset(&sa.sa_mask);
@@ -81,11 +97,16 @@ void SetupSignalHandlers() {
   signal(SIGPIPE, SIG_IGN);
 
   Log("Signal handlers configured for Linux");
+#endif
 }
 
 // Check if running in terminal
 bool IsRunningInTerminal() {
+#ifdef _WIN32
+  return _isatty(_fileno(stdin)) && _isatty(_fileno(stdout));
+#else
   return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+#endif
 }
 
 // Get Linux distribution name from /etc/os-release or /usr/lib/os-release
@@ -132,14 +153,21 @@ void PrintStartupInfo() {
   Log("Terminal: " + string(IsRunningInTerminal() ? "Yes" : "No"));
 
   // Get process ID
+#ifdef _WIN32
+  Log("Process ID: " + to_string(_getpid()));
+#else
   Log("Process ID: " + to_string(getpid()));
+#endif
 
   // Get user information
   char *user = getenv("USER");
+  if (!user)
+    user = getenv("USERNAME");
   if (user) {
     Log("User: " + string(user));
   }
 
+#ifndef _WIN32
   // Get display information
   char *display = getenv("DISPLAY");
   if (display) {
@@ -153,6 +181,7 @@ void PrintStartupInfo() {
   if (wayland_display) {
     Log("Wayland Display: " + string(wayland_display));
   }
+#endif
 }
 
 // Check system requirements
@@ -160,12 +189,14 @@ bool CheckSystemRequirements() {
   Log("Checking system requirements...");
 
   // Check if we have access to display
+#ifndef _WIN32
   if (!getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
     Log("Warning: No display environment detected", Debug::LogLevel::WARNING);
     Log("Make sure you're running in a graphical environment or via SSH with "
         "X11 forwarding",
         Debug::LogLevel::WARNING);
   }
+#endif
 
   // Check SDL version
   int compiled = SDL_VERSION;
@@ -190,6 +221,17 @@ int main(int argc, char *argv[]) {
   // launched under Hub.
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
   std::setvbuf(stderr, nullptr, _IOLBF, 0);
+
+  // The editor loads assets/ (shaders, icons, fonts) relative to the working
+  // directory. Started from a shortcut or another folder, an installed editor
+  // (assets/ next to the exe, as on Windows) still finds them.
+  {
+    std::error_code ec;
+    const auto exeDir = ilmeee::ExecutableDir();
+    if (!std::filesystem::is_directory("assets", ec) &&
+        std::filesystem::is_directory(exeDir / "assets", ec))
+      std::filesystem::current_path(exeDir, ec);
+  }
 
   // Print startup information
   PrintStartupInfo();
