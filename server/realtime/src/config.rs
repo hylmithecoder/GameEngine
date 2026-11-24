@@ -25,6 +25,16 @@ pub struct Config {
     /// Where rooms are saved so a redeploy does not wipe them. None = memory only.
     pub data_dir: Option<PathBuf>,
     pub persist_interval: Duration,
+    /// Project files of each workspace (see files.rs). None = `<data_dir>/files`,
+    /// or a fresh temp folder when there is no data_dir.
+    pub files_dir: Option<PathBuf>,
+    /// Largest single project file.
+    pub max_blob_bytes: u64,
+    /// Largest project (sum of its files) one room may publish.
+    pub max_project_bytes: u64,
+    pub max_project_files: usize,
+    /// Disk budget for all stored files together.
+    pub max_storage_bytes: u64,
 }
 
 impl Default for Config {
@@ -41,6 +51,11 @@ impl Default for Config {
             room_ttl: Duration::from_secs(7 * 24 * 3600),
             data_dir: None,
             persist_interval: Duration::from_secs(5),
+            files_dir: None,
+            max_blob_bytes: 512 << 20,
+            max_project_bytes: 4 << 30,
+            max_project_files: 100_000,
+            max_storage_bytes: 16 << 30,
         }
     }
 }
@@ -77,6 +92,14 @@ impl Config {
             room_ttl: Duration::from_secs(env_or("RT_ROOM_TTL_SECS", d.room_ttl.as_secs())),
             data_dir,
             persist_interval: d.persist_interval,
+            files_dir: std::env::var("RT_FILES_DIR")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .map(PathBuf::from),
+            max_blob_bytes: env_or("RT_MAX_FILE_BYTES", d.max_blob_bytes),
+            max_project_bytes: env_or("RT_MAX_PROJECT_BYTES", d.max_project_bytes),
+            max_project_files: env_or("RT_MAX_PROJECT_FILES", d.max_project_files),
+            max_storage_bytes: env_or("RT_MAX_STORAGE_BYTES", d.max_storage_bytes),
         }
     }
 }

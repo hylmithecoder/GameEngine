@@ -59,7 +59,9 @@ impl Locks {
 
     /// Gives up the key (holder) or leaves its queue. True if anything changed.
     pub fn release(&mut self, key: &str, peer: u32) -> bool {
-        let Some(l) = self.map.get_mut(key) else { return false };
+        let Some(l) = self.map.get_mut(key) else {
+            return false;
+        };
         let changed = if l.holder == peer {
             l.holder = l.queue.pop_front().unwrap_or(0);
             true
@@ -112,7 +114,12 @@ mod tests {
         l.describe(key)["holder"].as_u64().unwrap()
     }
     fn queue(l: &Locks, key: &str) -> Vec<u64> {
-        l.describe(key)["queue"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect()
+        l.describe(key)["queue"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect()
     }
 
     #[test]

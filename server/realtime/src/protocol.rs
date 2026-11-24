@@ -51,8 +51,12 @@ pub fn decode(text: &str) -> Result<Envelope, String> {
     let positive = |v: &Value| v.as_u64().filter(|n| *n > 0);
     let kind = match (id, re) {
         (Some(_), Some(_)) => return Err("message has both id and re".into()),
-        (Some(id), None) => Kind::Request(positive(id).ok_or("request id must be a positive integer")?),
-        (None, Some(re)) => Kind::Response(positive(re).ok_or("response re must be a positive integer")?),
+        (Some(id), None) => {
+            Kind::Request(positive(id).ok_or("request id must be a positive integer")?)
+        }
+        (None, Some(re)) => {
+            Kind::Response(positive(re).ok_or("response re must be a positive integer")?)
+        }
         (None, None) => Kind::Event,
     };
     Ok(Envelope { kind, ty, payload })

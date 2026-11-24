@@ -65,10 +65,12 @@ room diingat per project).
 
 ### Syarat
 
-- Semua orang membuka **project yang sama** (mis. lewat git). Yang dikirim
-  hanya data scene; asset (model, tekstur, audio, script) dirujuk dengan path
-  relatif project dan harus ada di tiap mesin. Kalau asset tidak ada, Console
-  menampilkan `could not load '<obj>' (<path> missing in this project?)`.
+- Semua orang membuka **project yang sama**. Scene dikirim live; asset (model,
+  tekstur, audio, script) dirujuk dengan path relatif project dan harus ada di
+  tiap mesin — paling gampang lewat **file project di server** (lihat
+  "Device baru tanpa folder project" di bawah), atau git/salinan manual. Kalau
+  asset tidak ada, Console menampilkan
+  `could not load '<obj>' (<path> missing in this project?)`.
 - Selama **Play**, tidak ada yang dikirim/diterapkan; perubahan dari orang lain
   ditahan dan diterapkan setelah **Stop**.
 
@@ -77,7 +79,7 @@ room diingat per project).
 | Ikut                                                         | Belum               |
 |--------------------------------------------------------------|---------------------|
 | Tambah / hapus / rename / reparent objek                     | Canvas / UI (GameUI)|
-| Transform (live saat drag gizmo, 20 Hz)                      | Asset file (upload) |
+| Transform (live saat drag gizmo, 20 Hz)                      | Asset baru otomatis (upload ulang manual) |
 | Semua komponen yang ada di format `.ilmeeescene` (light, camera, physics, collider, audio, video, dialog, animation, spring bone, world text, script + field) | Undo per-user |
 | Tekstur per surface, background, NPR, bloom                  | Lock per objek      |
 | Presence: siapa sedang memilih objek apa                     |                     |
@@ -141,6 +143,37 @@ Halaman **Online Workspaces** di Hub (berbagi pengaturan dengan editor lewat
 - Editor dibuka dengan `--collab-room <nama>` dan join otomatis ±1,5 s setelah
   scene termuat.
 
+### Device baru tanpa folder project
+
+Server menyimpan **file project** per workspace, jadi device yang masih fresh
+bisa langsung join:
+- **Go online** (centang *Upload the project files…*, default nyala) meng-upload
+  project dulu, baru membuka editor. Hanya file yang belum ada di server yang
+  dikirim (disimpan per SHA-256; file sama di project/room lain cuma disimpan
+  sekali).
+- Di device lain, kartu workspace menampilkan `Project files: N (ukuran)`.
+  **Join** → download ke cache
+  `~/.ilmeeeengine/workspaces/<host server>/<workspace>/` → editor terbuka di
+  situ dan join. Join berikutnya hanya mengambil file yang berubah dan
+  menghapus file yang sudah dibuang dari project.
+- **Upload files** (kartu workspace, untuk pemilik salinan asli) mengirim ulang
+  perubahan asset — mis. setelah import tekstur/model baru. Belum otomatis.
+- **Use my own copy** menautkan folder yang sudah kamu punya (git dsb.)
+  sebagai ganti download.
+- Tidak ikut di-upload: `build/`, `.git/`, `.cache/`, `.vscode/`, `.idea/`,
+  `.ilmeee/native-scripts/` (script hasil compile), `compile_commands.json`,
+  `TempScene_*.json`, `*.blend1`, file sampah OS, plus semua yang ditulis di
+  `.ilmeeeignore` di root project (satu per baris: `folder/`, `*.ext`, atau
+  path; `#` komentar). Cache hash lokal: `.ilmeee/sync-state.json`.
+- Batas server (env): `RT_MAX_FILE_BYTES` (512 MiB per file),
+  `RT_MAX_PROJECT_BYTES` (4 GiB per project), `RT_MAX_PROJECT_FILES` (100 000),
+  `RT_MAX_STORAGE_BYTES` (16 GiB total), lokasi `RT_FILES_DIR`
+  (default `<data dir>/files`). File yang tidak dirujuk manifest mana pun
+  dihapus otomatis setelah 1 jam; manifest ikut terhapus saat room kedaluwarsa.
+- Salinan hasil download adalah milik server: perubahan file lokal di folder
+  cache akan ditimpa versi server saat Join berikutnya (scene tetap aman, karena
+  scene datang dari room). Upload hanya dari salinan asli.
+
 ## 3. Jalankan lokal (dev)
 
 ```bash
@@ -151,10 +184,12 @@ cd server/realtime && make run          # ws://127.0.0.1:9230/ws, token "dev", d
 Test:
 
 ```bash
-cd server/realtime && make lint test     # 14 test Rust (unit + end-to-end)
+cd server/realtime && make lint test     # 22 test Rust (unit + end-to-end)
 nix-shell --run "cmake --build build --target TestCollabClient"
 ./build/bin/TestCollabClient             # offline: codec + aturan konflik
 ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestCollabClient
+# file project: SHA-256, aturan ignore, lalu publish -> download fresh -> update
+ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestProjectSync
 ```
 
 ## 4. Protokol (untuk tool lain)
@@ -174,7 +209,12 @@ Envelope sama dengan IPC engine (`include/core_engine/net/Message.hpp`):
 | S→C | `presence` | `{from, data}` |
 | S→C | `peer.joined` / `peer.left` | `{id, name, color, presence}` / `{id, reason}` |
 | S→C | `notice` | `{level, message}` |
-| HTTP | `GET /rooms` + `Authorization: Bearer <token>` | `{rooms:[{name, peers:[{name,color}], objects, seq, updated_unix}]}` (terbaru dulu; 401 bila token salah) |
+| HTTP | `GET /rooms` + `Authorization: Bearer <token>` | `{rooms:[{name, peers:[{name,color}], objects, seq, updated_unix, files:{count,bytes,updated_unix}\|null}]}` (terbaru dulu; 401 bila token salah) |
+| HTTP | `POST /files/missing` | `{hashes:[sha256…]}` → `{missing:[…]}` |
+| HTTP | `PUT /files/blob/<sha256>` | isi file mentah; 201 disimpan, 200 sudah ada, 400 isi ≠ hash, 413 terlalu besar, 507 penyimpanan penuh |
+| HTTP | `GET /files/blob/<sha256>` | isi file (404 bila tidak ada) |
+| HTTP | `PUT /rooms/<room>/files` | `{by, files:[{path,hash,size}]}` → `{ok,count,bytes,updated_unix}`; 409 `{missing}` bila blob belum di-upload; 400 path tidak aman (`..`, absolut, `\`, `:`) |
+| HTTP | `GET /rooms/<room>/files` | manifest `{by, files[], total, updated_unix}`; 404 bila belum ada |
 | C→S | `ping` (request) | `{}` → `{unix}` |
 | C→S | `lock.acquire` / `lock.release` | `{key}` (maks. 16 lock/antrian per peer) |
 | S→C | `lock` (ke semua) | `{key, holder, queue[]}` — holder 0 = bebas; tabel lock juga ada di reply `room.join` sebagai `locks[]` |

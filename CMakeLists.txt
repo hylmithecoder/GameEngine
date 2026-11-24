@@ -221,10 +221,13 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/WsTransport.cpp
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
+    src/cpp/core_engine/net/ProjectSync.cpp
     src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
+# Hashes whole projects (GBs) for online workspaces: keep it fast in Debug too.
+set_source_files_properties(src/cpp/core_engine/net/ProjectSync.cpp PROPERTIES COMPILE_OPTIONS "-O2")
 if(ILMEEE_HAVE_TLS)
     target_compile_definitions(ilmeee_net PRIVATE ILMEEE_NET_HAVE_TLS=1)
 endif()
@@ -240,6 +243,8 @@ target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
 # ILMEEE_RT_TOKEN), e.g. `make -C server/realtime run` in another shell.
 add_executable(TestCollabClient test/net/TestCollabClient.cpp)
 target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
+add_executable(TestProjectSync test/net/TestProjectSync.cpp)
+target_link_libraries(TestProjectSync PRIVATE ilmeee_net)
 
 # Portable child process (Hub -> editor launch); spawns itself as the child.
 add_executable(TestProcess test/TestProcess.cpp)

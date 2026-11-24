@@ -91,6 +91,7 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/WsTransport.cpp
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
+    src/cpp/core_engine/net/ProjectSync.cpp
     src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
@@ -102,7 +103,7 @@ endif()
 # ---- stage 1: portable tests (run in CI) ------------------------------------
 
 set(ILMEEE_WINDOWS_TESTS
-    TestNetProtocol TestWsTransport TestCollabClient TestMcpServer
+    TestNetProtocol TestWsTransport TestCollabClient TestProjectSync TestMcpServer
     TestSceneFormat TestTransformMath TestPhysics TestMovementScripts TestProcess)
 
 add_executable(TestProcess test/TestProcess.cpp)
@@ -113,6 +114,8 @@ add_executable(TestWsTransport test/net/TestWsTransport.cpp)
 target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
 add_executable(TestCollabClient test/net/TestCollabClient.cpp)
 target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
+add_executable(TestProjectSync test/net/TestProjectSync.cpp)
+target_link_libraries(TestProjectSync PRIVATE ilmeee_net)
 add_executable(TestMcpServer test/net/TestMcpServer.cpp)
 target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)

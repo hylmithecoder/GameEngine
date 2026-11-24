@@ -44,6 +44,7 @@
 #include <core_engine/Process.hpp>
 #include <core_engine/UserDataDir.hpp>
 #include <core_engine/net/CollabClient.hpp>
+#include <core_engine/net/ProjectSync.hpp>
 #include <json.hpp>
 #include <nfd.hpp>
 
@@ -103,6 +104,30 @@ static std::string ResolveEditorBinary() {
   // Last resort: let the OS search PATH.
   return kEditorExe;
 }
+
+// True when ResolveEditorBinary() found a real file (or an explicit override).
+// The Windows build ships without the editor until the port's stage 3, so the
+// Hub must say so instead of failing with a bare CreateProcess error.
+static bool EditorAvailable() {
+  const char *override_env = std::getenv("ILMEEE_EDITOR_BIN");
+  if (override_env && *override_env)
+    return true;
+#ifdef _WIN32
+  // Checked once: the banner asks for it every frame.
+  static const bool found = [] {
+    std::error_code ec;
+    return fs::exists(ResolveEditorBinary(), ec);
+  }();
+  return found;
+#else
+  return true; // a PATH lookup can still succeed on Linux installs
+#endif
+}
+
+static constexpr const char *kEditorMissingText =
+    "The editor (GameEngineSDL) is not part of this Windows build yet. "
+    "The Hub, online workspaces and the game player work; opening a project "
+    "needs the editor, which comes with a later release.";
 
 // ---------------------------------------------------------------------------
 // Global debug mode flag
@@ -448,6 +473,9 @@ public:
     }
     if (roomFetch.joinable())
       roomFetch.join();
+    syncJob.cancel = true;
+    if (syncJob.thread.joinable())
+      syncJob.thread.join();
     for (auto &c : children) {
       if (c->reader.joinable())
         c->reader.join();
@@ -478,6 +506,11 @@ public:
           return false;
         }
       }
+    }
+
+    if (!EditorAvailable()) {
+      logStore.Push("Hub", kEditorMissingText);
+      return false;
     }
 
     ilmeee::ProcessOptions o;
@@ -620,6 +653,7 @@ public:
     DrawConsole();
 
     ImGui::End();
+    PollSyncJob();
 
     if (showNewProjectDialog)
       DrawNewProjectDialog();
@@ -733,6 +767,23 @@ private:
   std::string pickForRoom; // workspace waiting for "which local project?"
   int hostProjectIdx = 0;
   char hostRoom[64] = "";
+  bool hostUploadFiles = true; // "Go online" also publishes the project files
+
+  // Project files going up to / coming down from the server (one at a time).
+  struct SyncJob {
+    std::thread thread;
+    std::atomic<bool> running{false};
+    std::atomic<bool> finished{false}; // result ready, not handled yet
+    std::atomic<bool> cancel{false};
+    std::mutex mutex;
+    ilmeee::net::SyncStatus status;   // guarded by mutex
+    ilmeee::net::SyncResult result;   // valid once finished
+    bool upload = false;
+    bool openAfter = false;
+    std::string room, project;
+  } syncJob;
+  std::string syncMessage; // last outcome, shown on the Online page
+  bool syncMessageError = false;
 
   // Log capture state.
   LogStore logStore;
@@ -802,6 +853,15 @@ private:
     DrawTopBar();
     ImGui::Separator();
     ImGui::Spacing();
+
+    if (!EditorAvailable()) {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+      ImGui::PushTextWrapPos(0.0f);
+      ImGui::TextUnformatted(kEditorMissingText);
+      ImGui::PopTextWrapPos();
+      ImGui::PopStyleColor();
+      ImGui::Spacing();
+    }
 
     switch (currentSection) {
     case Section::Projects:
@@ -1033,6 +1093,11 @@ private:
     json j = ReadCollabJson();
     if (!j.contains("rooms") || !j["rooms"].is_object())
       j["rooms"] = json::object();
+    // One folder per workspace: linking a new one replaces the old link.
+    for (auto it = j["rooms"].begin(); it != j["rooms"].end();)
+      it = (it->is_string() && it->get<std::string>() == room && it.key() != path)
+               ? j["rooms"].erase(it)
+               : std::next(it);
     j["rooms"][path] = room;
     WriteCollabJson(j);
   }
@@ -1084,15 +1149,143 @@ private:
     return std::to_string(d / 86400) + " days ago";
   }
 
+  static std::string HumanBytes(std::uint64_t b) {
+    char buf[32];
+    if (b < 1024)
+      std::snprintf(buf, sizeof buf, "%llu B", (unsigned long long)b);
+    else if (b < (1ull << 20))
+      std::snprintf(buf, sizeof buf, "%.1f KB", (double)b / 1024.0);
+    else if (b < (1ull << 30))
+      std::snprintf(buf, sizeof buf, "%.1f MB", (double)b / (1024.0 * 1024.0));
+    else
+      std::snprintf(buf, sizeof buf, "%.2f GB", (double)b / (1024.0 * 1024.0 * 1024.0));
+    return buf;
+  }
+
+  // True for folders the Hub downloaded (WorkspaceCacheDir), as opposed to a
+  // project the user made: only those are refreshed from the server on Join.
+  bool IsDownloadedCopy(const std::string &path, const std::string &room) {
+    std::error_code ec;
+    const fs::path cache = ilmeee::net::WorkspaceCacheDir(onlineUrl, room);
+    return fs::equivalent(fs::path(path), cache, ec) && !ec;
+  }
+
+  // Runs PublishProject / DownloadProject on a worker; PollSyncJob opens the
+  // editor when it is done (if openAfter).
+  void StartSync(bool upload, const std::string &project, const std::string &room,
+                 bool openAfter) {
+    if (syncJob.running)
+      return;
+    if (syncJob.thread.joinable())
+      syncJob.thread.join();
+    syncJob.upload = upload;
+    syncJob.openAfter = openAfter;
+    syncJob.room = room;
+    syncJob.project = project;
+    syncJob.cancel = false;
+    syncJob.finished = false;
+    {
+      std::lock_guard<std::mutex> lock(syncJob.mutex);
+      syncJob.status = {};
+      syncJob.status.phase = upload ? "Preparing upload" : "Connecting";
+    }
+    syncMessage.clear();
+    syncJob.running = true;
+    const std::string url = onlineUrl, token = onlineToken, by = onlineName;
+    logStore.Push("Hub", std::string(upload ? "Uploading " : "Downloading ") +
+                             "project files for workspace '" + room + "'...");
+    syncJob.thread = std::thread([this, upload, url, token, by, room, project] {
+      auto progress = [this](const ilmeee::net::SyncStatus &st) {
+        std::lock_guard<std::mutex> lock(syncJob.mutex);
+        syncJob.status = st;
+      };
+      const fs::path dir = ilmeee::net::PathFromUtf8(project);
+      auto res = upload ? ilmeee::net::PublishProject(url, token, room, dir, by, progress,
+                                                      &syncJob.cancel)
+                        : ilmeee::net::DownloadProject(url, token, room, dir, progress,
+                                                       &syncJob.cancel);
+      {
+        std::lock_guard<std::mutex> lock(syncJob.mutex);
+        syncJob.result = std::move(res);
+      }
+      syncJob.finished = true;
+      syncJob.running = false;
+    });
+  }
+
+  void PollSyncJob() {
+    if (!syncJob.finished.exchange(false))
+      return;
+    ilmeee::net::SyncResult r;
+    {
+      std::lock_guard<std::mutex> lock(syncJob.mutex);
+      r = syncJob.result;
+    }
+    if (!r.ok) {
+      syncMessage = std::string(syncJob.upload ? "Upload" : "Download") + " failed: " + r.error;
+      syncMessageError = true;
+      logStore.Push("Hub", syncMessage);
+      return;
+    }
+    char buf[256];
+    if (syncJob.upload)
+      std::snprintf(buf, sizeof buf, "Uploaded '%s': %zu files (%s), %zu new (%s).",
+                    syncJob.room.c_str(), r.files, HumanBytes(r.bytes).c_str(), r.transferred,
+                    HumanBytes(r.transferredBytes).c_str());
+    else
+      std::snprintf(buf, sizeof buf, "'%s' is up to date: %zu files (%s), %zu downloaded (%s)%s.",
+                    syncJob.room.c_str(), r.files, HumanBytes(r.bytes).c_str(), r.transferred,
+                    HumanBytes(r.transferredBytes).c_str(),
+                    r.removed ? ", old files removed" : "");
+    syncMessage = buf;
+    syncMessageError = false;
+    logStore.Push("Hub", syncMessage);
+    lastFetch = -1000.0; // show the new file info right away
+    if (syncJob.openAfter)
+      OpenWorkspace(syncJob.project, syncJob.room);
+  }
+
+  void DrawSyncProgress() {
+    if (syncJob.running) {
+      ilmeee::net::SyncStatus st;
+      {
+        std::lock_guard<std::mutex> lock(syncJob.mutex);
+        st = syncJob.status;
+      }
+      const float frac =
+          st.totalBytes ? (float)((double)st.doneBytes / (double)st.totalBytes)
+          : st.totalFiles ? (float)st.doneFiles / (float)st.totalFiles
+                          : 0.0f;
+      char overlay[128];
+      if (st.totalBytes)
+        std::snprintf(overlay, sizeof overlay, "%s  %zu/%zu  %s / %s", st.phase.c_str(),
+                      st.doneFiles, st.totalFiles, HumanBytes(st.doneBytes).c_str(),
+                      HumanBytes(st.totalBytes).c_str());
+      else
+        std::snprintf(overlay, sizeof overlay, "%s...", st.phase.c_str());
+      ImGui::ProgressBar(frac, ImVec2(-90, 0), overlay);
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel##sync", ImVec2(80, 0)))
+        syncJob.cancel = true;
+      if (!st.file.empty())
+        ImGui::TextDisabled("%s", st.file.c_str());
+    } else if (!syncMessage.empty()) {
+      if (syncMessageError)
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", syncMessage.c_str());
+      else
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f), "%s", syncMessage.c_str());
+    }
+  }
+
   void DrawOnlinePane() {
     if (!onlineLoaded)
       LoadOnlineSettings();
     ImGui::BeginChild("##OnlineScroll", ImVec2(0, 0), false);
     ImGui::TextWrapped(
-        "Edit a scene together in realtime. Everyone in a workspace needs a copy of "
-        "the same project folder (models, textures and audio are not sent); the scene "
-        "itself is shared live. Joining a workspace that already has a scene replaces "
-        "the scene of your local copy with it.");
+        "Edit a scene together in realtime. The scene is shared live; the project files "
+        "(models, textures, audio, scripts) are uploaded once by whoever puts the "
+        "project online, and downloaded by everyone who joins without a copy. Joining a "
+        "workspace that already has a scene replaces the scene of your copy with it.");
     ImGui::Spacing();
 
     ImGui::SetNextItemWidth(420);
@@ -1161,16 +1354,28 @@ private:
                        ImGuiInputTextFlags_CharsNoBlank);
       ImGui::SameLine();
       const std::string room = SanitizeRoomName(hostRoom);
-      ImGui::BeginDisabled(room.empty() || !canFetch);
+      ImGui::BeginDisabled(room.empty() || !canFetch || syncJob.running);
       if (ImGui::Button("Go online")) {
-        OpenWorkspace(hp.path, room);
+        if (hostUploadFiles) {
+          LinkLocalCopy(hp.path, room);
+          StartSync(true, hp.path, room, /*openAfter=*/true);
+        } else {
+          OpenWorkspace(hp.path, room);
+        }
         lastFetch = ImGui::GetTime() - 3.0; // refresh soon to show it
       }
       ImGui::EndDisabled();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Opens the project and joins the workspace. A new (empty) "
                           "workspace takes this project's current scene.");
+      ImGui::Checkbox("Upload the project files, so people without a copy can join",
+                      &hostUploadFiles);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Only files the server does not have yet are sent. Skipped: "
+                          "build/, .git/, compiled scripts, and anything listed in the "
+                          "project's .ilmeeeignore (one folder/ or *.ext per line).");
     }
+    DrawSyncProgress();
 
     // ---- workspaces on the server ----
     ImGui::Spacing();
@@ -1180,7 +1385,7 @@ private:
     for (const auto &room : list.rooms) {
       ImGui::PushID(room.name.c_str());
       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.135f, 0.151f, 1.0f));
-      ImGui::BeginChild("##ws", ImVec2(0, 92), true, ImGuiWindowFlags_NoScrollbar);
+      ImGui::BeginChild("##ws", ImVec2(0, 112), true, ImGuiWindowFlags_NoScrollbar);
       ImGui::TextUnformatted(room.name.c_str());
       ImGui::SameLine(0, 12);
       ImGui::TextDisabled("%zu objects  -  active %s", room.objects, Ago(room.updatedUnix).c_str());
@@ -1196,25 +1401,61 @@ private:
           ImGui::TextUnformatted(room.peers[i].first.c_str());
         }
       }
+      if (room.hasFiles)
+        ImGui::TextDisabled("Project files: %zu (%s), uploaded %s", room.fileCount,
+                            HumanBytes(room.fileBytes).c_str(), Ago(room.filesUpdatedUnix).c_str());
+      else
+        ImGui::TextDisabled("No project files on the server: joining needs your own copy");
       const std::string local = LocalCopyOf(room.name);
+      const bool downloaded = !local.empty() && IsDownloadedCopy(local, room.name);
       bool openHere = false;
       for (const auto &c : children)
         openHere |= c->alive && c->collabRoom == room.name;
       if (local.empty())
-        ImGui::TextDisabled("No local copy linked yet");
+        ImGui::TextDisabled(room.hasFiles ? "Not on this computer yet: Join downloads it"
+                                          : "No local copy linked yet");
       else
-        ImGui::TextDisabled("Your copy: %s", local.c_str());
-      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 30));
-      ImGui::BeginDisabled(openHere);
+        ImGui::TextDisabled("%s: %s", downloaded ? "Downloaded copy" : "Your copy", local.c_str());
+
+      const bool busy = syncJob.running;
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 26));
+      ImGui::BeginDisabled(openHere || busy);
       if (ImGui::Button(openHere ? "Open" : "Join", ImVec2(110, 30))) {
-        if (!local.empty())
+        if (!local.empty() && downloaded && room.hasFiles)
+          StartSync(false, local, room.name, true); // fetch what changed, then open
+        else if (!local.empty())
           OpenWorkspace(local, room.name);
-        else
+        else if (room.hasFiles) {
+          const fs::path dir = ilmeee::net::WorkspaceCacheDir(onlineUrl, room.name);
+          StartSync(false, ilmeee::net::PathToUtf8(dir), room.name, true);
+        } else
           pickForRoom = room.name;
       }
       ImGui::EndDisabled();
       if (openHere && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Already open in an editor started from this Hub");
+      else if (!openHere && !busy && ImGui::IsItemHovered())
+        ImGui::SetTooltip(local.empty() && room.hasFiles
+                              ? "Downloads the project into this computer's workspace cache "
+                                "and opens it"
+                          : downloaded ? "Downloads what changed, then opens it"
+                                       : "Opens your copy and joins the workspace");
+      // Secondary actions, under the main button.
+      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 62));
+      ImGui::BeginDisabled(busy);
+      if (!local.empty() && !downloaded) {
+        if (ImGui::SmallButton("Upload files"))
+          StartSync(true, local, room.name, false);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Send your copy's current files to the server, so people "
+                            "who join get them (only changed files are sent)");
+      } else if (local.empty() || downloaded) {
+        if (ImGui::SmallButton("Use my own copy"))
+          pickForRoom = room.name;
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Link a project folder you already have instead of downloading");
+      }
+      ImGui::EndDisabled();
       ImGui::EndChild();
       ImGui::PopStyleColor();
       ImGui::PopID();

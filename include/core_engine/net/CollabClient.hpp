@@ -203,6 +203,12 @@ struct CollabRoomInfo {
   std::size_t objects = 0;
   std::uint64_t seq = 0;
   std::uint64_t updatedUnix = 0;
+  // Project files published for this workspace (see ProjectSync.hpp);
+  // hasFiles = false when nobody uploaded them (or the server is too old).
+  bool hasFiles = false;
+  std::size_t fileCount = 0;
+  std::uint64_t fileBytes = 0;
+  std::uint64_t filesUpdatedUnix = 0;
 };
 
 struct CollabRoomList {

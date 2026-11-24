@@ -15,23 +15,27 @@
 //!           the join reply carries locks[] (see locks.rs)
 //!
 //! HTTP: `GET /rooms` (Authorization: Bearer <token>) lists the rooms for the
-//! Hub's "online workspaces" — name, who is in it, object count, last change.
+//! Hub's "online workspaces" — name, who is in it, object count, last change,
+//! and the published project files (if any). The project-file endpoints
+//! (`/files/...`, `/rooms/<room>/files`) are described in files.rs.
 //!
 //! Every room mutation and the broadcast it causes happen under one lock with
 //! non-blocking sends, so all peers see ops in the same order and a join reply
 //! always lands before the first op broadcast that follows it.
 
 use crate::config::Config;
+use crate::files::{self, Manifest, Store};
 use crate::locks::Locks;
 use crate::persist;
 use crate::protocol::{self, Envelope, Kind, PROTOCOL_VERSION};
 use crate::room::{OpIn, RoomState, now_unix};
 use axum::Router;
-use axum::extract::State;
+use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -65,6 +69,25 @@ struct Room {
     peers: HashMap<u32, Peer>,
     locks: Locks,
     dirty: bool,
+    /// Summary of the published project files, for the room list.
+    files: Option<FilesSummary>,
+}
+
+#[derive(Clone, Copy)]
+struct FilesSummary {
+    count: usize,
+    bytes: u64,
+    updated_unix: u64,
+}
+
+impl FilesSummary {
+    fn of(m: &Manifest) -> Self {
+        Self {
+            count: m.files.len(),
+            bytes: m.total,
+            updated_unix: m.updated_unix,
+        }
+    }
 }
 
 impl Room {
@@ -97,19 +120,48 @@ impl Room {
 pub struct AppState {
     pub cfg: Config,
     rooms: Mutex<HashMap<String, Room>>,
+    /// None when the files folder could not be created: the endpoints say 503.
+    files: Option<Store>,
     next_conn: AtomicU32,
     started: Instant,
 }
 
 impl AppState {
     pub fn new(cfg: Config, saved: HashMap<String, RoomState>) -> Arc<Self> {
+        let files_dir = cfg
+            .files_dir
+            .clone()
+            .or_else(|| cfg.data_dir.as_ref().map(|d| d.join("files")))
+            .unwrap_or_else(|| {
+                static N: AtomicU32 = AtomicU32::new(0);
+                std::env::temp_dir().join(format!(
+                    "ilmeee-rt-files-{}-{}",
+                    std::process::id(),
+                    N.fetch_add(1, Ordering::Relaxed)
+                ))
+            });
+        let files = match Store::open(files_dir.clone()) {
+            Ok(s) => {
+                tracing::info!(dir = ?files_dir, used = s.used_bytes(), "project file store");
+                Some(s)
+            }
+            Err(e) => {
+                tracing::warn!(dir = ?files_dir, error = %e, "project files disabled");
+                None
+            }
+        };
         let rooms = saved
             .into_iter()
             .map(|(name, state)| {
+                let summary = files
+                    .as_ref()
+                    .and_then(|f| f.manifest(&name))
+                    .map(|m| FilesSummary::of(&m));
                 (
                     name,
                     Room {
                         state,
+                        files: summary,
                         ..Default::default()
                     },
                 )
@@ -118,6 +170,7 @@ impl AppState {
         Arc::new(Self {
             cfg,
             rooms: Mutex::new(rooms),
+            files,
             next_conn: AtomicU32::new(1),
             started: Instant::now(),
         })
@@ -176,6 +229,15 @@ impl AppState {
             if let Some(dir) = &self.cfg.data_dir {
                 persist::remove_room(dir, &name);
             }
+            if let Some(f) = &self.files {
+                f.remove_manifest(&name);
+            }
+        }
+        if let Some(f) = &self.files {
+            let n = f.gc();
+            if n > 0 {
+                tracing::info!(removed = n, "removed unused project files");
+            }
         }
     }
 
@@ -199,6 +261,17 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/", get(index))
         .route("/health", get(health))
         .route("/rooms", get(list_rooms))
+        .route(
+            "/rooms/{room}/files",
+            get(get_manifest)
+                .put(put_manifest)
+                .layer(DefaultBodyLimit::max(MAX_MANIFEST_BYTES)),
+        )
+        .route(
+            "/files/missing",
+            post(files_missing).layer(DefaultBodyLimit::max(MAX_MANIFEST_BYTES)),
+        )
+        .route("/files/blob/{hash}", get(get_blob).put(put_blob))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
 }
@@ -222,21 +295,42 @@ async fn health(State(app): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
-/// Room list for the Hub. Needs the server token like the WebSocket does.
+fn http_error(status: StatusCode, msg: &str) -> Response {
+    (status, Json(json!({"error": msg}))).into_response()
+}
+
+/// The HTTP endpoints need the server token like the WebSocket does.
+#[allow(clippy::result_large_err)] // a Response is the natural error for a handler
+fn check_token(app: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    if app.cfg.token.is_empty() {
+        return Ok(());
+    }
+    let given = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if protocol::tokens_equal(given, &app.cfg.token) {
+        Ok(())
+    } else {
+        Err(http_error(StatusCode::UNAUTHORIZED, "invalid token"))
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn file_store(app: &AppState) -> Result<&Store, Response> {
+    app.files.as_ref().ok_or_else(|| {
+        http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "project files are disabled on this server",
+        )
+    })
+}
+
+/// Room list for the Hub.
 async fn list_rooms(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if !app.cfg.token.is_empty() {
-        let given = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("");
-        if !protocol::tokens_equal(given, &app.cfg.token) {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "invalid token"})),
-            )
-                .into_response();
-        }
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
     }
     let mut list: Vec<(u64, Value)> = {
         let rooms = app.rooms();
@@ -258,6 +352,11 @@ async fn list_rooms(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
                         "objects": objects,
                         "seq": r.state.seq,
                         "updated_unix": r.state.updated_unix,
+                        "files": r.files.map(|f| json!({
+                            "count": f.count,
+                            "bytes": f.bytes,
+                            "updated_unix": f.updated_unix,
+                        })),
                     }),
                 )
             })
@@ -265,6 +364,234 @@ async fn list_rooms(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
     };
     list.sort_by_key(|(updated, _)| std::cmp::Reverse(*updated)); // most recently active first
     Json(json!({"rooms": list.into_iter().map(|(_, v)| v).collect::<Vec<_>>()})).into_response()
+}
+
+const MAX_MANIFEST_BYTES: usize = 32 << 20;
+const MAX_MISSING_QUERY: usize = 200_000;
+
+async fn get_manifest(
+    State(app): State<Arc<AppState>>,
+    Path(room): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let store = match file_store(&app) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if !protocol::valid_room(&room) {
+        return http_error(StatusCode::BAD_REQUEST, "bad room name");
+    }
+    match store.manifest(&room) {
+        Some(m) => Json(m).into_response(),
+        None => http_error(StatusCode::NOT_FOUND, "this workspace has no project files"),
+    }
+}
+
+async fn put_manifest(
+    State(app): State<Arc<AppState>>,
+    Path(room): Path<String>,
+    headers: HeaderMap,
+    Json(m): Json<Manifest>,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let store = match file_store(&app) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if !protocol::valid_room(&room) {
+        return http_error(StatusCode::BAD_REQUEST, "bad room name");
+    }
+    {
+        let rooms = app.rooms();
+        if !rooms.contains_key(&room) && rooms.len() >= app.cfg.max_rooms {
+            return http_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server is full (too many rooms)",
+            );
+        }
+    }
+    let now = now_unix();
+    let cfg = &app.cfg;
+    match store.put_manifest(&room, m, cfg.max_project_files, cfg.max_project_bytes, now) {
+        Ok(saved) => {
+            let summary = FilesSummary::of(&saved);
+            let mut rooms = app.rooms();
+            let r = rooms.entry(room.clone()).or_default();
+            r.files = Some(summary);
+            r.state.updated_unix = now; // keeps a file-only room from expiring at once
+            r.dirty = true;
+            drop(rooms);
+            tracing::info!(room = %room, files = summary.count, bytes = summary.bytes, "project files published");
+            Json(json!({
+                "ok": true,
+                "count": summary.count,
+                "bytes": summary.bytes,
+                "updated_unix": now,
+            }))
+            .into_response()
+        }
+        Err((missing, msg)) if !missing.is_empty() => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": msg, "missing": missing})),
+        )
+            .into_response(),
+        Err((_, msg)) => http_error(StatusCode::BAD_REQUEST, &msg),
+    }
+}
+
+async fn files_missing(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let store = match file_store(&app) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let Some(list) = body.get("hashes").and_then(Value::as_array) else {
+        return http_error(StatusCode::BAD_REQUEST, "expected {hashes:[...]}");
+    };
+    if list.len() > MAX_MISSING_QUERY {
+        return http_error(StatusCode::BAD_REQUEST, "too many hashes");
+    }
+    let mut hashes = Vec::with_capacity(list.len());
+    for h in list {
+        match h.as_str() {
+            Some(h) if files::valid_hash(h) => hashes.push(h.to_string()),
+            _ => return http_error(StatusCode::BAD_REQUEST, "bad hash"),
+        }
+    }
+    Json(json!({"missing": store.missing(&hashes)})).into_response()
+}
+
+async fn get_blob(
+    State(app): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let store = match file_store(&app) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let Some(path) = store.blob_file(&hash) else {
+        return http_error(StatusCode::NOT_FOUND, "no such file");
+    };
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return http_error(StatusCode::NOT_FOUND, "no such file"),
+    };
+    let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            // Content-addressed: a hash never changes meaning.
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable".to_string(),
+            ),
+        ],
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response()
+}
+
+/// Streams the upload to a temp file while hashing it; stored only if the
+/// content matches the hash in the URL.
+async fn put_blob(
+    State(app): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    use tokio::io::AsyncWriteExt;
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let store = match file_store(&app) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if !files::valid_hash(&hash) {
+        return http_error(StatusCode::BAD_REQUEST, "bad hash");
+    }
+    if store.has_blob(&hash) {
+        return Json(json!({"ok": true, "stored": false})).into_response();
+    }
+    let max = app.cfg.max_blob_bytes;
+    let too_large = || {
+        http_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("file too large (max {max} bytes)"),
+        )
+    };
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    if declared > max {
+        return too_large();
+    }
+    if store.used_bytes().saturating_add(declared) > app.cfg.max_storage_bytes {
+        return http_error(StatusCode::INSUFFICIENT_STORAGE, "server storage is full");
+    }
+    let tmp = store.temp_path();
+    let mut file = match tokio::fs::File::create(&tmp).await {
+        Ok(f) => f,
+        Err(e) => return http_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let mut hasher = files::Hasher::default();
+    let mut len: u64 = 0;
+    let mut stream = body.into_data_stream();
+    let failed = loop {
+        match stream.next().await {
+            None => break None,
+            Some(Err(e)) => break Some(http_error(StatusCode::BAD_REQUEST, &e.to_string())),
+            Some(Ok(chunk)) => {
+                len += chunk.len() as u64;
+                if len > max {
+                    break Some(too_large());
+                }
+                hasher.update(&chunk);
+                if let Err(e) = file.write_all(&chunk).await {
+                    break Some(http_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &e.to_string(),
+                    ));
+                }
+            }
+        }
+    };
+    let flushed = file.flush().await;
+    drop(file);
+    if let Some(r) = failed {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return r;
+    }
+    if let Err(e) = flushed {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return http_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    match store.commit_blob(&tmp, &hash, &hasher.finish(), len) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"ok": true, "stored": true})),
+        )
+            .into_response(),
+        Err(e) => http_error(StatusCode::BAD_REQUEST, &e),
+    }
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(app): State<Arc<AppState>>) -> Response {

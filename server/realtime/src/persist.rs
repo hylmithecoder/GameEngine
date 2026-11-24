@@ -59,8 +59,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ilmeee-rt-persist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = RoomState::default();
-        s.apply(3, OpIn::parse(&json!({"key":"k","slot":"data","data":{"x":1}})).unwrap(), 10)
-            .unwrap();
+        s.apply(
+            3,
+            OpIn::parse(&json!({"key":"k","slot":"data","data":{"x":1}})).unwrap(),
+            10,
+        )
+        .unwrap();
         save_room(&dir, "lobby", &s).unwrap();
         std::fs::write(dir.join("broken.json"), "{").unwrap();
         std::fs::write(dir.join("..bad.json"), "{}").unwrap();

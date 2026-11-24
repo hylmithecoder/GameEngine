@@ -485,6 +485,12 @@ CollabRoomList FetchCollabRooms(const std::string &wsUrl, const std::string &tok
     info.objects = r.value("objects", std::size_t{0});
     info.seq = r.value("seq", std::uint64_t{0});
     info.updatedUnix = r.value("updated_unix", std::uint64_t{0});
+    if (auto f = r.find("files"); f != r.end() && f->is_object()) {
+      info.hasFiles = true;
+      info.fileCount = f->value("count", std::size_t{0});
+      info.fileBytes = f->value("bytes", std::uint64_t{0});
+      info.filesUpdatedUnix = f->value("updated_unix", std::uint64_t{0});
+    }
     if (auto p = r.find("peers"); p != r.end() && p->is_array())
       for (const auto &peer : *p)
         if (peer.is_object())
