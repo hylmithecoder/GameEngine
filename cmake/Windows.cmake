@@ -234,7 +234,8 @@ target_link_libraries(IlmeeeHub PRIVATE
 target_link_options(IlmeeeHub PRIVATE -mwindows -municode)
 
 # ---- stage 3: GameEngineSDL (the editor) ------------------------------------
-# Same sources as MAIN_PROJECT_SOURCE in src/cpp/CMakeLists.txt. Windows
+# Same sources as MAIN_PROJECT_SOURCE in src/cpp/CMakeLists.txt, minus
+# src/cpp/optimizer (OpenCL; nothing calls it, and MSYS2 CI has no CL headers). Windows
 # differences live in the sources (#ifdef _WIN32): ilmeee::Process instead of
 # fork/exec, SDL message boxes instead of GTK, Win32 system info, no Discord.
 # The engine process (HandlerIlmeeeEngine + libIlmeeeEngine.dll +
@@ -302,7 +303,6 @@ set(ILMEEE_EDITOR_SOURCES
     src/cpp/core_engine/core_editor/EditorTheme.cpp
     src/cpp/core_engine/core_editor/panels/PanelManager.cpp
     src/cpp/core_engine/core_editor/panels/VideoPlayerPanel.cpp
-    src/cpp/optimizer/Optimizer.cpp
     src/cpp/vulkan/texture.cpp
     src/cpp/vulkan/VkBuffer.cpp
     src/cpp/vulkan/VkDevice.cpp
