@@ -1,5 +1,6 @@
 # Build directories
 /build/
+/build-android/
 /Build/
 /BUILD/
 /out/
@@ -18,6 +19,8 @@
 *.lo
 *.o
 *.obj
+!assets/3models/**/*.obj
+!assets/3models/*.obj
 
 # Compiled Dynamic libraries
 *.so
@@ -39,7 +42,10 @@
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
+# CMake-generated Makefiles live inside build dirs; the root Makefile is
+# hand-written project source and must stay tracked.
+build*/Makefile
+**/CMakeFiles/Makefile
 
 # OS generated files
 .DS_Store
@@ -49,3 +55,24 @@ Makefile
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+/.cache
+/.agent
+
+*.*.mcp_bak
+references/
+.claude
+
+.implementation/
+.roadmap/
+# build / distribution artifacts
+build-verify/
+build*/dist/
+
+docs/*
+!docs/ScriptingAPI.md
+!docs/AndroidPerformanceAndUI.md
+!docs/RealtimeCollab.md
+.env
+
+.opencode

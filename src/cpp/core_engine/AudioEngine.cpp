@@ -1,0 +1,519 @@
+#include "../../../include/core_engine/AudioEngine.hpp"
+#include "../../../include/core_engine/MediaComponents.hpp"
+#include "../../../include/core_engine/MediaHttp.hpp"
+#include <SDL3/SDL.h>
+#include <algorithm>
+#include <cmath>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+
+#define STB_VORBIS_HEADER_ONLY
+#include <stb/stb_vorbis.c>
+
+#if defined(__ANDROID__) && !defined(ILMEEE_HAS_FFMPEG)
+#include "../../../include/core_engine/AndroidMedia.hpp"
+#endif
+
+#ifdef ILMEEE_HAS_FFMPEG
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+}
+#endif
+
+namespace ilmeee {
+
+bool IsMediaUrl(const std::string &path) {
+  auto startsWithIgnoreCase = [&](const char *prefix, size_t len) {
+    if (path.size() <= len)
+      return false;
+    for (size_t i = 0; i < len; ++i)
+      if (std::tolower((unsigned char)path[i]) != prefix[i])
+        return false;
+    return !std::isspace((unsigned char)path[len]) && path[len] != '/';
+  };
+  return startsWithIgnoreCase("http://", 7) ||
+         startsWithIgnoreCase("https://", 8);
+}
+
+namespace {
+
+std::string LowerExt(const std::string &path) {
+  std::string clean = path;
+  if (IsMediaUrl(clean)) {
+    const size_t q = clean.find_first_of("?#");
+    if (q != std::string::npos)
+      clean.erase(q);
+    const size_t schemeEnd = clean.find("://");
+    const size_t pathStart =
+        schemeEnd == std::string::npos ? 0 : clean.find('/', schemeEnd + 3);
+    if (pathStart == std::string::npos)
+      return {};
+    clean = clean.substr(pathStart);
+  }
+  std::string ext = std::filesystem::path(clean).extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return (char)std::tolower(c); });
+  return ext;
+}
+
+const SDL_AudioSpec kMixSpec = {SDL_AUDIO_F32, kAudioChannels, kAudioRate};
+
+// Any SDL-describable PCM → the mixer's float stereo 48 kHz.
+bool ConvertToMix(const SDL_AudioSpec &src, const void *data, int bytes,
+                  AudioClip &out, std::string *error) {
+  Uint8 *dst = nullptr;
+  int dstLen = 0;
+  if (!SDL_ConvertAudioSamples(&src, (const Uint8 *)data, bytes, &kMixSpec,
+                               &dst, &dstLen)) {
+    if (error)
+      *error = SDL_GetError();
+    return false;
+  }
+  out.samples.assign((const float *)dst,
+                     (const float *)dst + dstLen / sizeof(float));
+  SDL_free(dst);
+  return true;
+}
+
+bool DecodeWav(const std::string &path, AudioClip &out, std::string *error) {
+  SDL_AudioSpec spec;
+  Uint8 *buf = nullptr;
+  Uint32 len = 0;
+  if (!SDL_LoadWAV(path.c_str(), &spec, &buf, &len)) {
+    if (error)
+      *error = SDL_GetError();
+    return false;
+  }
+  const bool ok = ConvertToMix(spec, buf, (int)len, out, error);
+  SDL_free(buf);
+  return ok;
+}
+
+bool DecodeOgg(const std::string &path, AudioClip &out, std::string *error) {
+  int channels = 0, rate = 0;
+  short *pcm = nullptr;
+  const int frames =
+      stb_vorbis_decode_filename(path.c_str(), &channels, &rate, &pcm);
+  if (frames <= 0 || !pcm || channels <= 0) {
+    if (error)
+      *error = "not a readable Ogg Vorbis file";
+    std::free(pcm);
+    return false;
+  }
+  const SDL_AudioSpec spec = {SDL_AUDIO_S16, channels, rate};
+  const bool ok = ConvertToMix(spec, pcm, frames * channels * 2, out, error);
+  std::free(pcm);
+  return ok;
+}
+
+#ifdef ILMEEE_HAS_FFMPEG
+bool DecodeFFmpeg(const std::string &path, AudioClip &out,
+                  std::string *error) {
+  AVFormatContext *fmt = nullptr;
+  if (OpenMediaInput(&fmt, path) < 0) {
+    if (error)
+      *error = IsMediaUrl(path) ? "cannot open stream URL" : "cannot open file";
+    return false;
+  }
+  bool ok = false;
+  AVCodecContext *dec = nullptr;
+  SwrContext *swr = nullptr;
+  AVPacket *pkt = av_packet_alloc();
+  AVFrame *frame = av_frame_alloc();
+  do {
+    if (avformat_find_stream_info(fmt, nullptr) < 0)
+      break;
+    const AVCodec *codec = nullptr;
+    const int si =
+        av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+    if (si < 0 || !codec) {
+      if (error)
+        *error = "no audio stream";
+      break;
+    }
+    dec = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(dec, fmt->streams[si]->codecpar);
+    if (avcodec_open2(dec, codec, nullptr) < 0)
+      break;
+    AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+    if (swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_FLT, kAudioRate,
+                            &dec->ch_layout, dec->sample_fmt,
+                            dec->sample_rate, 0, nullptr) < 0 ||
+        swr_init(swr) < 0)
+      break;
+    std::vector<float> buf;
+    auto drain = [&]() {
+      while (avcodec_receive_frame(dec, frame) == 0) {
+        const int maxOut =
+            swr_get_out_samples(swr, frame->nb_samples) + 256;
+        buf.resize((size_t)maxOut * kAudioChannels);
+        uint8_t *outPtr = (uint8_t *)buf.data();
+        const int n = swr_convert(swr, &outPtr, maxOut,
+                                  (const uint8_t **)frame->extended_data,
+                                  frame->nb_samples);
+        if (n > 0)
+          out.samples.insert(out.samples.end(), buf.begin(),
+                             buf.begin() + (size_t)n * kAudioChannels);
+      }
+    };
+    while (av_read_frame(fmt, pkt) >= 0) {
+      if (pkt->stream_index == si && avcodec_send_packet(dec, pkt) >= 0)
+        drain();
+      av_packet_unref(pkt);
+    }
+    avcodec_send_packet(dec, nullptr);
+    drain();
+    ok = !out.samples.empty();
+    if (!ok && error)
+      *error = "decoded no samples";
+  } while (false);
+  av_frame_free(&frame);
+  av_packet_free(&pkt);
+  swr_free(&swr);
+  avcodec_free_context(&dec);
+  CloseMediaInput(&fmt);
+  return ok;
+}
+#endif
+
+} // namespace
+
+bool IsAudioClipPath(const std::string &path) {
+  static const char *kExt[] = {".wav", ".ogg", ".mp3", ".flac",
+                               ".m4a", ".aac", ".opus"};
+  const std::string ext = LowerExt(path);
+  if (std::any_of(std::begin(kExt), std::end(kExt),
+                  [&](const char *e) { return ext == e; }))
+    return true;
+  if (IsMediaUrl(path)) {
+    // Allow direct stream URLs that have no file extension (e.g. /stream or ?id=...),
+    // while still rejecting explicit video/image extensions.
+    return ext.empty();
+  }
+  return false;
+}
+
+bool IsVideoClipPath(const std::string &path) {
+  static const char *kExt[] = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m3u8"};
+  const std::string ext = LowerExt(path);
+  if (std::any_of(std::begin(kExt), std::end(kExt),
+                  [&](const char *e) { return ext == e; }))
+    return true;
+  if (IsMediaUrl(path)) {
+    return ext.empty();
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// PcmRing
+// ---------------------------------------------------------------------------
+
+void PcmRing::Push(const float *interleaved, size_t frames) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_.insert(data_.end(), interleaved, interleaved + frames * kAudioChannels);
+}
+
+size_t PcmRing::Pull(float *out, size_t maxFrames) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const size_t avail = (data_.size() - head_) / kAudioChannels;
+  const size_t n = std::min(avail, maxFrames);
+  std::copy_n(data_.begin() + (std::ptrdiff_t)head_, n * kAudioChannels, out);
+  head_ += n * kAudioChannels;
+  // Compact once the consumed prefix dominates.
+  if (head_ > 65536 && head_ * 2 > data_.size()) {
+    data_.erase(data_.begin(), data_.begin() + (std::ptrdiff_t)head_);
+    head_ = 0;
+  }
+  return n;
+}
+
+size_t PcmRing::Frames() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return (data_.size() - head_) / kAudioChannels;
+}
+
+void PcmRing::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_.clear();
+  head_ = 0;
+  finished_ = false;
+}
+
+void PcmRing::SetFinished(bool f) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  finished_ = f;
+}
+
+bool PcmRing::Finished() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return finished_;
+}
+
+// ---------------------------------------------------------------------------
+// AudioEngine
+// ---------------------------------------------------------------------------
+
+AudioEngine::~AudioEngine() {
+  StopAll();
+  if (device_ != 0) {
+    SDL_CloseAudioDevice(device_);
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  }
+}
+
+bool AudioEngine::Ensure() {
+  if (device_ != 0)
+    return true;
+  if (initTried_)
+    return false;
+  initTried_ = true;
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    SDL_Log("[Audio] SDL audio init failed: %s", SDL_GetError());
+    return false;
+  }
+  device_ = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kMixSpec);
+  if (device_ == 0) {
+    SDL_Log("[Audio] no playback device: %s", SDL_GetError());
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    return false;
+  }
+  SDL_ResumeAudioDevice(device_);
+  return true;
+}
+
+std::shared_ptr<const AudioClip>
+AudioEngine::LoadClip(const std::string &path, std::string *error) {
+  auto it = clips_.find(path);
+  if (it != clips_.end())
+    return it->second;
+  auto clip = std::make_shared<AudioClip>();
+  const std::string ext = LowerExt(path);
+  const bool isUrl = IsMediaUrl(path);
+  bool ok = false;
+  if (!isUrl && ext == ".wav")
+    ok = DecodeWav(path, *clip, error);
+  else if (!isUrl && ext == ".ogg")
+    ok = DecodeOgg(path, *clip, error);
+  else {
+#if defined(ILMEEE_HAS_FFMPEG)
+    ok = DecodeFFmpeg(path, *clip, error);
+#elif defined(__ANDROID__)
+    ok = android_media::DecodeAudioFile(path, clip->samples, error);
+#else
+    if (error)
+      *error = (isUrl ? "URL audio" : ext) +
+               std::string(" needs FFmpeg, which this build lacks (use local .wav/.ogg)");
+#endif
+  }
+  if (!ok)
+    return nullptr;
+  clips_[path] = clip;
+  return clip;
+}
+
+VoiceId AudioEngine::PlayClip(std::shared_ptr<const AudioClip> clip,
+                              bool loop) {
+  if (!clip || clip->Frames() == 0 || !Ensure())
+    return 0;
+  SDL_AudioStream *s = SDL_CreateAudioStream(&kMixSpec, &kMixSpec);
+  if (!s || !SDL_BindAudioStream(device_, s)) {
+    if (s)
+      SDL_DestroyAudioStream(s);
+    return 0;
+  }
+  Voice v;
+  v.stream = s;
+  v.clip = std::move(clip);
+  v.loop = loop;
+  const VoiceId id = nextId_++;
+  voices_.emplace(id, std::move(v));
+  return id;
+}
+
+VoiceId AudioEngine::PlayStream(std::shared_ptr<PcmRing> ring) {
+  if (!ring || !Ensure())
+    return 0;
+  SDL_AudioStream *s = SDL_CreateAudioStream(&kMixSpec, &kMixSpec);
+  if (!s || !SDL_BindAudioStream(device_, s)) {
+    if (s)
+      SDL_DestroyAudioStream(s);
+    return 0;
+  }
+  Voice v;
+  v.stream = s;
+  v.ring = std::move(ring);
+  const VoiceId id = nextId_++;
+  voices_.emplace(id, std::move(v));
+  return id;
+}
+
+void AudioEngine::DestroyVoice(Voice &v) {
+  if (v.stream)
+    SDL_DestroyAudioStream(v.stream);
+  v.stream = nullptr;
+}
+
+void AudioEngine::StopVoice(VoiceId id) {
+  auto it = voices_.find(id);
+  if (it == voices_.end())
+    return;
+  DestroyVoice(it->second);
+  voices_.erase(it);
+}
+
+void AudioEngine::StopAll() {
+  for (auto &[id, v] : voices_)
+    DestroyVoice(v);
+  voices_.clear();
+}
+
+// Gains, ear delays and filters ramp linearly from the current settings to
+// `target` across the chunk.
+void Spatialize(SpatialState &st, const VoiceSpatial &target, float *frames,
+                size_t n) {
+  if (!st.started) {
+    st.current = target;
+    st.started = true;
+  }
+  const VoiceSpatial a = st.current, b = target;
+  constexpr unsigned kMask = 63; // history 64 > kMaxEarDelay + 1
+  // Sample `d` (fractional) frames before the newest one.
+  const auto delayed = [&](float d) {
+    const unsigned di = (unsigned)d;
+    const float frac = d - (float)di;
+    const float s0 = st.history[(st.writePos - di) & kMask];
+    const float s1 = st.history[(st.writePos - di - 1) & kMask];
+    return s0 + (s1 - s0) * frac;
+  };
+  for (size_t f = 0; f < n; ++f) {
+    const float t = (float)(f + 1) / (float)n;
+    const float gL = a.gainL + (b.gainL - a.gainL) * t;
+    const float gR = a.gainR + (b.gainR - a.gainR) * t;
+    float &l = frames[f * 2], &r = frames[f * 2 + 1];
+    if (!b.mono) {
+      l *= gL;
+      r *= gR;
+      continue;
+    }
+    st.history[++st.writePos & kMask] = 0.5f * (l + r);
+    const float dL = a.delayL + (b.delayL - a.delayL) * t;
+    const float dR = a.delayR + (b.delayR - a.delayR) * t;
+    const float cL = a.lowpassL + (b.lowpassL - a.lowpassL) * t;
+    const float cR = a.lowpassR + (b.lowpassR - a.lowpassR) * t;
+    st.lpL += cL * (delayed(dL) - st.lpL);
+    st.lpR += cR * (delayed(dR) - st.lpR);
+    l = st.lpL * gL;
+    r = st.lpR * gR;
+  }
+  st.current = b;
+}
+
+bool AudioEngine::IsVoiceActive(VoiceId id) const {
+  return voices_.count(id) != 0;
+}
+
+void AudioEngine::SetVoiceSpatial(VoiceId id, const VoiceSpatial &spatial) {
+  auto it = voices_.find(id);
+  if (it == voices_.end())
+    return;
+  VoiceSpatial s = spatial;
+  s.delayL = std::clamp(s.delayL, 0.0f, (float)kMaxEarDelay);
+  s.delayR = std::clamp(s.delayR, 0.0f, (float)kMaxEarDelay);
+  s.lowpassL = std::clamp(s.lowpassL, 0.01f, 1.0f);
+  s.lowpassR = std::clamp(s.lowpassR, 0.01f, 1.0f);
+  it->second.target = s;
+}
+
+void AudioEngine::SetVoiceGains(VoiceId id, float left, float right,
+                                bool mono) {
+  VoiceSpatial s;
+  s.gainL = left;
+  s.gainR = right;
+  s.mono = mono;
+  SetVoiceSpatial(id, s);
+}
+
+size_t AudioEngine::QueuedFrames(const Voice &v) const {
+  const int bytes = SDL_GetAudioStreamQueued(v.stream);
+  return bytes > 0 ? (size_t)bytes / (sizeof(float) * kAudioChannels) : 0;
+}
+
+double AudioEngine::VoicePlayedSeconds(VoiceId id) const {
+  auto it = voices_.find(id);
+  if (it == voices_.end())
+    return 0.0;
+  const Voice &v = it->second;
+  const uint64_t queued = QueuedFrames(v);
+  const uint64_t played = v.framesPushed > queued ? v.framesPushed - queued : 0;
+  return (double)played / kAudioRate;
+}
+
+void AudioEngine::SetPaused(bool paused) {
+  if (paused == paused_ || device_ == 0)
+    return;
+  paused_ = paused;
+  if (paused)
+    SDL_PauseAudioDevice(device_);
+  else
+    SDL_ResumeAudioDevice(device_);
+}
+
+void AudioEngine::Update() {
+  // ~67 ms queued: direction/volume changes are heard that much later, and a
+  // frame may take up to that long before the device runs dry.
+  constexpr size_t kLeadFrames = kAudioRate / 15;
+  constexpr size_t kChunk = 512;
+  for (auto it = voices_.begin(); it != voices_.end();) {
+    Voice &v = it->second;
+    while (!v.done && QueuedFrames(v) < kLeadFrames) {
+      scratch_.resize(kChunk * kAudioChannels);
+      size_t n = 0;
+      if (v.clip) {
+        const size_t total = v.clip->Frames();
+        while (n < kChunk) {
+          if (v.cursor >= total) {
+            if (!v.loop) {
+              v.done = true;
+              break;
+            }
+            v.cursor = 0;
+          }
+          const size_t take = std::min(kChunk - n, total - v.cursor);
+          std::copy_n(v.clip->samples.data() + v.cursor * kAudioChannels,
+                      take * kAudioChannels,
+                      scratch_.data() + n * kAudioChannels);
+          n += take;
+          v.cursor += take;
+        }
+      } else if (v.ring) {
+        n = v.ring->Pull(scratch_.data(), kChunk);
+        if (n == 0) {
+          if (v.ring->Finished())
+            v.done = true;
+          break; // underrun: wait for the decoder
+        }
+      }
+      if (n == 0)
+        break;
+      Spatialize(v.dsp, v.target, scratch_.data(), n);
+      SDL_PutAudioStreamData(v.stream, scratch_.data(),
+                             (int)(n * kAudioChannels * sizeof(float)));
+      v.framesPushed += n;
+    }
+    if (v.done && QueuedFrames(v) == 0) {
+      DestroyVoice(v);
+      it = voices_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+} // namespace ilmeee

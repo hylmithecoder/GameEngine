@@ -1,0 +1,78 @@
+#include "../core_engine/Check_Environment.hpp"
+#include "../core_engine/Debugger.hpp"
+#include "../core_engine/Discordrich.hpp"
+#include "../core_engine/net/MessageBus.hpp"
+#include "../core_engine/net/WsTransport.hpp"
+#include "../core_engine/net/McpServer.hpp"
+#include "MainWindow.hpp"
+#include <atomic>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include "../core_engine/Process.hpp"
+#include <string>
+#include <vector>
+
+using namespace Debug;
+using namespace core_engine;
+using namespace Ilmeee;
+
+class ApplicationManager {
+private:
+  // Engine IPC: this process is the only server. HandlerIlmeeeEngine (and
+  // any later tool) connects to it; see core_engine/net/Protocol.hpp.
+  std::unique_ptr<ilmeee::net::WsServerTransport> ipcTransport;
+  std::unique_ptr<ilmeee::net::MessageBus> ipcBus;
+  std::unique_ptr<ilmeee::net::McpServer> mcpServer;
+  std::string ipcToken;
+
+  MainWindow *window;
+  std::unique_ptr<Environment> environment;
+  std::unique_ptr<DiscordRichPresence> discordRich;
+  // HandlerIlmeeeEngine; null when not running.
+  std::unique_ptr<ilmeee::Process> engineProcess;
+  std::atomic<bool> isRunning{false};
+  std::atomic<bool> shouldExit{false};
+  std::vector<std::function<void()>> cleanupTasks;
+
+  bool engineStopRequested = false;
+
+  bool StartIpcServer();
+  void ReapEngineIfExited();
+  void CleanupNetwork();
+  void CleanupEngine();
+  void CleanupWindow();
+  void CleanupSDL();
+
+public:
+  ApplicationManager();
+  ~ApplicationManager();
+  void Run();
+  void RegisterCleanupTask(std::function<void()> task) {
+    cleanupTasks.insert(cleanupTasks.begin(), task);
+  }
+  bool Initialize();
+  bool LaunchEngine();
+  bool StartMcpServer();
+  void SetMcpPort(int port) { mcpPort = port; }
+  void SetMcpPublicHost(std::string host) { mcpPublicHost = std::move(host); }
+  void Shutdown();
+
+  // Set the project path before Initialize() so the editor opens
+  // straight into the given project. When empty (no --project arg),
+  // the editor falls back to its hardcoded debug scene.
+  void SetProjectPath(const std::string &path) { projectPath = path; }
+  const std::string &GetProjectPath() const { return projectPath; }
+
+  // When true and no --project was supplied, the standalone debug
+  // fallback boots a 2D sprite scene instead of the 3D OBJ. Has no
+  // effect when a project is loaded.
+  void SetDebug2D(bool v) { debug2D = v; }
+  bool GetDebug2D() const { return debug2D; }
+
+private:
+  std::string projectPath;
+  bool debug2D = false;
+  int mcpPort = 0;
+  std::string mcpPublicHost;
+};

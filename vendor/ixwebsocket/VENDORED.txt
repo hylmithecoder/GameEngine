@@ -1,0 +1,23 @@
+IXWebSocket v12.0.1 (commit 64fae7676bd8fe31f7cb4bcde7a6841892dad65e)
+https://github.com/machinezone/IXWebSocket — BSD-3-Clause, see LICENSE.txt
+
+Vendored: ixwebsocket/, CMake/, CMakeLists.txt and the config templates only
+(no tests, ws tool or docs). Built static, without TLS or zlib, from the root
+CMakeLists.txt.
+
+Local patches (ilmeee-patches.diff, reapply when upgrading):
+
+1. WebSocketTransport::getCloseReason() returns std::string by value instead
+   of const std::string&. Upstream takes _closeReasonMutex and then returns a
+   reference to the guarded string, so the caller copies it after the lock is
+   released; a concurrent close() reassigning it frees the buffer mid-copy
+   (use-after-free). Found by ThreadSanitizer in test/net/TestWsTransport
+   when the core refuses a client while that client is closing.
+
+2. WebSocket::_onMessageCallback is guarded by a mutex; every invocation
+   goes through invokeOnMessageCallback(), which copies it under the lock and
+   calls the copy outside it. Upstream reads and writes the std::function with
+   no synchronisation: WebSocketServer::stop() closes clients from the caller's
+   thread (firing the callback) while each connection thread clears it with
+   setOnMessageCallback(nullptr) on its way out — calling a std::function that
+   is being reassigned. Also found by ThreadSanitizer (server shutdown).

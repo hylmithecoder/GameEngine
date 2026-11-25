@@ -1,6 +1,342 @@
-# Game Engine
+# Ilmeee Engine (In Development)
+
 <div align="center">
 
 <img src="https://count.getloli.com/@hylmithecoder?name=hylmithecoder&theme=gelbooru&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto"><br><br>
 </div>
-just my game engine repo
+
+A Vulkan-based C++ game engine in active development. Built with a modular 3D pipeline supporting modern mesh formats, real-time lighting, interactive asset workflows, and companion-process IPC. The editor (`GameEngineSDL`) ships alongside `IlmeeeHub` (project launcher) and `HandlerIlmeeeEngine` (companion thread-safe engine process).
+
+## Building
+
+The build is pinned to a Nix shell that brings in SDL2/3, GLFW, Vulkan, GTK3, FFmpeg, shaderc, etc.
+
+```bash
+# Enter the Nix development environment
+nix-shell
+
+# Run CMake and build within the environment
+cmake -B build
+make -C build -j$(nproc)
+```
+
+Shader compilation uses `glslc` which is available within the shell context:
+
+```bash
+glslc assets/shaders/vulkan/scene_mesh.vert -o assets/shaders/vulkan/scene_mesh.vert.spv
+```
+
+## Running the editor
+
+Two normal entry points:
+
+```bash
+# Through the Hub (recommended — wires up the project handshake):
+./build/bin/IlmeeeHub
+
+# Standalone with an explicit project:
+./build/bin/GameEngineSDL --project /path/to/MyProject
+```
+
+### Native MCP endpoint
+
+Start the desktop editor with its local MCP server enabled:
+
+```bash
+ILMEEE_MCP_TOKEN='choose-a-long-random-secret' \
+  ./build/bin/GameEngineSDL --project /path/to/MyProject --mcp
+```
+
+The Streamable HTTP endpoint is `http://127.0.0.1:9220/mcp`. Use
+`--mcp-port <port>` to change the port. If `ILMEEE_MCP_TOKEN` is unset, the
+editor generates a token and prints it once in its startup log. Configure your
+MCP client to send `Authorization: Bearer <token>` on every request. The endpoint
+is available only while the editor is running; a port collision stops startup
+with an error. It binds to loopback and checks the HTTP Host and Origin.
+
+Available tools are `get_project_info`, `list_scene_objects`, `get_object`,
+`create_object`, `set_transform`, `save_scene`, `get_device_stats`,
+`get_game_log`, and for dialogs/UI `list_ui_elements`, `set_ui_element`,
+`get_dialog`, `set_dialog` (add/edit a Dialog component, optionally creating
+its UI) and `start_dialog` (Play mode, for testing). UI elements are addressed
+by name. Object indices are relative
+to the current scene and may change after structural edits. Edits are blocked
+during Play mode and are included in editor Undo/Redo history. The endpoint
+supports MCP protocol revisions `2026-07-28` and `2025-11-25`.
+
+In `IlmeeeHub`, enable **Use MCP** on a project's card before choosing
+**Open project**. Hub remembers the choice for each project. When the editor
+generates a session token, the card offers **Copy token** while that editor is
+running. Only one MCP-enabled editor can use port 9220 at a time; Hub reports
+a conflict in its Console.
+
+For a quick local check, use `scripts/mcp-test.sh`. It prompts for the token
+without echoing it if `MCP_TOKEN` is unset:
+
+```bash
+scripts/mcp-test.sh info
+scripts/mcp-test.sh tools
+scripts/mcp-test.sh watch  # refresh scene objects every second; Ctrl+C stops
+scripts/mcp-test.sh call get_object '{"index":0}'
+```
+
+Set `MCP_PORT` if the editor uses a different port. The `call` command can also
+invoke editing tools, so inspect their arguments before using it.
+
+### Standalone debug fallback
+
+When no `--project` is supplied, the editor boots a hardcoded debug scene so the renderer always has something to display:
+
+```bash
+./build/GameEngineSDL                # 3D: loads OBJ/PMX fallbacks
+./build/GameEngineSDL --2d=true      # 2D: loads assets/testimage.png as a sprite
+./build/GameEngineSDL --2d           # same as --2d=true
+```
+
+The 2D fallback drops a single sprite at world origin (300x300 px) and shows a dynamic editor grid + colored XY axes overlay that follow pan/zoom.
+
+## In-game UI
+
+Open a project, right-click empty space or the Scene root in **Hierarchy**, and
+choose **Create → Canvas**. Right-click Canvas to add Text, Image, or Button
+children. Select Canvas or one of its children to edit the UI directly over
+the player camera in the **Scene** tab: click an element to select it and drag
+to reposition it. Drag an image from **Explorer** onto an Image element to
+replace its texture, or onto empty Canvas space to create a new Image at the
+drop position. You can also drop onto the Image node in Hierarchy or its
+**Image path** field in Inspector. The **Inspector** edits its exact properties, anchor and
+reference-pixel offsets (default 1280×720). The **Game** tab shows the same
+UI without editor outlines. Save with **Ctrl+S**: Canvas and its children are stored in
+`scenes/main.ilmeeescene`. Image paths are relative to the project folder,
+for example `assets/logo.png`. Older `assets/ui/main.json` files are imported
+when the scene does not contain a Canvas yet.
+
+An explicitly created Canvas starts empty. `TogglePause` is the built-in
+button action; other action names currently appear in the Console log but
+need gameplay code to perform an effect. The top Play button opens the **Game**
+tab and runs the camera view and UI there; the **Scene** tab stays editable
+after Stop. Pause and Stop events appear in
+**Console → Output**. For a separate game window, choose **Build → Build and
+Run** (or Ctrl+Shift+B); the running player's stdout/stderr is streamed into
+**Console → Build** and **Console → Output**.
+
+## Movement scripts
+
+Select a mesh game object in Hierarchy, choose **Add Component → Movement
+Script** in Inspector, set its speed, and save with **Ctrl+S**. The component
+can be disabled with **Movable** or removed with its header's close button. Play
+opens Game; click inside it and use WASD. Movement uses fixed 60 Hz steps and
+Stop restores editor transforms. The same component runs in a built game.
+
+To add a native movement function, edit
+`src/cpp/core_engine/UserMovementScripts.cpp`: implement a function taking
+`ilmeee::MovementContext&`, then call `RegisterMovementScript("MyMove", MyMove)`
+inside `RegisterUserMovementScripts()`. The context exposes parent-local
+position, rotation, scale, speed, delta seconds and input. Rebuild both
+`GameEngineSDL` and `IlmeeePlayer`, then pick the registered name in Inspector.
+This registration API is compiled into the engine. Project component scripts
+use the separate compile-and-bind workflow below.
+
+**Script files and code editor.** Choose **Add Component → Create C++ Script...**
+or **Explorer → Create New File → Scripts → C++ Script** to open the script
+dialog. It creates matching `.cpp`/`.hpp` files with a `Component` template,
+validates the class name, and leaves existing files untouched. Inspector uses
+`assets/scripts`; Explorer uses the selected folder (put components under
+`assets/scripts` so the project compiler discovers them). Each class must match
+its file stem, derive from `Component`, and have a public default constructor.
+
+The Linux editor compiles new and saved scripts in the background against the
+installed engine SDK. **Tools → Compile Project Scripts** also runs it manually;
+errors appear in **Console → Output**. Once validated, the class is listed in
+**Add Component**. Select it to bind it to the selected object. Script components
+support Enabled, removal, Undo/Redo, and scene save/reload (`.ilmeeescene` v1.9).
+Play invokes Awake/OnEnable/Start and Update; Pause freezes updates and Stop
+invokes OnDisable, destroys instances, and restores editor transforms.
+
+The template exposes `Speed` and a `GameObjectRef target`. Assign Target from
+the Inspector picker or drag an object from Hierarchy onto it. References use
+stable object IDs; a deleted target becomes invalid. `target.Get()` returns a
+script GameObject, while `gameObject` is the component's owner. The initial API
+provides Name, IsValid, Find, GetTransform/SetTransform, GetPosition/SetPosition,
+Translate, `IsKeyDown("W"/"A"/"S"/"D"/"Space")`, and Log. Transform positions
+are local to an object's parent, like the editor's Transform Inspector. For example:
+
+```cpp
+void PlayerController::Update(float deltaTime) {
+    if (IsKeyDown("W"))
+        gameObject.Translate({0, 0, -speed * deltaTime});
+    if (target.IsValid()) {
+        const auto targetPosition = target.Get().GetPosition();
+        // Use targetPosition to implement your behavior.
+    }
+}
+```
+
+`DescribeProperties` registers float, bool, and GameObjectRef fields via
+`properties.Field("Label", field)`. Existing templates without exposed fields
+still compile and can be attached. The compiler writes `compile_commands.json`
+for code-editor completion and include validation. Native desktop game builds
+compile attached scripts and ship their modules; the player needs no compiler.
+Android exports compile the same component sources with the player's Android
+NDK, once per bundled ABI, and package the modules under APK `jniLibs` alongside
+one shared `libc++_shared.so`. The Android player runs the same script lifecycle
+and GameObject/Inspector-property bridge as the desktop player. No compiler is
+needed on the phone. Scripts using desktop-only APIs or libraries still need
+Android-compatible replacements; this is cross-compilation, not transpilation.
+
+Rebuild the Android player once with `scripts/android/build-player.sh` after
+upgrading. It exports `script-toolchain-<abi>.json` and a public SDK snapshot
+under `build-android/script-sdk/<abi>`. The editor refuses stale or missing
+metadata/headers and uses the recorded NDK compiler, not the host compiler.
+Keep that NDK installed. Rebuild players after updating the engine's scene
+format or script SDK. Override only the **desktop** compiler executable with
+`ILMEEE_SCRIPT_CXX` if needed; Android uses the player's toolchain.
+
+Use **Edit → Code Editor...** to select the system default, VS Code, VSCodium,
+Cursor, Antigravity, or a custom executable. This user preference is saved in
+`~/.ilmeeeengine/editor-preferences.json` and used for new scripts, Explorer,
+and search results. Configured code editors receive the project folder followed
+by the selected file, so a project opened for the first time has its full
+workspace available. The folder is sent on later launches too, including after
+closing and reopening the code editor. Custom executables should accept these
+two arguments; **System default** uses the OS association for the file only.
+Launches do not block the editor UI.
+
+**Camera & UI input.** Each movable object can reference a camera and pick a
+**POV Style** — Third Person, First Person, Side Scroller (with the
+`Platformer` script) or Top Down — plus distance/height. Add on-screen sticks
+with Canvas → Create Child → **Joystick** and link them as *Move Joystick* /
+*Look Joystick*. Keyboard (WASD, Space, arrows, right-drag look) and the sticks
+stay in sync; on a phone both sticks work at once and swiping the open screen
+turns the camera.
+
+## World-space Text and scripted UI
+
+Create **Text (3D)** from the Hierarchy's Scene/Create or Create Child menu.
+It has a normal world transform, parent hierarchy, editable multiline content,
+size, colour/alpha, alignment and visibility. It is rendered as depth-tested
+glyph surfaces, not a Canvas overlay, in the Scene, Game and exported players.
+The bundled MiSans Latin font is copied with game exports.
+
+Canvas Text/Image/Button elements also accept native C++ scripts through
+**Inspector > Add Component**. Access their own UI with
+`gameObject.As<UiGameObject>()` (or `UiTextGameObject`, `UiImageGameObject`,
+`UiButtonGameObject`); access world text with `ObjectRef<TextGameObject>`.
+See [Scripting API](docs/ScriptingAPI.md#custom-script-pada-ui) for an example.
+UI edits and world-text properties participate in editor Undo/Redo and scene
+save/load. Play-mode UI and text changes are restored on Stop.
+
+## PMX Animation Editor
+
+Open **Windows > Animation**, or select a PMX character and use **Inspector >
+Mesh > Open Animation Editor**. The dockable Animation tab has its own model
+preview, orbit camera (right mouse drag), zoom (wheel), bone search and optional
+bone overlay. Previewing a clip does not move the editable Scene.
+
+Use **Create Breathing Idle** for an editable starting loop, or **New Clip** to
+author a pose sequence. Select a bone, scrub the timeline, and edit Position or
+Rotation to add a key at the playhead. **Set Key**, **Rest Key**, **Delete Key**,
+Undo and Redo work on the clip. Play/Pause/Stop, loop, speed, duration and FPS
+control preview playback. Bone rotations interpolate as quaternions.
+
+Clips are `.ilmeeeanim` JSON assets inside the project. **Save** writes the clip;
+**Open Clip** (or dropping an animation asset onto its path) reopens its keys.
+**Save + Assign to Character** saves the clip and scene binding. Game Play and
+built players use that binding; Inspector exposes enabled, loop and speed.
+Stop restores the bind pose. Game exports include the referenced clip.
+
+This first version supports FK bone animation with CPU linear blend skinning.
+SDEF/QDEF vertices use their linear weights; PMX IK, grant transforms, morphs,
+hair/clothing physics, VMD import and blending between clips are not implemented.
+Animation playback does not replace the model's material shader.
+
+Scene format v1.13 adds world-text data after the v1.12 animation binding
+and reads older scenes. Rebuild players before exporting v1.13 scenes,
+including the Android native player and its matching script SDK.
+
+## Android
+
+1. Once per engine checkout (needs the Android SDK + NDK, default `~/Android/Sdk`):
+   ```sh
+   nix-shell shell.nix --run scripts/android/build-player.sh
+   ```
+   This builds IlmeeePlayer as `build-android/jniLibs/arm64-v8a/libmain.so`
+   (plus SDL3, same version as the desktop one). Re-run this after engine
+   scene-format changes (including animation controllers and spring bones).
+   The build also exports `player-runtime-<abi>.json`; Android export checks
+   every ABI against the scene format before replacing a previous build.
+   Missing or outdated metadata means the native player needs rebuilding,
+   not that the project's scene should be deleted or downgraded.
+2. In the editor: **Build → Target: Android (APK)**, then **Build Game**.
+   The APK lands in `<project>/build/android/<Game>/<Game>.apk`
+   (the first build downloads the Android Gradle plugin).
+3. Plug in a phone with USB debugging on and press **Run**: the editor
+   installs the APK with `adb`, starts it and shows its log in Console → Build.
+
+Everything in `assets/` goes into the APK; on first start the game is
+extracted to the app's internal storage. Keep mobile projects' assets small.
+
+## Scene & Viewport Controls
+
+- **3D Viewport Navigation**:
+  - `RMB drag` — mouselook (FPS fly-camera)
+  - `WASD` — fly camera forward, left, backward, right
+  - `Q` / `E` — fly downward / upward
+  - `Shift` — fast movement multiplier
+- **Object Interaction & Layout**:
+  - `LMB click` — **Ray-Triangle Picking**: Casts a ray through the viewport to select the specific 3D model and individual mesh surface under the cursor.
+  - `LMB drag` — Move the currently selected mesh in the screen plane.
+  - **Drag-and-Drop Spawning**: Drag `.obj`, `.pmx`, or `.fbx` models from the File Explorer and drop them directly onto the viewport to instantiate them at that spatial point.
+  - **Drag-and-Drop Texturing**: Drag any texture image (`.png`, `.jpg`, etc.) onto a specific 3D mesh surface to bind it dynamically.
+- **Inspector Panel (Surfaces)**:
+  - Exposes all auto-detected submesh surfaces and material slots.
+  - Allows selecting individual surfaces to inspect properties or **Bind/Clear Custom Textures** on the fly.
+- **2D Mode Navigation** (no 3D mesh loaded):
+  - `RMB drag` — pan camera
+  - `Wheel` — zoom (0.1×–5×)
+  - Toolbar `Reset View` resets camera
+
+## Project Structure
+
+```
+src/cpp/
+  main.cpp                       # editor entry, CLI parsing
+  ApplicationManager.cpp         # lifecycle, thread-safe network synchronization, companion startup
+  Hub.cpp                        # IlmeeeHub launcher
+  core_engine/
+    SceneRenderer.cpp            # Vulkan mesh/viewport renderer, OBJ/PMX/FBX loaders, ray picking
+    TextureManager.cpp           # Vulkan dynamic texture & descriptor pool manager
+  ui/
+    MainWindow.cpp               # main shell, docking, and theme controller
+    HandlerChildWindow.cpp       # scene viewport, hierarchy, and surface inspector panels
+    HandlerProject.cpp           # project file explorer & drag-drop asset import
+assets/
+  3dmodels/                      # fallback test meshes
+  shaders/vulkan/                # vertex, fragment, and grid shader sources
+```
+
+## Project File Format
+
+Scenes are serialized to a custom high-performance binary `.ilmeeescene` format. 
+* **v1.0**: Stores entity counts, primitive/mesh kinds, transform fields, and path nodes.
+* **v1.1**: Appends per-entity light properties (range, spot angle, intensity, type, color, gamma).
+* **v1.2 (Current)**: Appends per-entity camera properties (near/far plane, projection, FOV) and **per-surface texture bindings** (resolves relative to project root or loads absolute paths).
+
+User preferences and recents live in the cross-platform `~/.ilmeeeengine/` location via `ilmeee::UserDataRoot()`.
+
+## Thread-Safe Companion Architecture
+
+The editor (`GameEngineSDL`) communicates with the engine runner (`HandlerIlmeeeEngine`) via a localized TCP loopback protocol over ports `27015` and `27016`. 
+* All blocking modal GUI actions (such as `Load Scene` native file dialogs) are safely offloaded to the main thread's main loop context using GLib's **`g_idle_add`** dispatching.
+* This ensures complete thread-safety across background network readers and the main rendering thread.
+
+## Status
+
+- Vulkan renderer with offscreen target + ImGui presentation: ✅
+- 2D sprite pipeline + dynamic grid overlay: ✅
+- 3D Primitives (Cube, Sphere, Plane) & Camera entities: ✅
+- 3D OBJ, PMX, and FBX loaders (normals, UVs, FNV-1a vertex dedup): ✅
+- Surfaces & Per-surface Texture Overrides (v1.2 Scene Graph): ✅
+- Ray-Triangle Picking & Viewport Drag-and-Drop: ✅
+- Audio engine integration: ⏳ planned
+- Android target: ✅ experimental (arm64 APK, Vulkan phones)

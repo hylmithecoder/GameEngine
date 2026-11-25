@@ -1,0 +1,312 @@
+#include "../../include/ui/Application.hpp"
+#include "../../include/core_engine/UserDataDir.hpp"
+#include "../../include/core_engine/net/Protocol.hpp"
+#include <SDL3/SDL.h>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+
+
+ApplicationManager::ApplicationManager() {
+  environment = std::make_unique<Environment>();
+  discordRich = std::make_unique<DiscordRichPresence>();
+
+  // Register cleanup tasks in reverse order of initialization
+  RegisterCleanupTask([this]() { CleanupWindow(); });
+  RegisterCleanupTask([this]() {
+    if (discordRich)
+      discordRich->Shutdown();
+  });
+  RegisterCleanupTask([this]() { CleanupNetwork(); });
+  RegisterCleanupTask([this]() { CleanupEngine(); });
+  RegisterCleanupTask([this]() { CleanupSDL(); });
+}
+
+ApplicationManager::~ApplicationManager() { Shutdown(); }
+
+bool ApplicationManager::Initialize() {
+  try {
+    ::Log("Initializing Application Manager...");
+
+    environment->detectDriveInfo();
+    environment->printEnvironment();
+    environment->printDriveInfo();
+
+    av_log_set_level(AV_LOG_ERROR);
+
+    // Create main window (powered by VulkanBase)
+    window = new MainWindow("Ilmeee Editor", 1280, 720);
+    if (!window || !window->Init("Ilmeee Editor", 1280, 720)) {
+      ::Log("Failed to initialize main window", Debug::LogLevel::CRASH);
+      return false;
+    }
+
+    // Propagate the standalone-debug fallback selector before opening
+    // any project. Only consumed when projectPath is empty.
+    window->debug2D = debug2D;
+
+    // The window's frame loop is what drives the IPC bus from here on.
+    window->ipcBus = ipcBus.get();
+
+    // If a project path was passed in (typically from IlmeeeHub via
+    // --project), open it now so the editor starts directly in-context.
+    // When unset, the editor keeps its hardcoded debug behavior — useful
+    // when running GameEngineSDL directly without going through Hub.
+    if (!projectPath.empty()) {
+      ::Log("Auto-opening project: " + projectPath, Debug::LogLevel::SUCCESS);
+      window->projectHandler.OpenProject(projectPath.c_str());
+    }
+
+    if (discordRich) {
+      discordRich->Init();
+    }
+
+    ::Log("Application Manager initialized successfully");
+    return true;
+
+  } catch (const std::exception &e) {
+    ::Log("Exception during initialization: " + std::string(e.what()),
+          Debug::LogLevel::CRASH);
+    return false;
+  }
+}
+
+bool ApplicationManager::StartMcpServer() {
+  if (mcpPort == 0) return true;
+  if (!window) return false;
+  mcpServer = std::make_unique<ilmeee::net::McpServer>(
+      [this](const std::string &name, const ilmeee::net::json &arguments) {
+        return window->HandleMcpTool(name, arguments);
+      });
+  const char *configured = std::getenv("ILMEEE_MCP_TOKEN");
+  const std::string token = configured && *configured
+      ? configured : ilmeee::net::proto::GenerateToken();
+  if (mcpPublicHost.empty())
+    if (const char *host = std::getenv("ILMEEE_MCP_PUBLIC_HOST"))
+      mcpPublicHost = host;
+  std::string error;
+  if (!mcpServer->Start(mcpPort, token, error, mcpPublicHost)) {
+    ::Log("[MCP] Failed to listen on 127.0.0.1:" + std::to_string(mcpPort) +
+              ": " + error, Debug::LogLevel::ERROR);
+    mcpServer.reset();
+    return false;
+  }
+  window->mcpServer = mcpServer.get();
+  ::Log("[MCP] Listening on http://127.0.0.1:" +
+            std::to_string(mcpPort) + "/mcp", Debug::LogLevel::SUCCESS);
+  if (!configured || !*configured)
+    ::Log("[MCP] Session token: " + token, Debug::LogLevel::INFO);
+  if (!mcpPublicHost.empty())
+    ::Log("[MCP] Public host: https://" + mcpPublicHost +
+              "/mcp/<token> (connector URL, token in path)",
+          Debug::LogLevel::SUCCESS);
+  return true;
+}
+
+bool ApplicationManager::StartIpcServer() {
+  using namespace ilmeee::net;
+
+  ipcToken = proto::GenerateToken();
+  ipcTransport = std::make_unique<WsServerTransport>();
+  BusConfig config;
+  config.role = BusRole::Server;
+  config.token = ipcToken;
+  ipcBus = std::make_unique<MessageBus>(*ipcTransport, config);
+
+  ipcBus->SetLogSink([](BusLogLevel level, const std::string &text) {
+    ::Log("[IPC] " + text, level == BusLogLevel::Error ? Debug::LogLevel::ERROR
+                           : level == BusLogLevel::Warning
+                               ? Debug::LogLevel::WARNING
+                               : Debug::LogLevel::INFO);
+  });
+
+  ipcBus->OnPeerJoined([this](const PeerInfo &peer) {
+    if (peer.role != proto::kRoleEngine)
+      return;
+    ::Log("[IPC] Engine connected (pid " + std::to_string(peer.pid) + ")",
+          Debug::LogLevel::SUCCESS);
+    ipcBus->Emit(peer.connection, proto::kSessionInit,
+                 {{"project", projectPath}});
+  });
+
+  ipcBus->OnPeerLeft([this](const PeerInfo &peer, const std::string &reason) {
+    if (peer.role != proto::kRoleEngine)
+      return;
+    ::Log("[IPC] Engine disconnected: " + reason,
+          isRunning ? Debug::LogLevel::WARNING : Debug::LogLevel::INFO);
+    ReapEngineIfExited();
+  });
+
+  if (!ipcBus->Start())
+    return false;
+  ::Log("[IPC] Core listening on " + ipcTransport->Url(),
+        Debug::LogLevel::SUCCESS);
+  return true;
+}
+
+bool ApplicationManager::LaunchEngine() {
+  using namespace ilmeee::net;
+  try {
+    ::Log("[IlmeeeEditor] Starting IPC server...");
+    isRunning = true;
+    if (!StartIpcServer()) {
+      ::Log("Failed to start IPC server", Debug::LogLevel::CRASH);
+      return false;
+    }
+
+    ::Log("[IlmeeeEditor] Launching engine process...");
+
+    // Resolve the handler next to this binary rather than relative to the
+    // working directory: the editor is launched from Hub, from a shell in the
+    // repo root, or from an installed bin/, and "./HandlerIlmeeeEngine" only
+    // happens to work in the last of those.
+    const std::string handler = ilmeee::SiblingExecutable("HandlerIlmeeeEngine");
+
+    // The URL travels in argv, the token in the environment (it stays out
+    // of `ps` / Task Manager). Output is inherited: the engine logs to the
+    // same console as the editor.
+    ilmeee::ProcessOptions opts;
+    opts.program = handler;
+    opts.args = {proto::kIpcUrlArg, ipcTransport->Url()};
+    opts.env = {{proto::kIpcTokenEnv, ipcToken}};
+    opts.captureOutput = false;
+    auto proc = std::make_unique<ilmeee::Process>();
+    std::string error;
+    if (!proc->Start(opts, error)) {
+      ::Log("Failed to start the engine process (" + handler + "): " + error,
+            Debug::LogLevel::CRASH);
+      return false;
+    }
+    const long pid = proc->Pid();
+    engineProcess = std::move(proc);
+    // No waiting here: the engine dials in on its own (retrying until we
+    // listen, which we already do) and announces itself with a handshake.
+    // OnPeerJoined sends it the session once that happens.
+    ::Log("[IlmeeeEditor] Engine process started (pid " + std::to_string(pid) +
+              ")",
+          Debug::LogLevel::SUCCESS);
+    return true;
+
+  } catch (const std::exception &e) {
+    ::Log("Exception during engine launch: " + std::string(e.what()),
+          Debug::LogLevel::CRASH);
+    return false;
+  }
+}
+
+void ApplicationManager::ReapEngineIfExited() {
+  if (!engineProcess)
+    return;
+  int code = 0;
+  if (!engineProcess->TryWait(code))
+    return;
+  ::Log("[IlmeeeEditor] Engine exited with code " + std::to_string(code),
+        code == 0 ? Debug::LogLevel::INFO : Debug::LogLevel::WARNING);
+  engineProcess.reset();
+}
+
+void ApplicationManager::Run() {
+  if (!window) {
+    ::Log("Cannot run - window not initialized", Debug::LogLevel::CRASH);
+    return;
+  }
+
+  ::Log("Starting main application via VulkanBase...",
+        Debug::LogLevel::SUCCESS);
+
+  // The main loop is now handled by VulkanBase::Run()
+  window->Run();
+
+  ::Log("Main application loop ended");
+}
+
+void ApplicationManager::Shutdown() {
+  // Dipanggil dua kali — sekali eksplisit (dari main / akhir Run),
+  // sekali implisit dari ~ApplicationManager. Idempoten via static
+  // flag (asumsi: hanya satu ApplicationManager per proses, yang
+  // dijaga oleh g_app unique_ptr di main.cpp).
+  // Tetap memproses cleanup walau isRunning==false, supaya thread &
+  // resource yang sempat dibuat saat init gagal di tengah jalan tetap
+  // di-tear-down dengan benar.
+  static bool shutdownDone = false;
+  if (shutdownDone)
+    return;
+  shutdownDone = true;
+
+  ::Log("Starting application shutdown...");
+
+  if (ipcBus && isRunning) {
+    using namespace ilmeee::net;
+    ConnectionId engine = ipcBus->PeerByRole(proto::kRoleEngine);
+    if (engine != kInvalidConnection)
+      engineStopRequested = ipcBus->Emit(engine, proto::kEngineStop);
+  }
+  isRunning = false;
+  shouldExit = true;
+
+  // Discord update thread harus di-join sebelum unique_ptr destroy
+  // DiscordRichPresence, kalau tidak destruktor std::thread bawaan
+  // panggil std::terminate.
+  if (discordRich) {
+    discordRich->Shutdown();
+  }
+
+  // Engine before network: it is still connected and acting on engine.stop,
+  // and it may need a moment to leave its loop.
+  CleanupEngine();
+  CleanupNetwork();
+  CleanupWindow();
+  CleanupSDL();
+  ::Log("Application shutdown complete");
+}
+
+void ApplicationManager::CleanupNetwork() {
+  if (window) {
+    window->ipcBus = nullptr;
+    window->mcpServer = nullptr;
+  }
+  if (mcpServer) {
+    mcpServer->Stop();
+    mcpServer.reset();
+  }
+  if (ipcBus) {
+    // Joins the transport's IO threads; nothing may Poll() after this.
+    ipcBus->Stop();
+    ipcBus.reset();
+  }
+  ipcTransport.reset();
+}
+
+void ApplicationManager::CleanupEngine() {
+  if (!engineProcess)
+    return;
+
+  // Give an engine that was told to stop the chance to do it cleanly;
+  // SIGTERM is the fallback, not the plan.
+  if (engineStopRequested) {
+    for (int i = 0; i < 40 && engineProcess; ++i) {
+      ReapEngineIfExited();
+      if (engineProcess)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+
+  if (engineProcess) {
+    if (engineStopRequested)
+      ::Log("[IlmeeeEditor] Engine did not stop within 2 s; terminating it",
+            Debug::LogLevel::WARNING);
+    engineProcess->Terminate();
+    engineProcess->Wait();
+    engineProcess.reset();
+  }
+}
+
+void ApplicationManager::CleanupWindow() {
+  // Window cleanup is handled by VulkanBase
+  window = nullptr;
+}
+
+void ApplicationManager::CleanupSDL() {
+  // SDL_Quit is handled by VulkanBase
+}

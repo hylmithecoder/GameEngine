@@ -1,0 +1,30 @@
+[package]
+name = "ilmeee-realtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Realtime collaboration server for the Ilmeee Engine editor"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3.34"
+hex = "0.4"
+indexmap = { version = "2.14.2", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.30.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

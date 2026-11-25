@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default game icon: a rounded tile with an "I". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#1F2A44"
+        android:pathData="M24,10h60a14,14 0,0 1,14 14v60a14,14 0,0 1,-14 14h-60a14,14 0,0 1,-14 -14v-60a14,14 0,0 1,14 -14z" />
+    <path android:fillColor="#5B8CFF"
+        android:pathData="M40,30h28v8h-10v32h10v8h-28v-8h10v-32h-10z" />
+</vector>

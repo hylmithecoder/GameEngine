@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Stages the Windows build into a self-contained folder, then makes a portable
+# zip and (when Inno Setup is available) an installer.
+#
+# Runs inside the MSYS2 UCRT64 shell (CI: .github/workflows/release-windows.yaml):
+#
+#   installer/windows/package.sh <build-dir> <version>
+#
+# Output in dist/:
+#   IlmeeeEngine-<version>-windows-x64.zip
+#   IlmeeeEngine-<version>-windows-x64-setup.exe
+set -euo pipefail
+
+BUILD=${1:?usage: package.sh <build-dir> <version>}
+VERSION=${2:?usage: package.sh <build-dir> <version>}
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+STAGE="$ROOT/dist/stage"
+NAME="IlmeeeEngine-$VERSION-windows-x64"
+
+rm -rf "$ROOT/dist"
+mkdir -p "$STAGE"
+cmake --install "$BUILD" --prefix "$STAGE"
+
+# Copy every DLL the binaries need from the MSYS2 prefix, recursively.
+# Left out on purpose:
+#   - Windows system DLLs (C:\Windows\...)
+#   - vulkan-1.dll: the GPU driver installs the real Vulkan loader; a bundled
+#     copy from MSYS2 would shadow it.
+copy_deps() {
+    local added=1
+    while [ "$added" = 1 ]; do   # repeat until a pass adds nothing (transitive deps)
+        added=0
+        while IFS= read -r -d '' bin; do
+            # ntldd line: "  name.dll => C:\msys64\ucrt64\bin\name.dll (0x...)"
+            while read -r dll arrow winpath _; do
+                [ "$arrow" = "=>" ] || continue
+                case "${winpath,,}" in
+                    *\\windows\\*|not|"") continue ;;
+                esac
+                [ "${dll,,}" = "vulkan-1.dll" ] && continue
+                [ -e "$STAGE/$dll" ] && continue
+                cp "$(cygpath -u "$winpath")" "$STAGE/$dll"
+                echo "  + $dll"
+                added=1
+            done < <(ntldd "$bin" 2>/dev/null)
+        done < <(find "$STAGE" -maxdepth 1 \( -iname '*.exe' -o -iname '*.dll' \) -print0)
+    done
+}
+echo "Bundling DLL dependencies"
+copy_deps
+
+# Nothing may still resolve into the MSYS2 prefix: that would work on the
+# build machine and fail on a user's PC.
+leaks=0
+while IFS= read -r -d '' bin; do
+    # vulkan-1.dll resolves into MSYS2 on the build machine only; it is left
+    # out on purpose (see copy_deps) and comes from the GPU driver at runtime.
+    if ntldd "$bin" | grep -iE '\\(msys64|ucrt64)\\' | grep -viE '^\s*vulkan-1\.dll\s'; then
+        echo "::error::$bin still depends on the MSYS2 prefix"; leaks=1
+    fi
+done < <(find "$STAGE" -maxdepth 1 \( -iname '*.exe' -o -iname '*.dll' \) -print0)
+[ "$leaks" = 0 ] || exit 1
+
+cp "$ROOT/assets/icons/app_icon.ico" "$STAGE/IlmeeeEngine.ico"
+
+# MSYS2's OpenSSL looks for trusted CAs inside the MSYS2 tree, which users
+# don't have; ilmeee::net::ResolveCaFile picks up cacert.pem next to the exe
+# (wss:// collab, the Hub's workspace list).
+CA_BUNDLE=""
+for c in /ucrt64/etc/ssl/certs/ca-bundle.crt /usr/ssl/certs/ca-bundle.crt /etc/ssl/certs/ca-bundle.crt; do
+    [ -f "$c" ] && CA_BUNDLE=$c && break
+done
+if [ -z "$CA_BUNDLE" ]; then
+    echo "::error::no CA bundle found to ship as cacert.pem"; exit 1
+fi
+cp "$CA_BUNDLE" "$STAGE/cacert.pem"
+echo "  + cacert.pem (from $CA_BUNDLE)"
+cat > "$STAGE/VERSION.txt" <<EOF
+Ilmeee Engine $VERSION
+commit ${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}
+built $(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+
+echo "Staged:"
+find "$STAGE" -maxdepth 1 -type f | sed "s|$STAGE/|  |" | sort
+
+# Portable zip.
+(cd "$ROOT/dist" && mv stage "$NAME" && zip -qr "$NAME.zip" "$NAME" && mv "$NAME" stage)
+echo "dist/$NAME.zip"
+
+# Installer.
+ISCC="$(command -v ISCC.exe || command -v iscc || true)"
+if [ -z "$ISCC" ]; then
+    for c in "/c/Program Files (x86)"/Inno\ Setup*/ISCC.exe "/c/Program Files"/Inno\ Setup*/ISCC.exe; do
+        [ -x "$c" ] && ISCC=$c && break
+    done
+fi
+if [ -z "$ISCC" ]; then
+    if [ -n "${CI:-}" ]; then
+        echo "::error::Inno Setup (ISCC.exe) not found"; exit 1
+    fi
+    echo "Inno Setup not found: skipping the installer (zip only)"
+    exit 0
+fi
+echo "Using $ISCC"
+# MSYS2 rewrites arguments that start with "/" into Windows paths
+# ("/Qp" -> "C:/msys64/Qp"), which ISCC then reads as extra script names.
+# The paths below are already Windows paths (cygpath -w), so turn that off.
+MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$ISCC" /Qp \
+    "/DAppVersion=$VERSION" \
+    "/DStageDir=$(cygpath -w "$STAGE")" \
+    "/DOutputDir=$(cygpath -w "$ROOT/dist")" \
+    "/DOutputName=$NAME-setup" \
+    "$(cygpath -w "$ROOT/installer/windows/IlmeeeEngine.iss")"
+echo "dist/$NAME-setup.exe"

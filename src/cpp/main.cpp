@@ -1,0 +1,409 @@
+#include "../../include/core_engine/Debugger.hpp"
+#include "../../include/core_engine/SceneRenderer.hpp"
+#include "../../include/core_engine/TextureManager.hpp"
+#include "../../include/ui/Application.hpp"
+#include "../../include/core_engine/UserDataDir.hpp"
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_platform.h>
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+#ifdef _WIN32
+#include <io.h>
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+// Global state management
+atomic<bool> g_shutdown_requested{false};
+using namespace Debug;
+
+// Global application manager
+unique_ptr<ApplicationManager> g_app;
+
+// Signal handlers for proper cleanup
+void SignalHandler(int signal) {
+  const char *signal_name = "UNKNOWN";
+  switch (signal) {
+  case SIGINT:
+    signal_name = "SIGINT (Ctrl+C)";
+    break;
+  case SIGTERM:
+    signal_name = "SIGTERM";
+    break;
+  case SIGABRT:
+    signal_name = "SIGABRT";
+    break;
+#ifndef _WIN32
+  case SIGQUIT:
+    signal_name = "SIGQUIT";
+    break;
+  case SIGHUP:
+    signal_name = "SIGHUP";
+    break;
+#endif
+  }
+
+  Log("Received signal: " + string(signal_name) + " (" + to_string(signal) +
+      ")");
+
+  // Set shutdown flag
+  g_shutdown_requested.store(true);
+
+  if (g_app) {
+    g_app->Shutdown();
+  }
+
+  // Give some time for cleanup
+  this_thread::sleep_for(chrono::milliseconds(100));
+
+  exit(signal);
+}
+
+// Setup signal handlers for Linux
+void SetupSignalHandlers() {
+#ifdef _WIN32
+  // The CRT only knows these; closing the console arrives as SIGINT/SIGTERM.
+  std::signal(SIGINT, SignalHandler);
+  std::signal(SIGTERM, SignalHandler);
+  std::signal(SIGABRT, SignalHandler);
+  Log("Signal handlers configured for Windows");
+  return;
+#else
+  struct sigaction sa;
+  sa.sa_handler = SignalHandler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART; // Restart interrupted system calls
+
+  // Handle common termination signals
+  sigaction(SIGINT, &sa, nullptr);  // Ctrl+C
+  sigaction(SIGTERM, &sa, nullptr); // Termination request
+  sigaction(SIGABRT, &sa, nullptr); // Abort signal
+  sigaction(SIGQUIT, &sa, nullptr); // Quit signal (Ctrl+\)
+  sigaction(SIGHUP, &sa, nullptr);  // Hang up signal
+
+  // Ignore SIGPIPE to prevent crashes on broken pipes
+  signal(SIGPIPE, SIG_IGN);
+
+  Log("Signal handlers configured for Linux");
+#endif
+}
+
+// Check if running in terminal
+bool IsRunningInTerminal() {
+#ifdef _WIN32
+  return _isatty(_fileno(stdin)) && _isatty(_fileno(stdout));
+#else
+  return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+#endif
+}
+
+// Get Linux distribution name from /etc/os-release or /usr/lib/os-release
+string GetLinuxDistro() {
+  ifstream file("/etc/os-release");
+  if (!file.is_open()) {
+    file.open("/usr/lib/os-release");
+  }
+  if (!file.is_open()) {
+    return "Unknown Linux";
+  }
+
+  string line;
+  string fallbackName;
+  while (getline(file, line)) {
+    if (line.rfind("PRETTY_NAME=", 0) == 0) {
+      string val = line.substr(12);
+      if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') ||
+                              (val.front() == '\'' && val.back() == '\''))) {
+        val = val.substr(1, val.size() - 2);
+      }
+      return val;
+    } else if (line.rfind("NAME=", 0) == 0 && fallbackName.empty()) {
+      string val = line.substr(5);
+      if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') ||
+                              (val.front() == '\'' && val.back() == '\''))) {
+        val = val.substr(1, val.size() - 2);
+      }
+      fallbackName = val;
+    }
+  }
+
+  return fallbackName.empty() ? "Unknown Linux" : fallbackName;
+}
+
+// Print startup information
+void PrintStartupInfo() {
+  Log("=== Ilmee Editor Starting ===");
+  string getPlatform = SDL_GetPlatform();
+  Log("Platform: " + getPlatform);
+  if (getPlatform == "Linux") {
+    Log("Distro: " + GetLinuxDistro());
+  }
+  Log("Terminal: " + string(IsRunningInTerminal() ? "Yes" : "No"));
+
+  // Get process ID
+#ifdef _WIN32
+  Log("Process ID: " + to_string(_getpid()));
+#else
+  Log("Process ID: " + to_string(getpid()));
+#endif
+
+  // Get user information
+  char *user = getenv("USER");
+  if (!user)
+    user = getenv("USERNAME");
+  if (user) {
+    Log("User: " + string(user));
+  }
+
+#ifndef _WIN32
+  // Get display information
+  char *display = getenv("DISPLAY");
+  if (display) {
+    Log("Display: " + string(display));
+  } else {
+    Log("Display: Not set (may be running headless)");
+  }
+
+  // Check for Wayland
+  char *wayland_display = getenv("WAYLAND_DISPLAY");
+  if (wayland_display) {
+    Log("Wayland Display: " + string(wayland_display));
+  }
+#endif
+}
+
+// Check system requirements
+bool CheckSystemRequirements() {
+  Log("Checking system requirements...");
+
+  // Check if we have access to display
+#ifndef _WIN32
+  if (!getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
+    Log("Warning: No display environment detected", Debug::LogLevel::WARNING);
+    Log("Make sure you're running in a graphical environment or via SSH with "
+        "X11 forwarding",
+        Debug::LogLevel::WARNING);
+  }
+#endif
+
+  // Check SDL version
+  int compiled = SDL_VERSION;
+  int linked = SDL_GetVersion();
+
+  Log("SDL Version - Compiled: " + to_string(SDL_VERSIONNUM_MAJOR(compiled)) +
+      "." + to_string(SDL_VERSIONNUM_MINOR(compiled)) + "." +
+      to_string(SDL_VERSIONNUM_MICRO(compiled)));
+  Log("SDL Version - Linked: " + to_string(SDL_VERSIONNUM_MAJOR(linked)) + "." +
+      to_string(SDL_VERSIONNUM_MINOR(linked)) + "." +
+      to_string(SDL_VERSIONNUM_MICRO(linked)));
+
+  return true;
+}
+
+// Main application entry point
+int main(int argc, char *argv[]) {
+  // Force line buffering on stdout/stderr so Log output streams to a
+  // parent's pipe (e.g. IlmeeeHub's console) line-by-line instead of
+  // sitting in a 4KB buffer until the process exits. When stdout is a
+  // terminal glibc would line-buffer anyway; this only matters when
+  // launched under Hub.
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);
+  std::setvbuf(stderr, nullptr, _IOLBF, 0);
+
+  // The editor loads assets/ (shaders, icons, fonts) relative to the working
+  // directory. Started from a shortcut or another folder, an installed editor
+  // (assets/ next to the exe, as on Windows) still finds them.
+  {
+    std::error_code ec;
+    const auto exeDir = ilmeee::ExecutableDir();
+    if (!std::filesystem::is_directory("assets", ec) &&
+        std::filesystem::is_directory(exeDir / "assets", ec))
+      std::filesystem::current_path(exeDir, ec);
+  }
+
+  // Print startup information
+  PrintStartupInfo();
+
+  // Set up signal handlers
+  SetupSignalHandlers();
+
+  // Check system requirements
+  if (!CheckSystemRequirements()) {
+    Log("System requirements check failed", Debug::LogLevel::CRASH);
+    return 1;
+  }
+
+  // CLI flags:
+  //   --project <abs_path> | --project=<path>
+  //       When provided, the editor auto-opens this project.
+  //   --2d | --2d=true|false
+  //       Only meaningful in standalone debug mode (no --project).
+  //       When true, the debug fallback loads a 2D sprite scene
+  //       (assets/testimage.png) instead of the default 3D OBJ.
+  //   --mcp [--mcp-port 9220]  Enable local MCP in the editor.
+  //   --mcp-public-host <host>  Also accept MCP requests forwarded by a
+  //       tunnel/reverse proxy for this hostname (implies --mcp).
+  std::string cliProjectPath;
+  bool cliDebug2D = false;
+  auto parseBoolFlag = [](const std::string &v) {
+    return v == "true" || v == "1" || v == "yes" || v == "on";
+  };
+  int cliMcpPort = 0;
+  std::string cliMcpPublicHost;
+  auto parseMcpPort = [](const std::string &value) -> int {
+    size_t used = 0;
+    const int port = std::stoi(value, &used);
+    if (used != value.size() || port < 1 || port > 65535)
+      throw std::invalid_argument("MCP port out of range");
+    return port;
+  };
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if (a == "--project" && i + 1 < argc) {
+      cliProjectPath = argv[++i];
+    } else if (a.rfind("--project=", 0) == 0) {
+      cliProjectPath = a.substr(strlen("--project="));
+    } else if (a == "--2d") {
+      cliDebug2D = true;
+    } else if (a.rfind("--2d=", 0) == 0) {
+      cliDebug2D = parseBoolFlag(a.substr(strlen("--2d=")));
+    } else if (a == "--debug") {
+      Debug::g_DebugMode = true;
+    } else if (a.rfind("--debug=", 0) == 0) {
+      Debug::g_DebugMode = parseBoolFlag(a.substr(strlen("--debug=")));
+    } else if (a == "--mcp") {
+      if (cliMcpPort == 0) cliMcpPort = 9220;
+    } else if (a == "--mcp-port" && i + 1 < argc) {
+      try { cliMcpPort = parseMcpPort(argv[++i]); }
+      catch (...) { Log("Invalid --mcp-port", Debug::LogLevel::ERROR); return 1; }
+    } else if (a.rfind("--mcp-port=", 0) == 0) {
+      try { cliMcpPort = parseMcpPort(a.substr(strlen("--mcp-port="))); }
+      catch (...) { Log("Invalid --mcp-port", Debug::LogLevel::ERROR); return 1; }
+    } else if (a == "--mcp-public-host" && i + 1 < argc) {
+      cliMcpPublicHost = argv[++i];
+      if (cliMcpPort == 0) cliMcpPort = 9220;
+    } else if (a.rfind("--mcp-public-host=", 0) == 0) {
+      cliMcpPublicHost = a.substr(strlen("--mcp-public-host="));
+      if (cliMcpPort == 0) cliMcpPort = 9220;
+    } else if (a == "--mcp-port") {
+      Log("Missing --mcp-port value", Debug::LogLevel::ERROR);
+      return 1;
+    } else if (a == "--collab-room" && i + 1 < argc) {
+      // Realtime collab: join this room as soon as the project is open
+      // (Hub "Online workspaces"). Read by MainWindow::UpdateCollab.
+#ifdef _WIN32
+      _putenv_s("ILMEEE_COLLAB_ROOM", argv[++i]);
+#else
+      setenv("ILMEEE_COLLAB_ROOM", argv[++i], 1);
+#endif
+    }
+  }
+  if (Debug::g_DebugMode) {
+    // --debug starts the editor in Inspect Mode (hover-to-source).
+    // The user can still toggle it at runtime with F2.
+    Debug::g_InspectModeActive = true;
+    Log("Interactive Debug Overlay enabled (F2 toggles at runtime, "
+        "Ctrl+C copies file:line).",
+        Debug::LogLevel::SUCCESS);
+  }
+  if (!cliProjectPath.empty()) {
+    Log("CLI project path: " + cliProjectPath, Debug::LogLevel::SUCCESS);
+  } else {
+    Log(std::string(
+            "No --project supplied; running in standalone debug mode (") +
+        (cliDebug2D ? "2D sprite" : "3D OBJ") + " fallback).");
+  }
+
+  try {
+    // Create application manager
+    Log("Creating application manager...");
+    g_app = make_unique<ApplicationManager>();
+    if (!cliProjectPath.empty()) {
+      g_app->SetProjectPath(cliProjectPath);
+    }
+    g_app->SetDebug2D(cliDebug2D);
+    g_app->SetMcpPort(cliMcpPort);
+    g_app->SetMcpPublicHost(cliMcpPublicHost);
+
+    // Launch engine
+    Log("Launching engine...");
+    if (!g_app->LaunchEngine()) {
+      Log("Failed to launch engine", Debug::LogLevel::CRASH);
+      return 1;
+    }
+
+    // Initialize application
+    Log("Initializing application...");
+    if (!g_app->Initialize()) {
+      Log("Failed to initialize application", Debug::LogLevel::CRASH);
+      return 1;
+    }
+    if (!g_app->StartMcpServer()) {
+      Log("Failed to start MCP server", Debug::LogLevel::CRASH);
+      return 1;
+    }
+
+    Log("Application initialized successfully");
+    Log("Entering main loop...");
+
+    // Run main loop
+    g_app->Run();
+
+    Log("Main loop exited");
+
+    // Explicit shutdown before cleanup
+    Log("Shutting down application...");
+    g_app->Shutdown();
+    g_app.reset();
+    g_app = nullptr;
+
+    Log("Application manager cleaned up");
+    Log("=== Ilmee Editor Terminated Successfully ===");
+    return 0;
+
+  } catch (const exception &e) {
+    Log("Unhandled exception: " + string(e.what()), Debug::LogLevel::CRASH);
+
+    if (g_app) {
+      try {
+        g_app->Shutdown();
+        g_app.reset();
+        g_app = nullptr;
+      } catch (...) {
+        Log("Exception during emergency shutdown", Debug::LogLevel::CRASH);
+      }
+    }
+
+    Log("=== Ilmee Editor Terminated with Error ===");
+    return 1;
+
+  } catch (...) {
+    Log("Unknown exception caught", Debug::LogLevel::CRASH);
+
+    if (g_app) {
+      try {
+        g_app->Shutdown();
+        g_app.reset();
+        g_app = nullptr;
+      } catch (...) {
+        Log("Exception during emergency shutdown", Debug::LogLevel::CRASH);
+        // Ignore exceptions during emergency shutdown
+      }
+    }
+
+    Log("=== Ilmee Editor Terminated with Unknown Error ===");
+    return 1;
+  }
+}

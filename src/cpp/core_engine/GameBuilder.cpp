@@ -1,0 +1,1081 @@
+#include "../../../include/core_engine/GameBuilder.hpp"
+#include "../../../include/core_engine/IlmeeeAsset.hpp"
+#include "../../../include/core_engine/NativeScripts.hpp"
+#include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../include/core_engine/Prefab.hpp"
+#include "../../../include/core_engine/ModelDependencies.hpp"
+#include "../../../include/core_engine/AnimationController.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
+#include "../../../vendor/nlohmann/json.hpp"
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <map>
+#include <set>
+#ifdef _WIN32
+// _pclose returns the command's exit code directly.
+#define popen _popen
+#define pclose _pclose
+static bool ExitedOk(int status) { return status == 0; }
+#else
+#include <sys/wait.h>
+static bool ExitedOk(int status) {
+  return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+#endif
+
+namespace ilmeee {
+
+namespace fs = std::filesystem;
+
+namespace {
+
+// An external model is copied together with its folder (PMX/OBJ keep their
+// textures next to them). Past this size that folder is clearly not "the
+// model's folder" — Downloads, $HOME — and only the file itself is copied.
+constexpr size_t kMaxModelDirFiles = 2000;
+constexpr std::uintmax_t kMaxModelDirBytes = 2ull << 30; // 2 GiB
+
+// True if `p` is `dir` or below it. Both must already be canonical.
+bool IsWithin(const fs::path &p, const fs::path &dir) {
+  fs::path rel = p.lexically_relative(dir);
+  return !rel.empty() && *rel.begin() != "..";
+}
+
+bool IsStreamUrl(const std::string &path) {
+  auto startsWithIgnoreCase = [&](const char *prefix, size_t len) {
+    if (path.size() <= len)
+      return false;
+    for (size_t i = 0; i < len; ++i)
+      if (std::tolower((unsigned char)path[i]) != prefix[i])
+        return false;
+    return !std::isspace((unsigned char)path[len]) && path[len] != '/';
+  };
+  return startsWithIgnoreCase("http://", 7) ||
+         startsWithIgnoreCase("https://", 8);
+}
+
+fs::path Canonical(const fs::path &p) {
+  std::error_code ec;
+  fs::path c = fs::weakly_canonical(p, ec);
+  return ec ? fs::absolute(p).lexically_normal() : c;
+}
+
+std::string HumanBytes(std::uintmax_t b) {
+  char buf[32];
+  if (b >= (1ull << 30))
+    std::snprintf(buf, sizeof buf, "%.1f GiB", b / double(1ull << 30));
+  else if (b >= (1ull << 20))
+    std::snprintf(buf, sizeof buf, "%.1f MiB", b / double(1ull << 20));
+  else
+    std::snprintf(buf, sizeof buf, "%.1f KiB", b / 1024.0);
+  return buf;
+}
+
+std::string ShellQuote(const std::string &s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'')
+      out += "'\\''";
+    else
+      out += c;
+  }
+  return out + "'";
+}
+
+class Builder {
+public:
+  Builder(const GameBuildOptions &o, const BuildLog &log, GameBuildResult &r)
+      : o_(o), log_(log), r_(r) {}
+
+  void Say(const std::string &s) const {
+    if (log_)
+      log_(s);
+  }
+
+  void CopyFile(const fs::path &src, const fs::path &dst) {
+    fs::create_directories(dst.parent_path());
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
+    copiedTargets_.insert(dst.lexically_normal());
+    ++r_.filesCopied;
+    std::error_code ec;
+    r_.bytesCopied += fs::file_size(dst, ec);
+    if (r_.filesCopied % 500 == 0)
+      Say("  ... " + std::to_string(r_.filesCopied) + " files (" +
+          HumanBytes(r_.bytesCopied) + ")");
+  }
+
+  // CopyFile, once per destination (scenes share models and textures).
+  void CopyOnce(const fs::path &src, const fs::path &dst) {
+    if (!copiedTargets_.count(dst.lexically_normal()))
+      CopyFile(src, dst);
+  }
+
+  // Copies a model and only the files it loads (see ModelDependencies) to
+  // <game>/<dstRel>. False if the model can't be parsed: the caller then
+  // falls back to copying its folder.
+  bool CopyModel(const fs::path &src, const fs::path &dstRel) {
+    std::vector<ModelDependency> deps;
+    std::string err;
+    if (!ListModelDependencies(src, deps, &err)) {
+      Say("  ! cannot read " + src.filename().string() + " (" + err +
+          "); copying its folder instead");
+      return false;
+    }
+    CopyOnce(src, gameDir_ / dstRel);
+    const fs::path dstDir = (gameDir_ / dstRel).parent_path();
+    for (const ModelDependency &d : deps) {
+      const fs::path dst = (dstDir / d.relative).lexically_normal();
+      if (!IsWithin(dst, gameDir_)) {
+        Say("  ! " + d.relative.generic_string() + " (used by " +
+            src.filename().string() + ") lies outside the game; skipped");
+        continue;
+      }
+      CopyOnce(d.source, dst);
+    }
+    return true;
+  }
+
+  void CopyTree(const fs::path &src, const fs::path &dst) {
+    fs::create_directories(dst);
+    for (auto it = fs::recursive_directory_iterator(
+             src, fs::directory_options::skip_permission_denied);
+         it != fs::recursive_directory_iterator(); ++it) {
+      fs::path target = dst / it->path().lexically_relative(src);
+      if (it->is_directory())
+        fs::create_directories(target);
+      else if (it->is_regular_file())
+        CopyFile(it->path(), target);
+    }
+  }
+
+  // May this folder be copied wholesale with a model? Not if it is huge, and
+  // never if it holds the build output (a model sitting directly in the
+  // project root would otherwise copy the build into itself, forever).
+  bool CanCopyWhole(const fs::path &dir) const {
+    if (IsWithin(out_, dir) || IsWithin(stage_, dir))
+      return false;
+    size_t files = 0;
+    std::uintmax_t bytes = 0;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(
+             dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+      if (!it->is_regular_file(ec))
+        continue;
+      bytes += it->file_size(ec);
+      if (++files > kMaxModelDirFiles || bytes > kMaxModelDirBytes)
+        return false;
+    }
+    return true;
+  }
+
+  std::string UniqueExternalName(const std::string &want) {
+    std::string name = want.empty() ? "external" : want;
+    std::string candidate = name;
+    for (int n = 2; usedExternalNames_.count(candidate); ++n)
+      candidate = name + "_" + std::to_string(n);
+    usedExternalNames_.insert(candidate);
+    return candidate;
+  }
+
+  // Makes a scene reference valid inside the built game and returns the path
+  // to store in its scene file (relative to the game root).
+  // `externalDir`: where a lone file from outside the project is gathered
+  // (assets/external/<externalDir>/).
+  std::string Relocate(const std::string &ref, bool isModel,
+                       const char *externalDir = "textures") {
+    if (ref.empty() || IsStreamUrl(ref))
+      return ref;
+    fs::path p(ref);
+    fs::path abs = Canonical(p.is_absolute() ? p : root_ / p);
+    std::error_code ec;
+    if (!fs::exists(abs, ec)) {
+      ++r_.missingReferences;
+      Say("  ! missing file referenced by the scene: " + ref);
+      return ref;
+    }
+    if (IsWithin(abs, assets_)) {
+      const fs::path rel = abs.lexically_relative(root_);
+      if (o_.includeUnusedAssets) // copied with assets/ already
+        return rel.generic_string();
+      if (!isModel) {
+        CopyOnce(abs, gameDir_ / rel);
+      } else if (!CopyModel(abs, rel)) {
+        // Unreadable model: its folder, unless that is assets/ itself.
+        if (abs.parent_path() != assets_ && CanCopyWhole(abs.parent_path())) {
+          if (copiedDirs_.insert({abs.parent_path(), rel.parent_path()}).second)
+            CopyTree(abs.parent_path(), gameDir_ / rel.parent_path());
+        } else {
+          CopyOnce(abs, gameDir_ / rel);
+        }
+      }
+      return rel.generic_string();
+    }
+
+    ++r_.relocatedReferences;
+    if (IsWithin(abs, root_)) {
+      // In the project but outside assets/: same relative place in the game.
+      fs::path rel = abs.lexically_relative(root_);
+      if (isModel && CopyModel(abs, rel)) {
+        // model + the files it loads
+      } else if (isModel && CanCopyWhole(abs.parent_path())) {
+        if (copiedDirs_.insert({abs.parent_path(), rel.parent_path()}).second)
+          CopyTree(abs.parent_path(), gameDir_ / rel.parent_path());
+      } else {
+        CopyOnce(abs, gameDir_ / rel);
+      }
+      return rel.generic_string();
+    }
+
+    // Outside the project: gather under assets/external/.
+    if (isModel) {
+      fs::path srcDir = abs.parent_path();
+      auto found = copiedDirs_.find(srcDir);
+      fs::path dstDir;
+      if (found != copiedDirs_.end()) {
+        dstDir = found->second;
+      } else {
+        dstDir = fs::path("assets/external") /
+                 UniqueExternalName(srcDir.filename().string());
+        copiedDirs_[srcDir] = dstDir;
+        if (CopyModel(abs, dstDir / abs.filename())) {
+          Say("  + external model " + abs.string());
+        } else if (CanCopyWhole(srcDir)) {
+          Say("  + external model folder " + srcDir.string());
+          CopyTree(srcDir, gameDir_ / dstDir);
+        } else {
+          Say("  ! " + srcDir.string() +
+              " is too large to copy whole; copying only " +
+              abs.filename().string() + " (its textures may be missing)");
+        }
+      }
+      fs::path dst = dstDir / abs.filename();
+      std::error_code ec2;
+      if (!fs::exists(gameDir_ / dst, ec2))
+        CopyFile(abs, gameDir_ / dst);
+      return dst.generic_string();
+    }
+
+    auto found = copiedFiles_.find(abs);
+    if (found != copiedFiles_.end())
+      return found->second.generic_string();
+    fs::path dst = fs::path("assets/external") / externalDir /
+                   UniqueExternalName(abs.filename().string());
+    Say(std::string("  + external ") + externalDir + " " + abs.string());
+    CopyFile(abs, gameDir_ / dst);
+    copiedFiles_[abs] = dst;
+    return dst.generic_string();
+  }
+
+  // Data assets (.ilmeeeasset) referenced by script values: copied with the
+  // assets they reference in turn, and their ScriptableObject class compiled.
+  // Prefabs (.ilmeeeprefab) travel the same way: as PrefabRef fields
+  // (Asset values) or as plain string fields holding a prefab path.
+  void RelocateAssetValues(std::vector<ScriptValue> &values) {
+    const auto relocate = [&](ScriptValue &value) {
+      if (value.string.empty())
+        return;
+      value.string = IsPrefabPath(value.string) ? CopyPrefab(value.string)
+                                                : CopyDataAsset(value.string);
+    };
+    const auto relocateString = [&](ScriptValue &value) {
+      if (IsPrefabPath(value.string))
+        value.string = CopyPrefab(value.string);
+    };
+    for (auto &value : values) {
+      if (value.type == ScriptValueType::Asset)
+        relocate(value);
+      if (value.type == ScriptValueType::String)
+        relocateString(value);
+      if (value.type == ScriptValueType::List &&
+          value.elementType == ScriptValueType::Asset)
+        for (auto &item : value.items)
+          relocate(item);
+      if (value.type == ScriptValueType::List &&
+          value.elementType == ScriptValueType::String)
+        for (auto &item : value.items)
+          relocateString(item);
+    }
+  }
+  // A prefab plus everything its objects use (models, textures, media,
+  // scripts, data assets, other prefabs), rewritten with game paths.
+  std::string CopyPrefab(const std::string &ref) {
+    fs::path original(ref);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    if (const auto done = prefabs_.find(original); done != prefabs_.end())
+      return done->second;
+    IlmeeeScene prefab;
+    if (!LoadPrefab(original.string(), prefab)) {
+      ++r_.missingReferences;
+      Say("  ! missing or unreadable prefab: " + ref);
+      return ref;
+    }
+    const auto relocated = Relocate(original.string(), false, "prefabs");
+    prefabs_[original] = relocated; // before recursing: prefabs may cycle
+    for (SceneEntity &e : prefab.entities)
+      RelocateEntity(e);
+    fs::create_directories((gameDir_ / relocated).parent_path());
+    if (!SavePrefab((gameDir_ / relocated).string(), prefab))
+      throw std::runtime_error("cannot write " + (gameDir_ / relocated).string());
+    Say("  prefab " + relocated + " (" + std::to_string(prefab.entities.size()) +
+        " objects)");
+    return relocated;
+  }
+  std::string CopyDataAsset(const std::string &ref) {
+    fs::path original(ref);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    if (const auto done = dataAssets_.find(original); done != dataAssets_.end())
+      return done->second;
+    DataAssetFile asset;
+    if (!LoadDataAsset(original.string(), asset)) {
+      ++r_.missingReferences;
+      Say("  ! missing or unreadable data asset: " + ref);
+      return ref;
+    }
+    const auto relocated = Relocate(original.string(), false, "data");
+    dataAssets_[original] = relocated; // before recursing: assets may cycle
+    nativeSources_.insert(asset.source);
+    RelocateAssetValues(asset.values);
+    fs::create_directories((gameDir_ / relocated).parent_path());
+    if (!SaveDataAsset((gameDir_ / relocated).string(), asset))
+      throw std::runtime_error("cannot write " + (gameDir_ / relocated).string());
+    return relocated;
+  }
+
+  std::string CopyController(const std::string &source) {
+    fs::path original(source);
+    if (original.is_relative()) original = root_ / original;
+    original = Canonical(original);
+    AnimationController controller;
+    std::string error;
+    if (!LoadAnimationController(original.string(), controller, error)) throw std::runtime_error(error);
+    const auto relocated = Relocate(original.string(), false, "controllers");
+    for (auto *slot : {&controller.idle, &controller.walk, &controller.run}) {
+      if (slot->empty()) continue;
+      fs::path clip(*slot);
+      if (clip.is_relative()) clip = original.parent_path() / clip;
+      const auto destination = Relocate(clip.string(), false, "animations");
+      *slot = fs::path(destination).lexically_relative(fs::path(relocated).parent_path()).generic_string();
+    }
+    if (!SaveAnimationController((gameDir_ / relocated).string(), controller, error)) throw std::runtime_error(error);
+    return relocated;
+  }
+
+  // Rewrites one scene/prefab entity's references to paths inside the game
+  // and copies what they point at.
+  void RelocateEntity(SceneEntity &e) {
+    for (auto &script : e.scripts) {
+      nativeSources_.insert(script.source);
+      RelocateAssetValues(script.values);
+    }
+    if (e.kind == PrimitiveKind::ExternalObj ||
+        e.kind == PrimitiveKind::ExternalPmx)
+      e.externalPath = Relocate(e.externalPath, true);
+    for (SurfaceTexture &t : e.surfaceTextures)
+      t.texturePath = Relocate(t.texturePath, false);
+    if ((e.kind == PrimitiveKind::UiImage ||
+         e.kind == PrimitiveKind::UiButton) && !e.uiImagePath.empty())
+      e.uiImagePath = Relocate(e.uiImagePath, false);
+    if (!e.audio.clip.empty())
+      e.audio.clip = Relocate(e.audio.clip, false, "audio");
+    if (!e.dialog.file.empty())
+      e.dialog.file = Relocate(e.dialog.file, false, "dialog");
+    if (!e.animation.clip.empty())
+      e.animation.clip = Relocate(e.animation.clip, false, "animations");
+    if (!e.animation.controller.empty()) e.animation.controller = CopyController(e.animation.controller);
+    if (!e.video.clip.empty() && !IsStreamUrl(e.video.clip)) {
+      const fs::path original = Canonical(
+          fs::path(e.video.clip).is_absolute() ? fs::path(e.video.clip)
+                                               : root_ / e.video.clip);
+      e.video.clip = Relocate(e.video.clip, false, "video");
+      if (o_.target == BuildTarget::Android && o_.androidMaxVideoHeight > 0)
+        PrepareVideoForPhone(original, gameDir_ / e.video.clip);
+    }
+  }
+
+  void CopyScenes() {
+    fs::path src = root_ / "scenes";
+    for (auto it = fs::recursive_directory_iterator(
+             src, fs::directory_options::skip_permission_denied);
+         it != fs::recursive_directory_iterator(); ++it) {
+      if (!it->is_regular_file())
+        continue;
+      fs::path rel = it->path().lexically_relative(src);
+      fs::path dst = gameDir_ / "scenes" / rel;
+      IlmeeeScene scene;
+      if (it->path().extension() != ".ilmeeescene" ||
+          !LoadScene(it->path().string(), scene)) {
+        if (it->path().extension() == ".ilmeeescene")
+          Say("  ! could not read " + rel.string() + "; copied unchanged");
+        CopyFile(it->path(), dst);
+        continue;
+      }
+      for (SceneEntity &e : scene.entities)
+        RelocateEntity(e);
+      fs::create_directories(dst.parent_path());
+      if (!SaveScene(dst.string(), scene))
+        throw std::runtime_error("cannot write " + dst.string());
+      ++r_.filesCopied;
+      Say("  scene " + rel.generic_string() + " (" +
+          std::to_string(scene.entities.size()) + " objects)");
+    }
+  }
+
+  // What stayed behind in assets/: reported so a missing file is easy to
+  // spot (e.g. one a script loads by name).
+  void CountUnusedAssets() {
+    std::error_code ec;
+    if (!fs::is_directory(assets_, ec))
+      return;
+    for (auto it = fs::recursive_directory_iterator(
+             assets_, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+      if (!it->is_regular_file(ec))
+        continue;
+      const fs::path dst =
+          (gameDir_ / it->path().lexically_relative(root_)).lexically_normal();
+      if (copiedTargets_.count(dst) || IsWithin(it->path(), out_) ||
+          IsWithin(dst, gameDir_ / "assets" / "shaders"))
+        continue;
+      ++r_.unusedFilesSkipped;
+      r_.unusedBytesSkipped += it->file_size(ec);
+    }
+  }
+
+  // ---- Android video re-encoding -----------------------------------------
+
+  // Runs a command and hands every output line (\r or \n separated, so
+  // ffmpeg's progress counts) to `onLine`. True on exit status 0.
+  bool RunLines(const std::string &command,
+                const std::function<void(const std::string &)> &onLine) {
+    FILE *pipe = popen((command + " 2>&1").c_str(), "r");
+    if (!pipe)
+      return false;
+    std::string line;
+    for (int c; (c = std::fgetc(pipe)) != EOF;) {
+      if (c == '\n' || c == '\r') {
+        if (!line.empty())
+          onLine(line);
+        line.clear();
+      } else {
+        line += (char)c;
+      }
+    }
+    if (!line.empty())
+      onLine(line);
+    const int status = pclose(pipe);
+    return ExitedOk(status);
+  }
+
+  struct VideoInfo {
+    std::string codec, pixFmt;
+    int height = 0;
+  };
+  // First video stream of `src`; false if ffprobe can't read it. Parsed as
+  // key=value: ffprobe orders fields its own way, not as requested.
+  bool ProbeVideo(const fs::path &src, VideoInfo &info) {
+    RunLines(o_.ffprobeCommand +
+                 " -v error -select_streams v:0 -show_entries "
+                 "stream=codec_name,pix_fmt,height -of "
+                 "default=noprint_wrappers=1 " +
+                 ShellQuote(src.string()),
+             [&](const std::string &l) {
+               const size_t eq = l.find('=');
+               if (eq == std::string::npos)
+                 return;
+               const std::string key = l.substr(0, eq), value = l.substr(eq + 1);
+               if (key == "codec_name")
+                 info.codec = value;
+               else if (key == "pix_fmt")
+                 info.pixFmt = value;
+               else if (key == "height")
+                 info.height = std::atoi(value.c_str());
+             });
+    return !info.codec.empty() && info.height > 0;
+  }
+
+  // Replaces the copied clip at `dst` with a phone-friendly encode when the
+  // original is not 8-bit H.264 or is taller than androidMaxVideoHeight.
+  // Encodes are cached by source path, size, mtime and target height.
+  void PrepareVideoForPhone(const fs::path &src, const fs::path &dst) {
+    std::error_code ec;
+    if (!fs::is_regular_file(src, ec) || !fs::exists(dst, ec) ||
+        !preparedVideos_.insert(dst.lexically_normal()).second)
+      return;
+    VideoInfo vi;
+    if (!ProbeVideo(src, vi)) {
+      Say("  ! cannot inspect " + src.filename().string() + " (is " +
+          o_.ffprobeCommand + " installed?); shipping it unchanged");
+      return;
+    }
+    const std::string &codec = vi.codec, &pixFmt = vi.pixFmt;
+    const int height = vi.height;
+    const int maxH = o_.androidMaxVideoHeight;
+    if (codec == "h264" && pixFmt == "yuv420p" && height <= maxH) {
+      Say("  video " + src.filename().string() + " (" + codec + " " +
+          std::to_string(height) + "p) is fine for phones");
+      return;
+    }
+
+    // Cache key: FNV-1a over what defines the output.
+    const auto mtime = fs::last_write_time(src, ec).time_since_epoch().count();
+    const std::string keySrc = src.string() + "|" +
+                               std::to_string(fs::file_size(src, ec)) + "|" +
+                               std::to_string((long long)mtime) + "|" +
+                               std::to_string(maxH) + "|h264-aac-v1";
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : keySrc)
+      h = (h ^ c) * 1099511628211ull;
+    char key[32];
+    std::snprintf(key, sizeof key, "%016llx", (unsigned long long)h);
+    const fs::path cacheDir = UserDataRoot() / "videocache";
+    const fs::path cached = cacheDir / (std::string(key) + ".mp4");
+
+    if (!fs::is_regular_file(cached, ec)) {
+      fs::create_directories(cacheDir, ec);
+      const fs::path tmp = cacheDir / (std::string(key) + ".part.mp4");
+      Say("  video " + src.filename().string() + " (" + codec + " " +
+          pixFmt + " " + std::to_string(height) + "p) -> H.264 " +
+          std::to_string(std::min(height, maxH)) +
+          "p for phones (first time only, may take a while) ...");
+      // Even width, at most maxH tall, never upscaled; sound to AAC when
+      // present (the '?' keeps silent videos working).
+      const std::string cmd =
+          o_.ffmpegCommand + " -nostdin -y -v error -stats -i " +
+          ShellQuote(src.string()) +
+          " -map 0:v:0 -map 0:a:0? -vf " +
+          ShellQuote("scale=-2:'min(" + std::to_string(maxH) + ",ih)'") +
+          " -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p"
+          " -profile:v high -c:a aac -b:a 128k -ac 2 -movflags +faststart " +
+          ShellQuote(tmp.string());
+      auto last = std::chrono::steady_clock::now();
+      std::string lastErr;
+      const bool ok = RunLines(cmd, [&](const std::string &l) {
+        if (l.rfind("frame=", 0) != 0) { // not a progress line
+          lastErr = l;
+          return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(5)) {
+          last = now;
+          Say("    " + l);
+        }
+      });
+      if (!ok || !fs::is_regular_file(tmp, ec)) {
+        fs::remove(tmp, ec);
+        Say("  ! re-encoding failed" +
+            (lastErr.empty() ? std::string() : " (" + lastErr + ")") +
+            "; shipping " + src.filename().string() + " unchanged");
+        return;
+      }
+      fs::rename(tmp, cached, ec);
+      if (ec) {
+        Say("  ! cannot store the encoded video in " + cacheDir.string());
+        return;
+      }
+    } else {
+      Say("  video " + src.filename().string() +
+          " -> phone version from cache");
+    }
+    const auto before = fs::file_size(dst, ec);
+    fs::copy_file(cached, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+      Say("  ! cannot copy the encoded video: " + ec.message());
+      return;
+    }
+    const auto after = fs::file_size(dst, ec);
+    r_.bytesCopied = r_.bytesCopied - before + after;
+    ++r_.videosTranscoded;
+    Say("    " + HumanBytes(before) + " -> " + HumanBytes(after));
+  }
+
+  bool Bundle() {
+    return RunLogged("bash " + ShellQuote(o_.bundleScript.string()) + " " +
+                     ShellQuote(stage_.string()));
+  }
+
+  // Runs a shell command, streaming its output into the build log.
+  bool RunLogged(const std::string &command) {
+    const std::string cmd = command + " 2>&1";
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+      Say("  ! could not run " + command);
+      return false;
+    }
+    char line[1024];
+    while (std::fgets(line, sizeof line, pipe)) {
+      std::string s(line);
+      while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
+        s.pop_back();
+      Say("  " + s);
+    }
+    int status = pclose(pipe);
+    return ExitedOk(status);
+  }
+
+  // ---- Android -----------------------------------------------------------
+
+  static void ReplaceInFile(const fs::path &file,
+                            const std::map<std::string, std::string> &vars) {
+    std::ifstream in(file, std::ios::binary);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    std::string text = buffer.str();
+    for (const auto &[key, value] : vars)
+      for (size_t at = text.find(key); at != std::string::npos;
+           at = text.find(key, at + value.size()))
+        text.replace(at, key.size(), value);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << text;
+  }
+
+  static bool ValidApplicationId(const std::string &id) {
+    int segments = 0;
+    bool start = true;
+    for (char c : id) {
+      if (c == '.') {
+        if (start) return false;
+        start = true;
+        continue;
+      }
+      if (start ? !std::isalpha((unsigned char)c)
+                : !(std::isalnum((unsigned char)c) || c == '_'))
+        return false;
+      if (start) ++segments;
+      start = false;
+    }
+    return !start && segments >= 2;
+  }
+
+  std::vector<std::string> AndroidAbis() const {
+    std::vector<std::string> abis;
+    std::error_code ec;
+    for (const auto &entry :
+         fs::directory_iterator(o_.androidPlayerDir / "jniLibs", ec))
+      if (fs::is_regular_file(entry.path() / "libmain.so", ec) &&
+          fs::is_regular_file(entry.path() / "libSDL3.so", ec))
+        abis.push_back(entry.path().filename().string());
+    std::sort(abis.begin(), abis.end());
+    return abis;
+  }
+
+  std::string AndroidPlayerCompatibility(const std::string &abi) const {
+    const fs::path metadata = o_.androidPlayerDir / ("player-runtime-" + abi + ".json");
+    const std::string rebuild = " — rebuild the Android player with "
+        "nix-shell shell.nix --run 'ILMEEE_ABI=" + abi + " scripts/android/build-player.sh'";
+    std::ifstream in(metadata);
+    if (!in)
+      return "Android player compatibility metadata missing for " + abi + rebuild;
+    try {
+      const auto runtime = nlohmann::json::parse(in);
+      const auto &format = runtime.at("sceneFormat");
+      if (!runtime.at("schema").is_number_integer() || runtime.at("schema") != 1 ||
+          !runtime.at("abi").is_string() || runtime.at("abi") != abi ||
+          !format.at("major").is_number_integer() ||
+          !format.at("minor").is_number_integer())
+        return "Invalid Android player compatibility metadata for " + abi + rebuild;
+      const auto major = format.at("major").get<std::int64_t>();
+      const auto minor = format.at("minor").get<std::int64_t>();
+      if (major != 1 || minor < kSceneFormatMinor || minor > 65535)
+        return "Android player " + abi + " is incompatible: supports scene " +
+            std::to_string(major) + "." + std::to_string(minor) +
+            ", but this export writes 1." + std::to_string(kSceneFormatMinor) + rebuild;
+    } catch (const nlohmann::json::exception &) {
+      return "Invalid Android player compatibility metadata for " + abi + rebuild;
+    }
+    return {};
+  }
+
+  fs::path AndroidSdk() const {
+    if (!o_.androidSdkDir.empty()) return o_.androidSdkDir;
+    for (const char *var : {"ANDROID_HOME", "ANDROID_SDK_ROOT"})
+      if (const char *v = std::getenv(var); v && *v) return v;
+    const char *home = std::getenv("HOME");
+    return home ? fs::path(home) / "Android" / "Sdk" : fs::path();
+  }
+
+  // The player finds the game inside the APK through this index (APK assets
+  // can't be listed recursively); the build id makes it re-extract updates.
+  void WriteFileIndex() {
+    std::vector<std::string> files;
+    std::uintmax_t bytes = 0;
+    for (auto it = fs::recursive_directory_iterator(gameDir_);
+         it != fs::recursive_directory_iterator(); ++it) {
+      if (!it->is_regular_file()) continue;
+      files.push_back(it->path().lexically_relative(gameDir_).generic_string());
+      bytes += it->file_size();
+    }
+    std::sort(files.begin(), files.end());
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    char id[64];
+    std::snprintf(id, sizeof id, "%llx-%zx-%llx",
+                  (unsigned long long)std::chrono::duration_cast<
+                      std::chrono::milliseconds>(now).count(),
+                  files.size(), (unsigned long long)bytes);
+    std::ofstream index(gameDir_ / "ilmeee_files.txt", std::ios::binary);
+    index << "ilmeee-files 1 " << id << "\n";
+    for (const std::string &f : files) index << f << "\n";
+    if (!index.flush())
+      throw std::runtime_error("cannot write ilmeee_files.txt");
+  }
+
+  void PrepareAndroidProject(const std::string &name,
+                             const std::vector<std::string> &abis) {
+    const fs::path main = stage_ / "app" / "src" / "main";
+    Say("Adding the Android player (" + [&] {
+      std::string list;
+      for (const auto &abi : abis) list += (list.empty() ? "" : ", ") + abi;
+      return list;
+    }() + ") ...");
+    for (const std::string &abi : abis)
+      CopyTree(o_.androidPlayerDir / "jniLibs" / abi, main / "jniLibs" / abi);
+    CopyTree(o_.androidPlayerDir / "sdl-java" / "org", main / "java" / "org");
+
+    std::string abiList;
+    for (const auto &abi : abis)
+      abiList += (abiList.empty() ? "" : "', '") + abi;
+    std::string label;
+    for (char c : name) // strings.xml text: keep it plain
+      if (c != '<' && c != '>' && c != '&' && c != '"' && c != '\'' &&
+          c != '\\' && c != '@')
+        label += c;
+    const std::map<std::string, std::string> vars = {
+        {"@APPLICATION_ID@", r_.applicationId},
+        {"@APP_NAME@", label.empty() ? "Ilmeee Game" : label},
+        {"@VERSION_NAME@", o_.versionName},
+        {"@VERSION_CODE@", std::to_string(std::max(1, o_.versionCode))},
+        {"@ABIS@", abiList}};
+    ReplaceInFile(stage_ / "app" / "build.gradle", vars);
+    ReplaceInFile(main / "res" / "values" / "strings.xml", vars);
+
+    const fs::path sdk = AndroidSdk();
+    if (!sdk.empty())
+      std::ofstream(stage_ / "local.properties")
+          << "sdk.dir=" << sdk.generic_string() << "\n";
+    WriteFileIndex();
+    std::ofstream(stage_ / ".ilmeee-android") << r_.applicationId << "\n";
+  }
+
+  bool RunGradle(const fs::path &project, const std::string &safe) {
+    Say("Running Gradle (first time downloads the Android build tools) ...");
+    if (!RunLogged("cd " + ShellQuote(project.string()) + " && " +
+                   o_.gradleCommand + " assembleDebug --console=plain"))
+      return false;
+    const fs::path apk =
+        project / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk";
+    std::error_code ec;
+    if (!fs::is_regular_file(apk, ec)) {
+      Say("  ! Gradle finished but " + apk.string() + " is missing");
+      return false;
+    }
+    r_.launcher = project / (safe + ".apk");
+    fs::copy_file(apk, r_.launcher, fs::copy_options::overwrite_existing, ec);
+    return !ec;
+  }
+
+  void Run() {
+    std::error_code ec;
+    root_ = Canonical(o_.projectRoot);
+    assets_ = root_ / "assets";
+    const std::string name = o_.gameName.empty()
+                                 ? root_.filename().string()
+                                 : o_.gameName;
+    const std::string safe = SafeGameName(name);
+    const bool android = o_.target == BuildTarget::Android;
+    const bool windows = o_.target == BuildTarget::Windows;
+    fs::path out = o_.outputDir.empty()
+                       ? root_ / "build" / BuildTargetFolder(o_.target) / safe
+                       : fs::absolute(o_.outputDir);
+    out = Canonical(out);
+    out_ = out;
+
+    // ---- validate before touching anything ----------------------------
+    fs::path mainScene = root_ / "scenes" / "main.ilmeeescene";
+    IlmeeeScene probe;
+    if (!LoadScene(mainScene.string(), probe))
+      return Fail("cannot read " + mainScene.string() +
+                  " — save the scene first");
+    std::vector<std::string> abis;
+    if (android) {
+      abis = AndroidAbis();
+      if (abis.empty())
+        return Fail("Android player not built: no jniLibs/<abi>/libmain.so in " +
+                    o_.androidPlayerDir.string() +
+                    " (run scripts/android/build-player.sh)");
+      for (const auto &abi : abis)
+        if (const auto error = AndroidPlayerCompatibility(abi); !error.empty())
+          return Fail(error);
+      if (!fs::is_directory(o_.androidPlayerDir / "sdl-java" / "org", ec))
+        return Fail("SDL3 Java files missing in " + o_.androidPlayerDir.string() +
+                    "/sdl-java (run scripts/android/build-player.sh)");
+      if (!fs::is_regular_file(o_.androidTemplateDir / "app" / "build.gradle", ec))
+        return Fail("Android template not found at " +
+                    o_.androidTemplateDir.string());
+      r_.applicationId = o_.applicationId.empty()
+                             ? DefaultApplicationId(name)
+                             : o_.applicationId;
+      if (!ValidApplicationId(r_.applicationId))
+        return Fail("'" + r_.applicationId +
+                    "' is not a valid Android application id "
+                    "(like com.studio.game)");
+    } else if (!fs::is_regular_file(o_.playerExecutable, ec)) {
+      return Fail("player runtime not found at " +
+                  o_.playerExecutable.string() + " (build IlmeeePlayer)");
+    }
+    if (!fs::is_directory(o_.engineShaderDir, ec))
+      return Fail("engine shaders not found at " + o_.engineShaderDir.string());
+    if (out == root_ || IsWithin(root_, out))
+      return Fail("the output folder " + out.string() +
+                  " contains the project itself");
+    if (IsWithin(out, assets_) || IsWithin(out, root_ / "scenes"))
+      return Fail("the output folder cannot be inside assets/ or scenes/");
+    if (fs::exists(out, ec)) {
+      if (!fs::is_directory(out, ec))
+        return Fail(out.string() + " exists and is not a folder");
+      const char *marker = android ? ".ilmeee-android" : "game.json";
+      if (!fs::is_empty(out, ec) && !fs::exists(out / marker, ec))
+        return Fail("refusing to replace " + out.string() +
+                    ": it is not empty and not a previous build");
+    }
+
+    stage_ = out.parent_path() / (out.filename().string() + ".building");
+    fs::remove_all(stage_);
+    fs::create_directories(stage_);
+    Say("Building '" + name + "' (" + BuildTargetName(o_.target) +
+        ") from " + root_.string());
+    gameDir_ = stage_;
+    if (android) {
+      Say("Copying the Android project template ...");
+      CopyTree(o_.androidTemplateDir, stage_);
+      fs::remove(stage_ / "README.md", ec);
+      gameDir_ = stage_ / "app" / "src" / "main" / "assets" / "game";
+      fs::create_directories(gameDir_);
+    }
+
+    // ---- data ---------------------------------------------------------
+    if (o_.includeUnusedAssets && fs::is_directory(assets_, ec)) {
+      Say("Copying assets/ (all of it) ...");
+      CopyTree(assets_, gameDir_ / "assets");
+    } else {
+      Say("Copying only the assets the scenes use ...");
+      // Canvas of projects from before scenes stored the UI (read by the
+      // player when the scene has none).
+      const fs::path legacyUi = assets_ / "ui" / "main.json";
+      if (fs::is_regular_file(legacyUi, ec))
+        CopyOnce(legacyUi, gameDir_ / "assets" / "ui" / "main.json");
+    }
+    Say("Writing scenes/ ...");
+    CopyScenes();
+    if (!nativeSources_.empty()) {
+      auto options = DefaultScriptCompileOptions(root_);
+      options.cache = stage_ / ".native-script-build";
+      nlohmann::json modules = nlohmann::json::array();
+      std::map<std::string, ScriptCompileOptions> androidOptions;
+      if (android)
+        for (const auto &abi : abis) {
+          auto cross = AndroidScriptCompileOptions(root_, o_.androidPlayerDir, abi);
+          cross.cache = options.cache / abi;
+          androidOptions.emplace(abi, std::move(cross));
+        }
+      else
+        fs::create_directories(gameDir_ / "lib");
+      for (const auto &source : nativeSources_) {
+        const auto className = fs::path(source).stem().string();
+        const auto name = "libilmeee_script_" + className + "_" +
+                          std::to_string(NewObjectId()) +
+                          (windows ? ".dll" : ".so");
+        if (android) {
+          // Libraries belong in APK jniLibs, not writable/extracted game assets.
+          // One manifest entry resolves the same filename for the device's ABI.
+          for (const auto &[abi, cross] : androidOptions) {
+            Say("Compiling native component " + source + " (Android " + abi + ") ...");
+            const auto compiled = CompileNativeScript(cross, source);
+            if (!compiled.ok)
+              throw std::runtime_error("Android script compile failed (" + abi + "): " + source + "\n" + compiled.diagnostics);
+            CopyFile(compiled.library, stage_ / "app/src/main/jniLibs" / abi / name);
+          }
+          modules.push_back({{"source", source}, {"className", className},
+                             {"library", name}, {"androidNativeLibrary", true}});
+        } else {
+          Say("Compiling native component " + source + " ...");
+          const auto compiled = CompileNativeScript(options, source);
+          if (!compiled.ok)
+            throw std::runtime_error("Script compile failed: " + source + "\n" + compiled.diagnostics);
+          const fs::path relative = fs::path("lib") / name;
+          CopyFile(compiled.library, gameDir_ / relative);
+          modules.push_back({{"source", source}, {"className", className}, {"library", relative.generic_string()}});
+        }
+      }
+      std::ofstream(gameDir_ / "native-scripts.json") << modules.dump(2) << '\n';
+      fs::remove_all(stage_ / ".native-script-build");
+    }
+    if (!o_.includeUnusedAssets)
+      CountUnusedAssets();
+
+    fs::path shaderDst = gameDir_ / "assets" / "shaders" / "vulkan";
+    if (fs::exists(shaderDst, ec))
+      Say("  ! the project has its own assets/shaders/vulkan; the engine's "
+          "shaders replace it in the build");
+    Say("Copying engine shaders ...");
+    CopyTree(o_.engineShaderDir, shaderDst);
+    // World Text uses the same bundled font in editor, Linux and Android.
+    const auto textFont = o_.engineShaderDir.parent_path().parent_path() /
+                          "fonts" / "MiSansLatin-Regular.ttf";
+    if (fs::is_regular_file(textFont, ec))
+      CopyFile(textFont, gameDir_ / "assets/fonts/MiSansLatin-Regular.ttf");
+
+    // ---- runtime ------------------------------------------------------
+    if (windows) {
+      // Flat: Windows finds a program's DLLs in its own folder. The player's
+      // DLLs are the ones next to it (the editor's install folder).
+      CopyFile(o_.playerExecutable, stage_ / (safe + ".exe"));
+      for (const auto &entry :
+           fs::directory_iterator(o_.playerExecutable.parent_path(), ec)) {
+        const auto file = entry.path().filename().string();
+        if (entry.path().extension() != ".dll" ||
+            file.rfind("libIlmeee", 0) == 0) // engine-process DLLs: editor only
+          continue;
+        CopyFile(entry.path(), stage_ / file);
+      }
+    } else if (!android) {
+      fs::path bin = stage_ / "bin" / safe;
+      CopyFile(o_.playerExecutable, bin);
+      fs::permissions(bin,
+                      fs::perms::owner_exec | fs::perms::group_exec |
+                          fs::perms::others_exec,
+                      fs::perm_options::add);
+      fs::create_symlink(fs::path("bin") / safe, stage_ / safe);
+    }
+
+    nlohmann::json manifest = {
+        {"name", name},
+        {"startScene", "scenes/main.ilmeeescene"},
+        {"window",
+         {{"width", o_.windowWidth},
+          {"height", o_.windowHeight},
+          {"fullscreen", android || o_.fullscreen}}}};
+    std::ofstream(gameDir_ / "game.json") << manifest.dump(2) << "\n";
+
+    if (android) {
+      PrepareAndroidProject(name, abis);
+    } else if (!windows && !o_.bundleScript.empty()) {
+      Say("Bundling libraries (portable build) ...");
+      r_.librariesBundled = Bundle();
+      if (!r_.librariesBundled)
+        Say("  ! bundling failed; the game will only run on this machine");
+    }
+
+    // ---- swap in ------------------------------------------------------
+    fs::remove_all(out);
+    fs::rename(stage_, out);
+    stage_.clear();
+
+    r_.outputDir = out;
+    if (android) {
+      // The project stays in place even if Gradle fails, to open it in
+      // Android Studio or rerun Gradle by hand.
+      if (o_.gradleCommand.empty()) {
+        Say("Android project ready (Gradle not run): " + out.string());
+      } else if (!RunGradle(out, safe)) {
+        return Fail("Gradle could not build the APK; the project is in " +
+                    out.string());
+      }
+    } else {
+      r_.launcher = out / (windows ? safe + ".exe" : safe);
+    }
+    r_.ok = true;
+    Say("Done: " + std::to_string(r_.filesCopied) + " files, " +
+        HumanBytes(r_.bytesCopied) + " -> " + out.string());
+    if (r_.unusedFilesSkipped)
+      Say("Left out " + std::to_string(r_.unusedFilesSkipped) +
+          " unused file(s) from assets/ (" +
+          HumanBytes(r_.unusedBytesSkipped) +
+          "); enable \"Include unused assets\" to ship everything");
+    if (r_.missingReferences)
+      Say("Warning: " + std::to_string(r_.missingReferences) +
+          " referenced file(s) were missing; those objects will not appear");
+  }
+
+  void Fail(const std::string &why) {
+    r_.ok = false;
+    r_.error = why;
+    Say("Build failed: " + why);
+  }
+
+  // A failed build leaves no half-written folder behind.
+  void DiscardStage() {
+    if (stage_.empty())
+      return;
+    std::error_code ec;
+    fs::remove_all(stage_, ec);
+  }
+
+private:
+  const GameBuildOptions &o_;
+  const BuildLog &log_;
+  GameBuildResult &r_;
+  fs::path root_, assets_, stage_, out_;
+  std::set<std::string> nativeSources_;
+  std::map<fs::path, std::string> dataAssets_; // original -> game path
+  std::map<fs::path, std::string> prefabs_;    // original -> game path
+  fs::path gameDir_; // where the game folder goes: stage_, or APK assets
+  std::map<fs::path, fs::path> copiedDirs_;
+  std::map<fs::path, fs::path> copiedFiles_;
+  std::set<fs::path> copiedTargets_; // destinations already written
+  std::set<fs::path> preparedVideos_; // Android: videos already handled
+  std::set<std::string> usedExternalNames_;
+};
+
+} // namespace
+
+std::string SafeGameName(const std::string &name) {
+  std::string out;
+  for (unsigned char c : name) {
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.')
+      out += (char)c;
+    else if (c == ' ' && !out.empty() && out.back() != '_')
+      out += '_';
+  }
+  while (!out.empty() && (out.back() == '_' || out.back() == '.'))
+    out.pop_back();
+  while (!out.empty() && out.front() == '.')
+    out.erase(out.begin());
+  return out.empty() ? "Game" : out;
+}
+
+std::string DefaultApplicationId(const std::string &name) {
+  std::string segment;
+  for (unsigned char c : name) {
+    if (std::isalnum(c))
+      segment += (char)std::tolower(c);
+    else if (!segment.empty() && segment.back() != '_')
+      segment += '_';
+  }
+  while (!segment.empty() && segment.back() == '_') segment.pop_back();
+  if (segment.empty()) segment = "game";
+  if (!std::isalpha((unsigned char)segment[0])) segment = "g" + segment;
+  return "com.ilmeee." + segment;
+}
+
+GameBuildResult BuildGame(const GameBuildOptions &options,
+                          const BuildLog &log) {
+  GameBuildResult result;
+  Builder b(options, log, result);
+  try {
+    b.Run();
+  } catch (const std::exception &e) {
+    b.Fail(e.what());
+  }
+  if (!result.ok)
+    b.DiscardStage();
+  return result;
+}
+
+} // namespace ilmeee

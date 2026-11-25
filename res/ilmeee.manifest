@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Embedded through res/resources.rc (Windows builds only).
+  activeCodePage UTF-8: narrow-char file APIs (fopen, std::ifstream(std::string),
+  stb_image, the model loaders) take UTF-8 paths, the same as on Linux. Without
+  it they use the ANSI code page and any non-ASCII file name (Japanese PMX
+  textures, an accented user folder) fails to open. Windows 10 1903+.
+  longPathAware: paths past 260 characters work when the system allows them
+  (HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1).
+  Replaces MinGW's default manifest, so it repeats its trustInfo/compatibility.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

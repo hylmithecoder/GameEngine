@@ -1,0 +1,523 @@
+#include "../../../include/core_engine/GameUI.hpp"
+#include "../../../include/core_engine/IlmeeeScene.hpp"
+#include "../../../vendor/nlohmann/json.hpp"
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <unordered_set>
+
+namespace ilmeee {
+namespace {
+using json = nlohmann::json;
+
+const char *KindName(UiKind kind) {
+  switch (kind) {
+  case UiKind::Text: return "text";
+  case UiKind::Image: return "image";
+  case UiKind::Button: return "button";
+  case UiKind::Joystick: return "joystick";
+  }
+  return "text";
+}
+
+const char *AnchorName(UiAnchor anchor) {
+  switch (anchor) {
+  case UiAnchor::TopLeft: return "topLeft";
+  case UiAnchor::TopRight: return "topRight";
+  case UiAnchor::BottomLeft: return "bottomLeft";
+  case UiAnchor::BottomRight: return "bottomRight";
+  case UiAnchor::Center: return "center";
+  case UiAnchor::TopCenter: return "topCenter";
+  case UiAnchor::BottomCenter: return "bottomCenter";
+  case UiAnchor::CenterLeft: return "centerLeft";
+  case UiAnchor::CenterRight: return "centerRight";
+  case UiAnchor::StretchTop: return "stretchTop";
+  case UiAnchor::StretchBottom: return "stretchBottom";
+  case UiAnchor::StretchCenter: return "stretchCenter";
+  case UiAnchor::StretchFull: return "stretchFull";
+  }
+  return "topLeft";
+}
+
+UiKind ParseKind(const std::string &name) {
+  if (name == "image") return UiKind::Image;
+  if (name == "button") return UiKind::Button;
+  if (name == "joystick") return UiKind::Joystick;
+  return UiKind::Text;
+}
+
+UiAnchor ParseAnchor(const std::string &name) {
+  if (name == "topRight") return UiAnchor::TopRight;
+  if (name == "bottomLeft") return UiAnchor::BottomLeft;
+  if (name == "bottomRight") return UiAnchor::BottomRight;
+  if (name == "center") return UiAnchor::Center;
+  if (name == "topCenter") return UiAnchor::TopCenter;
+  if (name == "bottomCenter") return UiAnchor::BottomCenter;
+  if (name == "centerLeft") return UiAnchor::CenterLeft;
+  if (name == "centerRight") return UiAnchor::CenterRight;
+  if (name == "stretchTop") return UiAnchor::StretchTop;
+  if (name == "stretchBottom") return UiAnchor::StretchBottom;
+  if (name == "stretchCenter") return UiAnchor::StretchCenter;
+  if (name == "stretchFull") return UiAnchor::StretchFull;
+  return UiAnchor::TopLeft;
+}
+
+ImVec4 ReadColor(const json &value, ImVec4 fallback) {
+  if (!value.is_array() || value.size() != 4)
+    return fallback;
+  try {
+    return ImVec4(value[0].get<float>(), value[1].get<float>(),
+                  value[2].get<float>(), value[3].get<float>());
+  } catch (const json::exception &) {
+    return fallback;
+  }
+}
+
+json WriteColor(ImVec4 color) {
+  return json::array({color.x, color.y, color.z, color.w});
+}
+} // namespace
+
+GameUI DefaultGameUI() {
+  GameUI ui;
+  UiElement hp;
+  hp.id = "hp";
+  hp.text = "HP: 100";
+  hp.x = 28;
+  hp.y = 26;
+  hp.fontSize = 28;
+  ui.elements.push_back(hp);
+
+  UiElement pause;
+  pause.id = "pause";
+  pause.kind = UiKind::Button;
+  pause.anchor = UiAnchor::TopRight;
+  pause.x = 28;
+  pause.y = 22;
+  pause.width = 120;
+  pause.height = 44;
+  pause.fontSize = 20;
+  pause.text = "Pause";
+  pause.action = "TogglePause";
+  ui.elements.push_back(pause);
+  return ui;
+}
+
+bool GameUIFromScene(const IlmeeeScene &scene, GameUI &out) {
+  size_t canvasIndex = scene.entities.size();
+  for (size_t i = 0; i < scene.entities.size(); ++i)
+    if (scene.entities[i].kind == PrimitiveKind::Canvas) {
+      canvasIndex = i;
+      break;
+    }
+  if (canvasIndex == scene.entities.size())
+    return false;
+
+  GameUI loaded;
+  const SceneEntity &canvas = scene.entities[canvasIndex];
+  loaded.referenceWidth = canvas.uiWidth;
+  loaded.referenceHeight = canvas.uiHeight;
+  for (const SceneEntity &e : scene.entities) {
+    if (e.parent != static_cast<int32_t>(canvasIndex))
+      continue;
+    UiElement element;
+    if (e.objectId) element.objectId = e.objectId;
+    element.visible = e.uiVisible;
+    element.scripts = e.scripts;
+    switch (e.kind) {
+    case PrimitiveKind::UiText: element.kind = UiKind::Text; break;
+    case PrimitiveKind::UiImage: element.kind = UiKind::Image; break;
+    case PrimitiveKind::UiButton: element.kind = UiKind::Button; break;
+    case PrimitiveKind::UiJoystick: element.kind = UiKind::Joystick; break;
+    default: continue;
+    }
+    element.id = e.name;
+    element.anchor = e.uiAnchor <= static_cast<uint8_t>(UiAnchor::StretchFull)
+        ? static_cast<UiAnchor>(e.uiAnchor) : UiAnchor::TopLeft;
+    element.x = e.uiX;
+    element.y = e.uiY;
+    element.width = e.uiWidth;
+    element.height = e.uiHeight;
+    element.fontSize = e.uiFontSize;
+    element.text = e.uiText;
+    element.imagePath = e.uiImagePath;
+    element.action = e.uiAction;
+    element.color = ImVec4(e.uiColor.r, e.uiColor.g,
+                           e.uiColor.b, e.uiColor.a);
+    element.background = ImVec4(e.uiBackground.r, e.uiBackground.g,
+                                e.uiBackground.b, e.uiBackground.a);
+    loaded.elements.push_back(std::move(element));
+  }
+  out = std::move(loaded);
+  return true;
+}
+
+void AppendGameUIToScene(IlmeeeScene &scene, const GameUI &ui) {
+  SceneEntity canvas;
+  canvas.name = "Canvas";
+  canvas.kind = PrimitiveKind::Canvas;
+  canvas.uiWidth = ui.referenceWidth;
+  canvas.uiHeight = ui.referenceHeight;
+  const int32_t parent = static_cast<int32_t>(scene.entities.size());
+  scene.entities.push_back(std::move(canvas));
+  for (const UiElement &element : ui.elements) {
+    SceneEntity e;
+    e.objectId = element.objectId;
+    e.uiVisible = element.visible;
+    e.name = element.id;
+    e.parent = parent;
+    switch (element.kind) {
+    case UiKind::Text: e.kind = PrimitiveKind::UiText; break;
+    case UiKind::Image: e.kind = PrimitiveKind::UiImage; break;
+    case UiKind::Button: e.kind = PrimitiveKind::UiButton; break;
+    case UiKind::Joystick: e.kind = PrimitiveKind::UiJoystick; break;
+    }
+    e.uiAnchor = static_cast<uint8_t>(element.anchor);
+    e.scripts = element.scripts;
+    e.uiX = element.x;
+    e.uiY = element.y;
+    e.uiWidth = element.width;
+    e.uiHeight = element.height;
+    e.uiFontSize = element.fontSize;
+    e.uiText = element.text;
+    e.uiImagePath = element.imagePath;
+    e.uiAction = element.action;
+    e.uiColor = {element.color.x, element.color.y,
+                 element.color.z, element.color.w};
+    e.uiBackground = {element.background.x, element.background.y,
+                      element.background.z, element.background.w};
+    scene.entities.push_back(std::move(e));
+  }
+}
+
+bool LoadGameUI(const std::string &path, GameUI &out, std::string *error) {
+  std::ifstream input(path);
+  if (!input) {
+    if (error) *error = "Cannot open " + path;
+    return false;
+  }
+  const json root = json::parse(input, nullptr, false);
+  if (!root.is_object() || !root.contains("version") ||
+      !root["version"].is_number_integer() ||
+      (root["version"] != 1 && root["version"] != 2) ||
+      !root.contains("elements") || !root["elements"].is_array()) {
+    if (error) *error = "Invalid Game UI document: " + path;
+    return false;
+  }
+  try {
+    GameUI loaded;
+    loaded.referenceWidth = root.value("referenceWidth", 1280.0f);
+    loaded.referenceHeight = root.value("referenceHeight", 720.0f);
+    if (!std::isfinite(loaded.referenceWidth) || loaded.referenceWidth <= 0 ||
+        !std::isfinite(loaded.referenceHeight) || loaded.referenceHeight <= 0)
+      throw std::runtime_error("Invalid reference size");
+    std::unordered_set<std::string> ids;
+    for (const auto &item : root["elements"]) {
+      UiElement e;
+      e.id = item.at("id").get<std::string>();
+      e.kind = ParseKind(item.value("type", "text"));
+      e.anchor = ParseAnchor(item.value("anchor", "topLeft"));
+      e.x = item.value("x", e.x);
+      e.y = item.value("y", e.y);
+      e.width = item.value("width", e.width);
+      e.height = item.value("height", e.height);
+      e.fontSize = item.value("fontSize", e.fontSize);
+      e.text = item.value("text", "");
+      e.imagePath = item.value("imagePath", "");
+      e.action = item.value("action", "");
+      if (item.contains("color"))
+        e.color = ReadColor(item["color"], e.color);
+      if (item.contains("background"))
+        e.background = ReadColor(item["background"], e.background);
+      if (e.id.empty() || !ids.insert(e.id).second ||
+          !std::isfinite(e.x) || !std::isfinite(e.y) ||
+          !std::isfinite(e.width) || e.width <= 0 ||
+          !std::isfinite(e.height) || e.height <= 0 ||
+          !std::isfinite(e.fontSize) || e.fontSize <= 0)
+        throw std::runtime_error("Invalid UI element");
+      loaded.elements.push_back(std::move(e));
+    }
+    out = std::move(loaded);
+    return true;
+  } catch (const std::exception &e) {
+    if (error) *error = e.what();
+    return false;
+  }
+}
+
+bool SaveGameUI(const std::string &path, const GameUI &ui, std::string *error) {
+  if (!std::isfinite(ui.referenceWidth) || ui.referenceWidth <= 0 ||
+      !std::isfinite(ui.referenceHeight) || ui.referenceHeight <= 0) {
+    if (error) *error = "Reference size must be positive";
+    return false;
+  }
+  std::unordered_set<std::string> ids;
+  for (const UiElement &e : ui.elements) {
+    if (e.id.empty() || !ids.insert(e.id).second ||
+        !std::isfinite(e.x) || !std::isfinite(e.y) ||
+        !std::isfinite(e.width) || e.width <= 0 ||
+        !std::isfinite(e.height) || e.height <= 0 ||
+        !std::isfinite(e.fontSize) || e.fontSize <= 0) {
+      if (error) *error = "UI elements need unique IDs and valid sizes";
+      return false;
+    }
+  }
+  json root;
+  root["version"] = std::any_of(ui.elements.begin(), ui.elements.end(),
+      [](const UiElement &e) { return e.anchor > UiAnchor::Center; }) ? 2 : 1;
+  root["referenceWidth"] = ui.referenceWidth;
+  root["referenceHeight"] = ui.referenceHeight;
+  root["elements"] = json::array();
+  for (const UiElement &e : ui.elements) {
+    root["elements"].push_back({
+        {"id", e.id}, {"type", KindName(e.kind)},
+        {"anchor", AnchorName(e.anchor)}, {"x", e.x}, {"y", e.y},
+        {"width", e.width}, {"height", e.height},
+        {"fontSize", e.fontSize}, {"text", e.text},
+        {"imagePath", e.imagePath}, {"action", e.action},
+        {"color", WriteColor(e.color)},
+        {"background", WriteColor(e.background)}});
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+  if (ec) {
+    if (error) *error = ec.message();
+    return false;
+  }
+  std::ofstream output(path);
+  if (!output || !(output << root.dump(2) << '\n')) {
+    if (error) *error = "Cannot write " + path;
+    return false;
+  }
+  return true;
+}
+
+UiElement *FindUiElement(GameUI &ui, uint64_t objectId) {
+  if (!objectId) return nullptr;
+  for (UiElement &e : ui.elements)
+    if (e.objectId == objectId) return &e;
+  return nullptr;
+}
+
+const UiElement *FindUiElement(const GameUI &ui, uint64_t objectId) {
+  return FindUiElement(const_cast<GameUI &>(ui), objectId);
+}
+
+UiRect GameUIElementRect(const GameUI &ui, const UiElement &e,
+                         ImVec2 origin, ImVec2 size) {
+  if (!std::isfinite(ui.referenceWidth) || !std::isfinite(ui.referenceHeight) ||
+      ui.referenceWidth <= 0.0f || ui.referenceHeight <= 0.0f ||
+      !std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 || size.y <= 0)
+    return {origin, origin};
+  const float scale = std::min(size.x / ui.referenceWidth,
+                               size.y / ui.referenceHeight);
+  const bool stretchX = e.anchor >= UiAnchor::StretchTop;
+  const bool stretchY = e.anchor == UiAnchor::StretchFull;
+  const float w = std::max(1.0f, e.width * scale +
+      (stretchX ? size.x - ui.referenceWidth * scale : 0.0f));
+  const float h = std::max(1.0f, e.height * scale +
+      (stretchY ? size.y - ui.referenceHeight * scale : 0.0f));
+  const float x = e.x * scale, y = e.y * scale;
+  ImVec2 pos = origin;
+  switch (e.anchor) {
+  case UiAnchor::StretchTop:
+  case UiAnchor::StretchFull:
+  case UiAnchor::TopLeft: pos.x += x; pos.y += y; break;
+  case UiAnchor::TopRight: pos.x += size.x - x - w; pos.y += y; break;
+  case UiAnchor::StretchBottom:
+  case UiAnchor::BottomLeft: pos.x += x; pos.y += size.y - y - h; break;
+  case UiAnchor::BottomRight:
+    pos.x += size.x - x - w; pos.y += size.y - y - h; break;
+  case UiAnchor::Center:
+    pos.x += (size.x - w) * 0.5f + x;
+    pos.y += (size.y - h) * 0.5f + y;
+    break;
+  case UiAnchor::TopCenter:
+    pos.x += (size.x - w) * 0.5f + x; pos.y += y; break;
+  case UiAnchor::BottomCenter:
+    pos.x += (size.x - w) * 0.5f + x; pos.y += size.y - y - h; break;
+  case UiAnchor::StretchCenter:
+  case UiAnchor::CenterLeft:
+    pos.x += x; pos.y += (size.y - h) * 0.5f + y; break;
+  case UiAnchor::CenterRight:
+    pos.x += size.x - x - w; pos.y += (size.y - h) * 0.5f + y; break;
+  }
+  return {pos, ImVec2(pos.x + w, pos.y + h)};
+}
+
+void SetUiElementAnchor(const GameUI &ui, UiElement &e, UiAnchor anchor) {
+  const ImVec2 size(ui.referenceWidth, ui.referenceHeight);
+  const UiRect before = GameUIElementRect(ui, e, {0, 0}, size);
+  e.anchor = anchor;
+  e.x = e.y = 0;
+  const UiRect base = GameUIElementRect(ui, e, {0, 0}, size);
+  const bool right = anchor == UiAnchor::TopRight ||
+      anchor == UiAnchor::BottomRight || anchor == UiAnchor::CenterRight;
+  const bool bottom = anchor == UiAnchor::BottomLeft ||
+      anchor == UiAnchor::BottomRight || anchor == UiAnchor::BottomCenter ||
+      anchor == UiAnchor::StretchBottom;
+  e.x = (before.min.x - base.min.x) * (right ? -1.0f : 1.0f);
+  e.y = (before.min.y - base.min.y) * (bottom ? -1.0f : 1.0f);
+}
+
+std::string DrawGameUI(
+    const GameUI &ui, ImVec2 origin, ImVec2 size,
+    const std::function<ImTextureID(const std::string &)> &imageTexture,
+    bool interactive, bool paused, UiAxisMap *axes, UiFingers *fingers,
+    std::vector<uint64_t> *pressed) {
+  if (size.x <= 0 || size.y <= 0 ||
+      !std::isfinite(ui.referenceWidth) || !std::isfinite(ui.referenceHeight) ||
+      ui.referenceWidth <= 0 || ui.referenceHeight <= 0)
+    return {};
+  const float scale = std::min(size.x / ui.referenceWidth,
+                               size.y / ui.referenceHeight);
+  if (!std::isfinite(scale) || scale <= 0)
+    return {};
+  ImDrawList *draw = ImGui::GetWindowDrawList();
+  const ImVec2 oldCursor = ImGui::GetCursorScreenPos();
+  std::string clicked;
+  draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+  const bool hovered = ImGui::IsWindowHovered();
+  const ImVec2 mouse = ImGui::GetIO().MousePos;
+  const auto press = [&](uint64_t id) {
+    if (pressed && std::find(pressed->begin(), pressed->end(), id) == pressed->end())
+      pressed->push_back(id);
+  };
+  for (const UiElement &source : ui.elements) {
+    if (interactive && !source.visible)
+      continue;
+    UiElement faded;
+    if (!source.visible) {
+      faded = source;
+      faded.color.w *= 0.35f;
+      faded.background.w *= 0.35f;
+    }
+    const UiElement &e = source.visible ? source : faded;
+    const UiRect rect = GameUIElementRect(ui, e, origin, size);
+    const ImVec2 pos = rect.min;
+    const ImVec2 max = rect.max;
+    const float w = max.x - pos.x, h = max.y - pos.y;
+    // Clicks and taps are reported for every kind without capturing the
+    // mouse, so a Text or Image still lets a camera drag start on it.
+    if (interactive && pressed) {
+      if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+          mouse.x >= pos.x && mouse.x < max.x && mouse.y >= pos.y &&
+          mouse.y < max.y)
+        press(e.objectId);
+      if (fingers)
+        for (const auto &[id, f] : *fingers)
+          if (f.fresh && f.pos.x >= pos.x && f.pos.x < max.x &&
+              f.pos.y >= pos.y && f.pos.y < max.y)
+            press(e.objectId);
+    }
+    // Touch ownership: new fingers on an interactive element are claimed.
+    const UiFinger *finger = nullptr;
+    if (fingers && interactive &&
+        (e.kind == UiKind::Joystick || e.kind == UiKind::Button)) {
+      for (auto &[id, f] : *fingers) {
+        if (f.fresh && f.element.empty() && f.pos.x >= pos.x &&
+            f.pos.x < max.x && f.pos.y >= pos.y && f.pos.y < max.y)
+          f.element = e.id;
+        if (f.element == e.id && !finger) finger = &f;
+      }
+    }
+    const ImU32 color = ImGui::ColorConvertFloat4ToU32(e.color);
+    const ImU32 bg = ImGui::ColorConvertFloat4ToU32(e.background);
+    if (e.kind == UiKind::Joystick) {
+      // Base ring with a knob that travels up to 60% of the radius.
+      const ImVec2 center((pos.x + max.x) * 0.5f, (pos.y + max.y) * 0.5f);
+      const float radius = std::min(w, h) * 0.5f;
+      const float travel = radius * 0.6f;
+      glm::vec2 value(0.0f);
+      if (interactive) {
+        ImGui::PushID(e.id.c_str());
+        ImGui::SetCursorScreenPos(pos);
+        ImGui::InvisibleButton("##game-ui-joystick", ImVec2(w, h));
+        const bool held = finger || ImGui::IsItemActive();
+        ImGui::PopID();
+        if (held && travel > 0.0f) {
+          const ImVec2 mouse = finger ? finger->pos : ImGui::GetIO().MousePos;
+          value = {(mouse.x - center.x) / travel,
+                   (center.y - mouse.y) / travel};
+          const float length = std::sqrt(value.x * value.x + value.y * value.y);
+          if (length > 1.0f) value /= length;
+          if (axes) (*axes)[e.id] = value;
+        } else if (axes) {
+          const auto it = axes->find(e.id);
+          if (it != axes->end()) value = it->second;
+        }
+      }
+      draw->AddCircleFilled(center, radius, bg, 48);
+      draw->AddCircle(center, radius, color, 48, std::max(1.0f, 2.0f * scale));
+      draw->AddCircleFilled(
+          ImVec2(center.x + value.x * travel, center.y - value.y * travel),
+          radius * 0.4f, color, 32);
+      continue;
+    }
+    if (e.kind == UiKind::Image) {
+      const ImTextureID texture = imageTexture ? imageTexture(e.imagePath) : ImTextureID{};
+      if (texture)
+        draw->AddImage(texture, pos, max, ImVec2(0, 0), ImVec2(1, 1), color);
+      else
+        draw->AddRectFilled(pos, max, bg);
+    } else {
+      // Buttons may use a sprite instead of the background colour; it is
+      // darkened while held.
+      const ImTextureID sprite = e.kind == UiKind::Button && imageTexture &&
+                                         !e.imagePath.empty()
+          ? imageTexture(e.imagePath) : ImTextureID{};
+      if (sprite) {
+        const bool held = interactive &&
+            (finger || (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                        mouse.x >= pos.x && mouse.x < max.x &&
+                        mouse.y >= pos.y && mouse.y < max.y));
+        const float shade = held ? 0.7f : 1.0f;
+        draw->AddImage(sprite, pos, max, ImVec2(0, 0), ImVec2(1, 1),
+                       ImGui::ColorConvertFloat4ToU32(ImVec4(
+                           shade, shade, shade, source.visible ? 1.0f : 0.35f)));
+      } else if (e.background.w > 0.0f) {
+        draw->AddRectFilled(pos, max, bg, 6.0f * scale);
+      }
+      const std::string &label = paused && e.action == "TogglePause"
+          ? std::string("Resume") : e.text;
+      if (!label.empty()) {
+        const float fontSize = std::max(1.0f, e.fontSize * scale);
+        const float pad = 8.0f * scale;
+        // Text wraps inside the element (dialog lines); a single line stays
+        // vertically centred, several start at the top.
+        const float wrap = e.kind == UiKind::Text
+            ? std::max(1.0f, w - 2.0f * pad) : 0.0f;
+        const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
+            fontSize, FLT_MAX, wrap, label.c_str());
+        const bool multiline = textSize.y > fontSize * 1.5f;
+        const ImVec2 textPos = e.kind == UiKind::Button
+            ? ImVec2(pos.x + (w - textSize.x) * 0.5f,
+                     pos.y + (h - textSize.y) * 0.5f)
+            : ImVec2(pos.x + pad,
+                     multiline ? pos.y + pad : pos.y + (h - textSize.y) * 0.5f);
+        draw->PushClipRect(pos, max, true);
+        draw->AddText(ImGui::GetFont(), fontSize, textPos, color,
+                      label.c_str(), nullptr, wrap);
+        draw->PopClipRect();
+      }
+    }
+    if (interactive && e.kind == UiKind::Button) {
+      ImGui::PushID(e.id.c_str());
+      ImGui::SetCursorScreenPos(pos);
+      if (ImGui::InvisibleButton("##game-ui-button", ImVec2(w, h)))
+        clicked = e.action;
+      ImGui::PopID();
+    }
+  }
+  draw->PopClipRect();
+  ImGui::SetCursorScreenPos(oldCursor);
+  // Fingers not claimed on their first frame stay free (camera look).
+  if (fingers)
+    for (auto &[id, f] : *fingers) f.fresh = false;
+  return clicked;
+}
+
+} // namespace ilmeee

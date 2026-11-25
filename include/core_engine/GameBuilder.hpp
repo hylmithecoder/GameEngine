@@ -1,0 +1,115 @@
+#pragma once
+// Turns a project folder into a runnable game folder: the IlmeeePlayer
+// runtime + the project's scenes and assets + the engine shaders, laid out as
+// documented in src/cpp/player/PlayerMain.cpp. No GPU involved, so it can be
+// run (and tested) anywhere.
+
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <string>
+
+namespace ilmeee {
+
+// Desktop targets build with the IlmeeePlayer of the OS the editor runs on
+// (a Linux editor cannot make a Windows game and vice versa).
+enum class BuildTarget { Linux, Android, Windows };
+
+#ifdef _WIN32
+inline constexpr BuildTarget kDesktopTarget = BuildTarget::Windows;
+#else
+inline constexpr BuildTarget kDesktopTarget = BuildTarget::Linux;
+#endif
+
+inline const char *BuildTargetName(BuildTarget t) {
+  switch (t) {
+  case BuildTarget::Android: return "Android";
+  case BuildTarget::Windows: return "Windows";
+  default: return "Linux";
+  }
+}
+// Folder under <project>/build/.
+inline const char *BuildTargetFolder(BuildTarget t) {
+  switch (t) {
+  case BuildTarget::Android: return "android";
+  case BuildTarget::Windows: return "windows";
+  default: return "linux";
+  }
+}
+
+struct GameBuildOptions {
+  BuildTarget target = kDesktopTarget;
+  std::filesystem::path projectRoot;
+  // Empty: <projectRoot>/build/<linux|android>/<SafeGameName>.
+  std::filesystem::path outputDir;
+  // Empty: the project folder's name.
+  std::string gameName;
+  std::filesystem::path playerExecutable; // the built IlmeeePlayer
+  // The engine's assets/shaders/vulkan (what the editor itself loads).
+  std::filesystem::path engineShaderDir;
+  // scripts/bundle-deps.sh. Empty: don't bundle libraries — the game then
+  // runs on this machine only.
+  std::filesystem::path bundleScript;
+  // false (default): only the files the scenes reference (models with the
+  // textures they load, surface/UI images, audio and video clips). true:
+  // the whole assets/ folder, as before.
+  bool includeUnusedAssets = false;
+  int windowWidth = 1280;
+  int windowHeight = 720;
+  bool fullscreen = false;
+
+  // ---- Android (target == Android) ----------------------------------------
+  // What scripts/android/build-player.sh produced: jniLibs/<abi>/*.so and
+  // sdl-java/ (SDL3's Java glue), and player-runtime-<abi>.json (the native
+  // reader's scene version). playerExecutable is not used.
+  std::filesystem::path androidPlayerDir;
+  std::filesystem::path androidTemplateDir; // the engine's android/template
+  std::filesystem::path androidSdkDir;      // Empty: $ANDROID_HOME or ~/Android/Sdk
+  // Empty: com.ilmeee.<lowercase game name>.
+  std::string applicationId;
+  std::string versionName = "1.0";
+  int versionCode = 1;
+  // Video clips of Video Player components are re-encoded for phones when
+  // taller than this or not 8-bit H.264 (→ H.264 + AAC .mp4 at this height,
+  // cached under ~/.ilmeeeengine/videocache). 0 = ship videos unchanged.
+  // Needs the ffmpeg/ffprobe programs; without them videos ship as-is.
+  int androidMaxVideoHeight = 720;
+  std::string ffmpegCommand = "ffmpeg";
+  std::string ffprobeCommand = "ffprobe";
+  // Gradle to run in the generated project. Empty: only prepare the project
+  // (no APK) — what the tests do.
+  std::string gradleCommand = "gradle";
+};
+
+struct GameBuildResult {
+  bool ok = false;
+  std::string error;
+  std::filesystem::path outputDir;
+  std::filesystem::path launcher; // what to run: <outputDir>/<SafeGameName>
+                                  // (Android: the .apk)
+  std::string applicationId;      // Android package name
+  size_t filesCopied = 0;
+  std::uintmax_t bytesCopied = 0;
+  size_t relocatedReferences = 0; // scene paths that pointed outside assets/
+  size_t missingReferences = 0;   // ... and whose file did not exist
+  size_t videosTranscoded = 0;    // Android: videos re-encoded (or cached)
+  size_t unusedFilesSkipped = 0;  // files in assets/ no scene uses
+  std::uintmax_t unusedBytesSkipped = 0;
+  bool librariesBundled = false;
+};
+
+using BuildLog = std::function<void(const std::string &line)>;
+
+// "My First Project" -> "My_First_Project": safe as a file and folder name.
+std::string SafeGameName(const std::string &name);
+
+// "My First Project" -> "com.ilmeee.my_first_project": a valid Android
+// package name (lowercase segments that start with a letter).
+std::string DefaultApplicationId(const std::string &name);
+
+// Main activity of every Ilmeee APK, for `adb shell am start -n`.
+inline constexpr const char *kAndroidActivity = "com.ilmeee.player.IlmeeeActivity";
+
+GameBuildResult BuildGame(const GameBuildOptions &options, const BuildLog &log);
+
+} // namespace ilmeee

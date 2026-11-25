@@ -1,13 +1,83 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 4.1)
 project(GameEngineSDL VERSION 1.0.0)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(__cpp_lib_constexpr_exceptions=0)
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
 option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
+
+# ---------------------------------------------------------------------------
+# Layout and linker policy (shared by every target in this project)
+#
+#   build/bin        -> executables
+#   build/lib        -> shared libraries
+#   <prefix>/{bin,lib,assets,share}  -> staged tree (see `make bundle`)
+#
+# Binaries locate their sibling libraries through a relative RPATH ($ORIGIN),
+# never an absolute path, so the staged tree can be extracted anywhere on any
+# distro without LD_LIBRARY_PATH or a launcher wrapper.
+# ---------------------------------------------------------------------------
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+endif()
+
+# No prefix is forced here: `make` builds into build/, and `make bundle` stages
+# a self-contained tree that an installer script can drop anywhere (typically
+# /opt/ilmeeeengine). Override with -DCMAKE_INSTALL_PREFIX=... when you really
+# want a system install.
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# Keep the build tree runnable straight out of build/bin ...
+set(CMAKE_SKIP_BUILD_RPATH OFF)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
+set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib")
+# ... and make the installed tree relocatable.
+set(CMAKE_INSTALL_RPATH "$ORIGIN:$ORIGIN/../lib")
+# Deliberately OFF: appending the linker's search paths would bake absolute
+# host paths (nix store, /usr/lib) into the installed binaries and defeat the
+# whole point. The bundle ships those dependencies in lib/ instead.
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
+
+# The C++ runtime is folded into every binary rather than shipped as a .so:
+# libstdc++/libgcc are the one pair of dependencies that must never be older
+# than the code linking them, and a bundled copy would also shadow the host's
+# for anything the process dlopen()s (Mesa, the Vulkan ICD). Static here means
+# the runtime always matches the compiler that produced the binary, while
+# libc itself still comes from the host, as it must.
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_link_options($<$<NOT:$<CONFIG:Debug>>:-static-libstdc++>
+                     $<$<NOT:$<CONFIG:Debug>>:-static-libgcc>)
+endif()
+
+# Directory names inside the install prefix, reused by the install() rules below.
+set(ILMEEE_BIN_DIR    bin)
+set(ILMEEE_LIB_DIR    lib)
+set(ILMEEE_ASSET_DIR  assets)
+set(ILMEEE_SHARE_DIR  share/ilmeeeengine)
 # Set output directories specifically for library targets
 
+# Windows (MSYS2/MinGW) has its own, staged target graph: everything below
+# hard-requires GTK, libnotify, X11 and POSIX process APIs. See
+# cmake/Windows.cmake and .roadmap/claude/18-Roadmap_Port_Windows-23112026.md.
+if(WIN32)
+    include(${CMAKE_SOURCE_DIR}/cmake/Windows.cmake)
+    return()
+endif()
+
+add_subdirectory(test)
+add_subdirectory(src)
+add_subdirectory(include)
+add_subdirectory(vendor)
+message(STATUS "SOURCES_CPP: ${SOURCES}")
+message(STATUS "SOURCE_CORE_ENGINE: ${SOURCES_CORE_ENGINE}")
+message(STATUS "SOURCE_UI: ${SOURCES_UI}")
+message(STATUS "SOURCE_VULKAN: ${SOURCES_VULKAN}")
 # Compiler-specific options
 # if(MSVC)
 #     add_compile_options(/W4)
@@ -16,115 +86,14 @@ option(BUILD_SHARED_LIBS "Build GameEngine as a shared libraries" ON)
 #     add_compile_options(-Wall -Wextra -pedantic)
 # endif()
 
-# Add SDL2 and SDL2_ttf paths
-set(SDL2_DIR "C:/SDL2")
-set(SDL2_TTF_DIR "C:/SDL2_ttf") 
-set(STB "E:/stb")
-set(GLFW "C:/glfw3.4")
-set(FFMPEG_DIR "E:/FFmpeg")
-set(LIBRARY "C:/msys64/mingw64/bin")
-set(GLES2 ${GLFW}/)
-set(NFD "E:/nativefiledialog-extended")
-set(GLM "E:/glm")
-set(VULKAN_SDK "C:/msys64/mingw64")
-set(VULKAN_DIR "C:/vulkan")
-set(VULKAN_LIB "${VULKAN_SDK}/lib/libvulkan-1.dll.a")
-set(DLFCN "E:/dlfcn-win32")
-# set(GLEW "C:/glew-2.1.0")
-
-# Add source files
-set(SOURCES 
-    src/main.cpp
-    src/resources.rc
-    src/scripts/ui/MainWindow.cpp
-    # src/RocketInterfaces.cpp
-    # src/SimpleRenderer.cpp
-    src/scripts/ApplicationManager.cpp
-    src/scripts/ui/SecondaryWindow.cpp
-    src/scripts/ui/Check_Environment.cpp
-    src/scripts/ui/VideoPlayer.cpp
-    src/scripts/ui/assets.cpp
-    src/scripts/ui/HandlerProject.cpp
-    src/scripts/ui/HandlerChildWindow.cpp
-    src/scripts/core_engine/SceneSerializer.cpp
-    src/scripts/core_engine/SceneRenderer2D.cpp
-    src/scripts/core_engine/TextureManager.cpp
-)
-
-set(SOURCE_TEST_VULKAN
-    src/scripts/test_vulkan.cpp
-)
-
-set(SOURCE_CORE
-    src/scripts/core_engine/core/GameEngine.cpp
-    src/scripts/core_engine/core/CoreDebugger.cpp
-)
-
-# Add header files
-set(HEADERS
-    src/header/ui/MainWindow.hpp
-    # src/header/RocketInterfaces.hpp
-    src/header/ui/SimpleRenderer.hpp
-    src/header/ui/SecondaryWindow.hpp
-    src/header/ui/FFmpegWrapper.hpp
-    src/header/ui/VideoPlayer.hpp
-    src/header/ui/assets.hpp
-    src/header/ui/HandlerProject.hpp
-    src/header/core_engine/Scene.hpp
-    src/header/core_engine/SceneSerializer.hpp
-    src/header/core_engine/SceneRenderer2D.hpp
-    src/header/core_engine/TextureManager.hpp
-    src/header/core_engine/GLHeader.hpp
-    src/header/core_engine/Debugger.hpp
-    src/header/core_engine/NetworkManager.hpp
-    src/header/ui/Application.hpp
-)
-
-set(HEADER_GLSL
-    src/header/core_engine/test_glsl.hpp
-)
-
-set(HEADER_VULKAN
-    src/header/core_engine/test_vulkan.hpp
-)
-
-set(HEADER_CORE
-    # src/header/core_engine/core/Component.hpp
-    # src/header/core_engine/core/Scene.hpp
-    src/header/core_engine/core/GameEngine.h
-    src/header/core_engine/core/CoreDebugger.h
-    # src/header/core_engine/core/EngineCore.hpp
-    # src/header/core_engine/core/LifeCycleManager.hpp
-)
-
-set(HEADER_CORE_EDITOR
-    src/header/core_engine/core_editor/IlmeeeEditor.h
-    src/header/core_engine/core_editor/TCPConnection.hpp
-)
-
 set(SOURCE_TEST
-    src/scripts/ui/assets.cpp
-    src/header/ui/assets.hpp
-    src/scripts/ui/test_main.cpp
-)
-
-# This Source Not Glew but glad
-set(SOURCE_TEST_GLEW
-    src/scripts/test_glew.cpp
-)
-
-set(SOURCE_TEST_GLM
-    src/scripts/test_glm.cpp
+    src/cpp/ui/assets.cpp
+    include/ui/assets.hpp
+    src/cpp/ui/test_main.cpp
 )
 
 set(SOURCE_TEST_GLSL
-    src/scripts/test_glsl.cpp
-)
-
-set(SOURCE_HANDLER
-    src/scripts/core_engine/core/Launcher.cpp 
-    src/scripts/core_engine/core/HandlerLauncher.cpp
-    src/header/core_engine/Debugger.hpp
+    src/cpp/test_glsl.cpp
 )
 
 # Add ImGui source files
@@ -135,19 +104,13 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    # ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-set(ICON_DIR ${CMAKE_SOURCE_DIR}/vendor/icons)
-
-set(NFD_SOURCES
-    # ${NFD}/src/nfd_gtk.cpp
-    # ${NFD}/src/nfd_portal.cpp
-    ${NFD}/src/nfd_win.cpp
+set(SOURCE_HANDLER
+    src/cpp/core_engine/core/Launcher.cpp
+    src/cpp/core_engine/core/HandlerLauncher.cpp
 )
 
 set(IMGUI_TEST
@@ -168,51 +131,313 @@ set(JSON
     ${JSON_DIR}/json.hpp
 )
 
-set(GLAD_DIR ${CMAKE_SOURCE_DIR}/vendor/glad/)
-set(GLAD
-    ${GLAD_DIR}/src/glad.c
-)
-
 set(GLAD_4_DIR ${CMAKE_SOURCE_DIR}/vendor/glad4.4)
 set(GLAD_4
     ${GLAD_4_DIR}/src/glad.c
 )
 
-set(GLAD_VULKAN_DIR ${CMAKE_SOURCE_DIR}/vendor/glad_vulkan)
-set(GLAD_VULKAN
-    ${GLAD_VULKAN_DIR}/src/vulkan.c
+file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
+find_package(glfw3 REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(GLEW REQUIRED)
+find_package(OpenGL REQUIRED)
+find_package(Ktx REQUIRED)
+find_package(OpenCL REQUIRED)
+pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+pkg_check_modules(LIBNOTIFY REQUIRED libnotify)
+pkg_check_modules(XCB REQUIRED xcb)
+pkg_check_modules(X11 REQUIRED x11)
+
+# FFMPEG is usually handled via pkg-config or custom find module
+pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libavutil libswresample libswscale)
+
+# Find stb headers
+find_path(STB_INCLUDE_DIRS NAMES stb/stb_image.h REQUIRED)
+
+
+link_directories(
+    ${GTK3_LIBRARY_DIRS}
+    ${LIBNOTIFY_LIBRARY_DIRS}
+    ${XCB_LIBRARY_DIRS}
+    ${X11_LIBRARY_DIRS}
+    ${FFMPEG_LIBRARY_DIRS}
+)
+find_package(glm REQUIRED)
+
+# ufbx — vendored single-file FBX importer (MIT). Built as a small static
+# lib so ufbx.c compiles once; PUBLIC include dir propagates to consumers.
+add_library(ufbx STATIC ${CMAKE_SOURCE_DIR}/vendor/ufbx/ufbx.c)
+target_include_directories(ufbx PUBLIC ${CMAKE_SOURCE_DIR}/vendor/ufbx)
+target_link_libraries(ufbx PUBLIC m)
+
+# stb_image — header-only; compiled once here so every target links the same
+# single definition instead of each TU trying to emit its own.
+add_library(stb_impl STATIC ${CMAKE_SOURCE_DIR}/vendor/stb_impl.c
+    ${CMAKE_SOURCE_DIR}/vendor/stb_vorbis_impl.c)
+target_include_directories(stb_impl PUBLIC ${STB_INCLUDE_DIRS})
+target_link_libraries(stb_impl PUBLIC m)
+
+# ilmeee_net — engine IPC message layer (envelope, MessageBus, transports).
+# Depends only on the vendored nlohmann/json so it can be linked into the
+# editor, the handler and the hub alike, and tested without a GPU.
+#
+# IXWebSocket (vendored, see vendor/ixwebsocket/VENDORED.txt) is built static
+# so it disappears into ilmeee_net instead of becoming one more .so to bundle.
+# BUILD_SHARED_LIBS is shadowed only for this subdirectory. No zlib:
+# per-message deflate is disabled anyway.
+#
+# TLS (OpenSSL) is on for desktop builds: the IPC bus stays plain ws:// on
+# loopback, but the realtime collaboration client (CollabClient) dials the
+# public server over wss:// through the tunnel. ILMEEE_NET_TLS=OFF builds
+# without it (wss:// URLs then fail to connect with a clear error).
+option(ILMEEE_NET_TLS "Build IXWebSocket with OpenSSL (wss:// for realtime collab)" ON)
+set(ILMEEE_HAVE_TLS OFF)
+if(ILMEEE_NET_TLS)
+    find_package(OpenSSL QUIET)
+    if(OPENSSL_FOUND)
+        set(ILMEEE_HAVE_TLS ON)
+    else()
+        message(WARNING "OpenSSL not found: realtime collab will only support ws:// (add openssl to shell.nix)")
+    endif()
+endif()
+set(USE_TLS ${ILMEEE_HAVE_TLS} CACHE BOOL "" FORCE)
+set(USE_OPEN_SSL ${ILMEEE_HAVE_TLS} CACHE BOOL "" FORCE)
+set(USE_ZLIB OFF CACHE BOOL "" FORCE)
+set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(vendor/ixwebsocket EXCLUDE_FROM_ALL)
+unset(BUILD_SHARED_LIBS)
+# Unmodified upstream code; its warnings (mostly zlib-off stubs) are not ours.
+target_compile_options(ixwebsocket PRIVATE -w)
+
+add_library(ilmeee_net STATIC
+    src/cpp/core_engine/net/Message.cpp
+    src/cpp/core_engine/net/MessageBus.cpp
+    src/cpp/core_engine/net/LoopbackTransport.cpp
+    src/cpp/core_engine/net/WsTransport.cpp
+    src/cpp/core_engine/net/McpServer.cpp
+    src/cpp/core_engine/net/CollabClient.cpp
+    src/cpp/core_engine/net/ProjectSync.cpp
+    src/cpp/core_engine/Process.cpp
+)
+target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(ilmeee_net PRIVATE ixwebsocket)
+# Hashes whole projects (GBs) for online workspaces: keep it fast in Debug too.
+set_source_files_properties(src/cpp/core_engine/net/ProjectSync.cpp PROPERTIES COMPILE_OPTIONS "-O2")
+if(ILMEEE_HAVE_TLS)
+    target_compile_definitions(ilmeee_net PRIVATE ILMEEE_NET_HAVE_TLS=1)
+endif()
+
+add_executable(TestNetProtocol test/net/TestNetProtocol.cpp)
+target_link_libraries(TestNetProtocol PRIVATE ilmeee_net)
+
+add_executable(TestWsTransport test/net/TestWsTransport.cpp)
+target_link_libraries(TestWsTransport PRIVATE ilmeee_net)
+
+# Realtime collab client. The offline part (conflict rules, entity codec)
+# always runs; the online part needs a server: set ILMEEE_RT_URL (and
+# ILMEEE_RT_TOKEN), e.g. `make -C server/realtime run` in another shell.
+add_executable(TestCollabClient test/net/TestCollabClient.cpp)
+target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
+add_executable(TestProjectSync test/net/TestProjectSync.cpp)
+target_link_libraries(TestProjectSync PRIVATE ilmeee_net)
+
+# Portable child process (Hub -> editor launch); spawns itself as the child.
+add_executable(TestProcess test/TestProcess.cpp)
+target_link_libraries(TestProcess PRIVATE ilmeee_net)
+
+add_executable(TestMcpServer test/net/TestMcpServer.cpp)
+target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
+
+add_executable(TestTransformMath test/TestTransformMath.cpp)
+target_link_libraries(TestTransformMath PRIVATE glm::glm)
+
+add_executable(TestPMXLoader test/TestPMXLoader.cpp
+    src/cpp/core_engine/PMXLoader.cpp)
+target_include_directories(TestPMXLoader PRIVATE ${CMAKE_SOURCE_DIR}/include
+    ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
+target_link_libraries(TestPMXLoader PRIVATE glm::glm)
+
+add_executable(TestDeviceMonitor test/TestDeviceMonitor.cpp)
+
+add_executable(TestSkeletalAnimation test/TestSkeletalAnimation.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/AnimationController.cpp
+    src/cpp/core_engine/SpringBone.cpp)
+target_include_directories(TestSkeletalAnimation PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(TestSkeletalAnimation PRIVATE glm::glm PkgConfig::SDL3)
+target_compile_definitions(TestSkeletalAnimation PRIVATE ILMEEE_TEST_MOTION_DIR="${CMAKE_SOURCE_DIR}/assets/motions")
+
+add_executable(TestAnimationTooling test/TestAnimationTooling.cpp
+    src/cpp/core_engine/AnimationAuthoring.cpp src/cpp/core_engine/AnimationTooling.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp src/cpp/core_engine/SpringBone.cpp)
+target_include_directories(TestAnimationTooling PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(TestAnimationTooling PRIVATE glm::glm PkgConfig::SDL3 ilmeee_net ixwebsocket)
+target_compile_definitions(TestAnimationTooling PRIVATE ILMEEE_TEST_MOTION_DIR="${CMAKE_SOURCE_DIR}/assets/motions")
+
+add_executable(TestSceneFormat test/TestSceneFormat.cpp)
+target_link_libraries(TestSceneFormat PRIVATE glm::glm)
+
+add_executable(TestPhysics test/TestPhysics.cpp src/cpp/core_engine/PhysicsWorld.cpp)
+target_link_libraries(TestPhysics PRIVATE glm::glm)
+
+add_executable(TestWorldText test/TestWorldText.cpp
+    src/cpp/core_engine/WorldText.cpp src/cpp/core_engine/GameUI.cpp
+    ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
+target_include_directories(TestWorldText PRIVATE ${CMAKE_SOURCE_DIR}/include ${IMGUI_DIR})
+target_link_libraries(TestWorldText PRIVATE glm::glm)
+
+add_executable(MakeWorldTextPreview test/MakeWorldTextPreview.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(MakeWorldTextPreview PRIVATE ${CMAKE_SOURCE_DIR}/include ${JSON_DIR})
+target_compile_definitions(MakeWorldTextPreview PRIVATE ILMEEE_ENGINE_ROOT="${CMAKE_SOURCE_DIR}"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+target_link_libraries(MakeWorldTextPreview PRIVATE glm::glm pthread ${CMAKE_DL_LIBS})
+
+add_executable(TestMedia test/TestMedia.cpp
+    src/cpp/core_engine/AudioEngine.cpp
+    src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaHttp.cpp)
+target_include_directories(TestMedia PRIVATE ${STB_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS})
+target_compile_definitions(TestMedia PRIVATE ILMEEE_HAS_FFMPEG)
+target_link_libraries(TestMedia PRIVATE PkgConfig::SDL3 ${FFMPEG_LIBRARIES}
+    stb_impl pthread curl)
+
+add_executable(TestMovementScripts test/TestMovementScripts.cpp
+    src/cpp/core_engine/MovementScript.cpp)
+target_link_libraries(TestMovementScripts PRIVATE glm::glm)
+
+add_executable(TestScriptWorkspace test/TestScriptWorkspace.cpp
+    src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(TestScriptWorkspace PRIVATE ${JSON_DIR})
+target_link_libraries(TestScriptWorkspace PRIVATE pthread)
+
+add_executable(TestNativeScripts test/TestNativeScripts.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp)
+target_include_directories(TestNativeScripts PRIVATE ${JSON_DIR})
+target_link_libraries(TestNativeScripts PRIVATE pthread ${CMAKE_DL_LIBS} glm::glm)
+target_compile_definitions(TestNativeScripts PRIVATE
+    ILMEEE_SCRIPT_INCLUDE="${CMAKE_SOURCE_DIR}/include"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+
+add_executable(TestGameBuild test/TestGameBuild.cpp
+    src/cpp/core_engine/AnimationController.cpp src/cpp/core_engine/SkeletalAnimation.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/ScriptWorkspace.cpp
+    src/cpp/core_engine/GameBuilder.cpp
+    src/cpp/core_engine/ModelDependencies.cpp
+    src/cpp/core_engine/PMXLoader.cpp)
+target_include_directories(TestGameBuild PRIVATE ${CMAKE_SOURCE_DIR}/include
+    ${GTK3_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
+target_link_libraries(TestGameBuild PRIVATE glm::glm ufbx ${GTK3_LIBRARIES}
+    ${LIBNOTIFY_LIBRARIES} pthread ${CMAKE_DL_LIBS} PkgConfig::SDL3)
+target_include_directories(TestGameBuild PRIVATE ${JSON_DIR})
+target_compile_definitions(TestGameBuild PRIVATE ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+
+# IlmeeePlayer — the runtime a built game ships with. Only the engine pieces
+# that load, draw and play a scene: no editor UI, no IPC. FFmpeg is linked
+# for Video Player components and non-wav/ogg audio (the Android build of
+# the same sources goes without).
+add_executable(IlmeeePlayer
+    src/cpp/core_engine/WorldText.cpp
+    src/cpp/core_engine/WorldTextRuntime.cpp
+    src/cpp/core_engine/SkeletalAnimation.cpp
+    src/cpp/core_engine/AnimationRuntime.cpp
+    src/cpp/core_engine/SpringBone.cpp
+    src/cpp/core_engine/AnimationController.cpp
+    src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
+    src/cpp/core_engine/ScriptWorkspace.cpp
+    src/cpp/player/PlayerMain.cpp
+    src/cpp/core_engine/AudioEngine.cpp
+    src/cpp/core_engine/VideoDecoder.cpp
+    src/cpp/core_engine/MediaHttp.cpp
+    src/cpp/core_engine/MediaSystem.cpp
+    src/cpp/core_engine/GameUI.cpp
+    src/cpp/core_engine/DialogSystem.cpp
+    src/cpp/core_engine/MovementScript.cpp
+    src/cpp/core_engine/MovementRuntime.cpp
+    src/cpp/core_engine/PhysicsWorld.cpp
+    src/cpp/core_engine/PhysicsRuntime.cpp
+    src/cpp/core_engine/UserMovementScripts.cpp
+    src/cpp/core_engine/SceneLoader.cpp
+    src/cpp/core_engine/SceneRenderer.cpp
+    src/cpp/core_engine/BloomPass.cpp
+    src/cpp/core_engine/TextureManager.cpp
+    src/cpp/core_engine/PMXLoader.cpp
+    src/cpp/vulkan/VulkanBase.cpp
+    src/cpp/vulkan/VkTools.cpp
+    ${IMGUI_SOURCES}
+)
+target_include_directories(IlmeeePlayer PRIVATE
+    ${JSON_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    ${STB_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+)
+target_compile_definitions(IlmeeePlayer PRIVATE ILMEEE_HAS_FFMPEG)
+target_link_libraries(IlmeeePlayer PRIVATE pthread ${CMAKE_DL_LIBS})
+target_link_libraries(IlmeeePlayer PRIVATE
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    glm::glm
+    ufbx
+    ${FFMPEG_LIBRARIES}
+    ${GTK3_LIBRARIES}
+    curl
 )
 
-
-file(COPY assets DESTINATION ${CMAKE_BINARY_DIR})
+# Spawns the real HandlerIlmeeeEngine; needs a display (run under xvfb-run).
+add_executable(TestEngineIpc test/net/TestEngineIpc.cpp)
+target_link_libraries(TestEngineIpc PRIVATE ilmeee_net)
+add_dependencies(TestEngineIpc HandlerIlmeeeEngine IlmeeeEditor IlmeeeEngine)
 
 # Create executable
 # add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 # add_compile_definitions(__STDC_WANT_LIB_EXT1__=0)
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
-target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
-add_executable(TestBackground ${SOURCE_TEST} ${IMGUI_SOURCES} ${GLAD_4})
-target_link_options(TestBackground PRIVATE -mconsole)
-add_executable(TestGLEW ${SOURCE_TEST_GLEW} ${IMGUI_SOURCES} ${GLAD_4})
-target_link_options(TestGLEW PRIVATE -mconsole)
-add_executable(TestGLM ${SOURCE_TEST_GLM})
-target_link_options(TestGLM PRIVATE -mconsole)
-add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES} ${HEADER_GLSL} ${ICON_SOURCE})
-target_link_options(TestGLSL PRIVATE -mconsole)
-add_executable(TestVulkan ${SOURCE_TEST_VULKAN} ${IMGUI_TEST} ${HEADER_VULKAN} ${ICON_SOURCE})
-target_link_options(TestVulkan PRIVATE -mconsole)
+add_executable(${PROJECT_NAME} ${HEADERS_MAIN_PROJECT} ${SOURCES} ${GLAD_4} ${IMGUI_SOURCES} ${NFD_LIB})
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    ILMEEE_SCRIPT_INCLUDE="${CMAKE_SOURCE_DIR}/include"
+    ILMEEE_SCRIPT_COMPILER="${CMAKE_CXX_COMPILER}")
+target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
+# target_link_options(${PROJECT_NAME} PRIVATE -mconsole)
+add_executable(TestBackground ${SOURCE_TEST} ${GLAD_4} ${IMGUI_SOURCES})
+if(WIN32)
+    target_link_options(TestBackground PRIVATE -mconsole)
+endif()
 
-add_library(IlmeeeEngine SHARED src/IlmeeeEngine.rc ${SOURCE_CORE} ${HEADER_CORE})
-target_link_options(IlmeeeEngine PRIVATE -mconsole)
+# add_executable(TestGLSL ${SOURCE_TEST_GLSL} ${GLAD_4} ${IMGUI_SOURCES})
+# target_link_options(TestGLSL PRIVATE -mconsole)
+
+add_library(IlmeeeEngine SHARED res/IlmeeeEngine.rc ${SOURCES_CORE})
+# target_link_options(IlmeeeEngine PRIVATE -mconsole)
+add_definitions(-DILMEEEENGINE_EXPORTS)
 set_target_properties(IlmeeeEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEngine PRIVATE GAMEENGINE_EXPORTS)
 
 add_executable(HandlerIlmeeeEngine ${SOURCE_HANDLER})
-target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
+# target_link_options(HandlerIlmeeeEngine PRIVATE -mconsole)
 
-add_executable(IlmeeeHub src/scripts/Hub.cpp src/resources.rc ${IMGUI_SOURCES} ${NFD_SOURCES} ${ICON_SOURCE} ${JSON} ${GLAD_4})
-target_link_options(IlmeeeHub PRIVATE -mconsole)
+add_executable(IlmeeeHub
+    src/cpp/Hub.cpp
+    res/resources.rc
+    ${NFD_LIB}
+    ${IMGUI_SOURCES}
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${ICON_SOURCE}
+    ${JSON}
+    ${GLAD_4}
+)
+# target_link_options(IlmeeeHub PRIVATE -mconsole)
 # Set properties for the DLL
 set_target_properties(IlmeeeEngine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -223,13 +448,21 @@ set_target_properties(IlmeeeEngine PROPERTIES
     OUTPUT_NAME "IlmeeeEngine"
 )
 
-add_library(IlmeeeEditor SHARED src/scripts/core_engine/core_editor/IlmeeeEditor.cpp src/IlmeeeEditor.rc ${HEADER_CORE_EDITOR} ${IMGUI_SOURCES} ${NFD_SOURCES} ${JSON} ${GLAD_4})
-target_link_options(IlmeeeEditor PRIVATE -mconsole)
+include_directories(
+    ${GTK3_INCLUDE_DIRS}
+    include/
+)
+
+add_library(IlmeeeEditor SHARED ${NFD_LIB} src/cpp/core_engine/core_editor/IlmeeeEditor.cpp res/IlmeeeEditor.rc ${SOURCES_CORE_EDITOR} ${IMGUI_SOURCES} ${JSON} ${GLAD_4})
+# target_link_options(IlmeeeEditor PRIVATE -mconsole)
+# Define macro untuk export symbols
+add_definitions(-DILMEEEDITOR_EXPORTS)
 set_target_properties(IlmeeeEditor PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Define GAMEENGINE_EXPORTS when building the DLL
 target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 # Set properties for the DLL
-
+message(STATUS "Vieport Source : ${VIEWPORT_SOURCES}")
+add_executable(ViewPort3D vendor/nfd/src/nfd_gtk.cpp ${VIEWPORT_SOURCES} ${IMGUI_SOURCES})
 
 set_target_properties(IlmeeeEditor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -241,147 +474,126 @@ set_target_properties(IlmeeeEditor PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-
+cmake_policy(SET CMP0072 NEW) # Prefer GLVND
+set(OpenGL_GL_PREFERENCE "GLVND")
 find_package(OpenGL REQUIRED)
-# find_package(GLEW REQUIRED)
+find_package(GLEW REQUIRED)
+find_package(Vulkan REQUIRED)
+# find_package(GLFW3 REQUIRED)
 # set(Vulkan_DIR "${VULKAN_SDK}/lib/cmake/VulkanLoader")
+
+# Global Include directory
+include_directories(${OpenCL_INCLUDE_DIRS})
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
-    ${SDL2_DIR}/include
-    ${ICON_DIR}
+    # Project directories
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
+    # Custom/third-party libraries
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${CMAKE_SOURCE_DIR}/src/scripts/ui
-    ${FFMPEG_DIR}
-    ${NFD}/src/include
+    include/nfd/include
     ${JSON_DIR}
-    ${STB}
-    ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    ${GLFW}/include
-    ${GLES2}
-    opengl32
-    gdi32
+    ${NFD_INCLUDE_DIR}
     ${GLAD_4_DIR}/include
-    ${VULKAN_DIR}
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${STB_INCLUDE_DIRS}
+    /usr/include/discord
+    /usr/local/include/discord
 )
+
+# Search for Discord Game SDK header in Nix store or standard paths
+find_path(DISCORD_SDK_INCLUDE_DIR discord_game_sdk.h
+    PATHS
+    $ENV{DISCORD_SDK_DEV_PATH}/lib/include
+    $ENV{DISCORD_SDK_PATH}/lib/include
+    $ENV{DISCORD_SDK_PATH}/include
+    /usr/include/discord
+    /usr/local/include/discord
+)
+
+if(DISCORD_SDK_INCLUDE_DIR)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${DISCORD_SDK_INCLUDE_DIR})
+endif()
+
+# Find the Discord Game SDK library
+find_library(DISCORD_SDK_LIBRARY NAMES discord_game_sdk discord_game_sdk.so
+    PATHS
+    $ENV{DISCORD_SDK_PATH}/lib
+    /usr/lib
+    /usr/local/lib
+)
+
+if(DISCORD_SDK_LIBRARY AND NOT TARGET discord-gamesdk)
+    add_library(discord-gamesdk SHARED IMPORTED)
+    set_target_properties(discord-gamesdk PROPERTIES
+        IMPORTED_LOCATION "${DISCORD_SDK_LIBRARY}"
+    )
+    if(DISCORD_SDK_INCLUDE_DIR)
+        set_target_properties(discord-gamesdk PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${DISCORD_SDK_INCLUDE_DIR}"
+        )
+    endif()
+endif()
+
 
 target_include_directories(TestBackground PRIVATE
-    ${SDL2_DIR}/include
+    # ${SDL2_DIR}/include
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${FFMPEG_DIR}
-    ${STB}
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    # ${FFMPEG_DIR}
+    # ${STB}
     ${GLFW}/include
     ${GLES2}
     opengl32
     gdi32
-    ${VULKAN_DIR}
+    Vulkan
+    # ${VULKAN_DIR}
     ${GLAD_4_DIR}/include
     # GLES2
     # GLEW
-    
+
 )
 
-target_include_directories(TestGLEW PRIVATE
-    ${SDL2_DIR}/include
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${FFMPEG_DIR}
-    ${STB}
-    ${GLFW}/include
-    ${GLES2}
-    opengl32
-    gdi32
-    ${GLAD_4_DIR}/include
-    ${VULKAN_DIR}
-    # GLES2
-    # GLEW
-)
-
-target_include_directories(TestGLM PRIVATE
-    ${GLM}
-    ${VULKAN_DIR}
-    # GLES2
-    # GLEW
-)
-
-target_include_directories(TestGLSL PRIVATE
-    ${SDL2_DIR}/include
-    ${ICON_DIR}
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${FFMPEG_DIR}
-    ${NFD}/src/include
-    ${JSON_DIR}
-    ${STB}
-    ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    ${GLFW}/include
-    ${GLES2}
-    opengl32
-    gdi32
-    ${GLAD_4_DIR}/include
-    ${VULKAN_DIR}
-)
-
-target_include_directories(TestVulkan PRIVATE
-    ${SDL2_DIR}/include
-    ${ICON_DIR}
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${FFMPEG_DIR}
-    ${NFD}/src/include
-    ${JSON_DIR}
-    ${STB}
-    ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    ${GLFW}/include
-    # ${GLES2}
-    opengl32
-    gdi32
-    # ${GLAD_VULKAN_DIR}/include
-    # ${VULKAN_SDK}/include
-    ${VULKAN_DIR}
-) 
+# target_include_directories(TestGLSL PRIVATE
+#     ${CMAKE_SOURCE_DIR}/vendor/nanosvg
+#     ${IMGUI_DIR}
+#     ${IMGUI_DIR}/backends
+#     ${CMAKE_SOURCE_DIR}/include/ui
+#     ${CMAKE_SOURCE_DIR}/include/core_engine
+#     ${NFD_INCLUDE_DIR}
+#     ${JSON_DIR}
+#     ${GLAD_4_DIR}/include
+# )
 
 target_include_directories(HandlerIlmeeeEngine PRIVATE
-    ${DLFCN}/src
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    # ${DLFCN}/src
+    ${GTK3_INCLUDE_DIRS}
+    ${CMAKE_SOURCE_DIR}/include/core_engine
 )
 
 target_include_directories(IlmeeeEngine PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/core_engine/core>
     $<INSTALL_INTERFACE:include/core_engine/core>
 )
 
 target_include_directories(IlmeeeEditor PUBLIC
-    # Build interface paths
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/core_engine/core_editor>
-    $<BUILD_INTERFACE:${SDL2_DIR}/include>
-    $<BUILD_INTERFACE:${ICON_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/core_engine/core_editor>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/nanosvg>
     $<BUILD_INTERFACE:${IMGUI_DIR}>
     $<BUILD_INTERFACE:${IMGUI_DIR}/backends>
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/header/ui>
-    $<BUILD_INTERFACE:${FFMPEG_DIR}>
-    $<BUILD_INTERFACE:${NFD}/src/include>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include/ui>
+    $<BUILD_INTERFACE:${NFD_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${JSON_DIR}>
-    $<BUILD_INTERFACE:${STB}>
     $<BUILD_INTERFACE:${GLAD_4_DIR}/include>
-    
+    $<BUILD_INTERFACE:${XCB_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${X11_INCLUDE_DIRS}>
     # Install interface paths
     $<INSTALL_INTERFACE:include/core_engine/core_editor>
     $<INSTALL_INTERFACE:include>
@@ -390,30 +602,39 @@ target_include_directories(IlmeeeEditor PUBLIC
     $<INSTALL_INTERFACE:include/FFmpeg>
     $<INSTALL_INTERFACE:include/nfd>
     $<INSTALL_INTERFACE:include/json>
-    $<INSTALL_INTERFACE:include/stb>
 )
 
 target_include_directories(IlmeeeHub PRIVATE
-    ${SDL2_DIR}/include
-    ${ICON_DIR}
+    ${CMAKE_SOURCE_DIR}/vendor/nanosvg
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${CMAKE_SOURCE_DIR}/src/header/ui
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
-    ${FFMPEG_DIR}
-    ${NFD}/src/include
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${NFD_INCLUDE_DIR}
     ${JSON_DIR}
-    ${STB}
-    ${GLM}
-    # GL
-    # ${GLEW}/include/GL
-    ${GLFW}/include
-    ${GLES2}
-    opengl32
-    gdi32
     ${GLAD_4_DIR}/include
-    ${VULKAN_DIR}
+    ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${GLM_INCLUDE_DIRS}
 )
+
+target_include_directories(ViewPort3D PRIVATE
+    ${CMAKE_SOURCE_DIR}/include/core_engine
+    ${CMAKE_SOURCE_DIR}/include/vulkan
+    ${CMAKE_SOURCE_DIR}/include/audio
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/include/ui
+    ${NFD_INCLUDE_DIR}
+    ${GTK3_INCLUDE_DIRS}
+    ${LIBNOTIFY_INCLUDE_DIRS}
+    ${XCB_INCLUDE_DIRS}
+    ${X11_INCLUDE_DIRS}
+    ${FFMPEG_INCLUDE_DIRS}
+    ${GLM_INCLUDE_DIRS}
+)
+# Removed forced include of xcb/xcb.h as it causes build failures and is already included where needed.
 
 # First, find this section and modify it:
 install(TARGETS IlmeeeEngine
@@ -434,8 +655,8 @@ export(EXPORT IlmeeeEngineTargets
     FILE "${CMAKE_CURRENT_BINARY_DIR}/IlmeeeEngineTargets.cmake"
     NAMESPACE IlmeeeEngine::
 )
-# Install header files
-install(FILES ${HEADER_CORE} DESTINATION include)
+# Install headers files
+install(FILES ${headers_CORE} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
 set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEngine)
@@ -481,8 +702,8 @@ export(EXPORT IlmeeeEditorTargets
     NAMESPACE IlmeeeEditor::
 )
 
-# Install header files
-install(FILES ${HEADER_CORE_EDITOR} DESTINATION include)
+# Install headers files
+install(FILES ${headers_CORE_EDITOR} DESTINATION include)
 
 include(CMakePackageConfigHelpers)
 set(CONFIG_INSTALL_DIR lib/cmake/IlmeeeEditor)
@@ -513,20 +734,20 @@ install(FILES
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
     option(BUILD_DOCUMENTATION "Create and install the HTML based API documentation (requires Doxygen)" ${DOXYGEN_FOUND})
-    
+
     if(BUILD_DOCUMENTATION)
         set(DOXYGEN_IN ${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile.in)
         set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile)
-        
+
         configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
-        
+
         add_custom_target(doc_doxygen ALL
             COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
             COMMENT "Generating API documentation with Doxygen"
             VERBATIM
         )
-        
+
         install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/html DESTINATION share/doc)
     endif()
 endif()
@@ -534,6 +755,7 @@ endif()
 # Print build information
 message(STATUS "=== GameEngine Build Configuration ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATIS "OpenGL version: ${OPENGL_VERSION}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Build example: ${BUILD_EXAMPLE}")
 message(STATUS "Build tests: ${BUILD_TESTS}")
@@ -555,136 +777,167 @@ else()
     set(CPACK_GENERATOR "TGZ")
 endif()
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE ILMEEE_HAS_FFMPEG)
+
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib    
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
-    wsock32
-    ws2_32
+    ilmeee_net
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    ${FFMPEG_LIBRARIES}
+    glfw
+    ${GTK3_LIBRARIES}
+    glm::glm
+    OpenCL::OpenCL
+    dl
+    pthread
+    discord-gamesdk
+    curl
+    ufbx
 )
 
 target_link_libraries(TestBackground PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    #   GLEW::GLEW
+    glfw
+    dl
+    pthread
 )
 
-target_link_libraries(TestGLEW PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # GLEW::GLEW
-)
+# target_link_libraries(TestGLSL PRIVATE
+#     PkgConfig::SDL3
+#     Vulkan::Vulkan
+#     OpenGL::GL
+#     ${FFMPEG_LIBRARIES}
+#     glfw
+# )
 
-target_link_libraries(TestGLSL PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib    
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
-)
-
-target_link_libraries(TestVulkan PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib
-    ${LIBRARY}/vulkan-1.dll
-    ${VULKAN_LIB}
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
+target_link_libraries(ViewPort3D PRIVATE
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    KTX::ktx
+    ${FFMPEG_LIBRARIES}
+    ${GTK3_LIBRARIES}
+    ${LIBNOTIFY_LIBRARIES}
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
+    glm::glm
 )
 
 target_link_libraries(HandlerIlmeeeEngine PRIVATE
-    ${DLFCN}/build/lib/libdl.dll.a
-    msimg32  # For GradientFill
-    comctl32 # For InitCommonControlsEx
+    PkgConfig::SDL3
+    Vulkan::Vulkan
+    ${GTK3_LIBRARIES}
 )
 
 target_link_libraries(IlmeeeHub PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
-    ${CMAKE_SOURCE_DIR}/src/header/core_engine
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    ${LIBRARY}/avformat.lib
-    ${LIBRARY}/avcodec.lib 
-    ${LIBRARY}/avutil.lib 
-    ${LIBRARY}/swresample.lib
-    ${LIBRARY}/swscale.lib    
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    # ${GLEW}/lib/Release/x64/glew32.lib
-    # GLEW::GLEW
+    ${FFMPEG_LIBRARIES}
+    ${GTK3_LIBRARIES}
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
+    glm::glm
+    ilmeee_net
+    dl
+    pthread
 )
 
 target_link_libraries(IlmeeeEditor PRIVATE
-    ${SDL2_DIR}/lib/x64/SDL2.lib
-    ${SDL2_DIR}/lib/x64/SDL2_ttf.lib
+    ilmeee_net
+    PkgConfig::SDL3
+    Vulkan::Vulkan
     OpenGL::GL
-    ${GLFW}/lib-static-ucrt/glfw3dll.lib
-    wsock32
-    ws2_32
+    ${GTK3_LIBRARIES}
+    ${XCB_LIBRARIES}
+    ${X11_LIBRARIES}
 )
 
-# Copy DLL files to output directory
-if(WIN32)
-    find_library(WSOCK32_LIBRARY wsock32)
-    find_library(WS2_32_LIBRARY ws2_32)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SDL2_DIR}/lib/x64/SDL2.dll"
-            "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
-            "${LIBRARY}/avformat-62.dll"
-            "${LIBRARY}/avcodec-62.dll"
-            "${LIBRARY}/avutil-60.dll"
-            "${LIBRARY}/swresample-6.dll"
-            "${LIBRARY}/swscale-9.dll"
-            "${GLFW}/lib-static-ucrt/glfw3.dll"
-            # "${GLEW}/bin/Release/x64/glew32.dll"
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-    )
-    add_custom_command(TARGET TestVulkan POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${LIBRARY}/vulkan-1.dll"
-            "${VULKAN_LIB}"
-            $<TARGET_FILE_DIR:TestVulkan>
-    )
-    add_custom_command(TARGET IlmeeeEditor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SDL2_DIR}/lib/x64/SDL2.dll"
-            "${SDL2_DIR}/lib/x64/SDL2_ttf.dll"
-            "${GLFW}/lib-static-ucrt/glfw3.dll"
-            $<TARGET_FILE_DIR:IlmeeeEditor>
+# ---------------------------------------------------------------------------
+# Consistent linking + installable tree (/opt/ilmeeeengine by default)
+# ---------------------------------------------------------------------------
+set(ILMEEE_RUNTIME_TARGETS
+    ${PROJECT_NAME}          # GameEngineSDL
+    IlmeeePlayer             # runtime copied into every built game
+    IlmeeeHub
+    HandlerIlmeeeEngine
+    ViewPort3D
+    TestBackground
+)
+set(ILMEEE_LIBRARY_TARGETS
+    IlmeeeEngine
+    IlmeeeEditor
+)
+
+# Every binary and library gets the same output layout and the same RPATH,
+# so anything in bin/ resolves anything in lib/ without env vars.
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS ILMEEE_LIBRARY_TARGETS)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+            BUILD_RPATH   "${CMAKE_BINARY_DIR}/lib"
+            INSTALL_RPATH "$ORIGIN:$ORIGIN/../lib"
+            INSTALL_RPATH_USE_LINK_PATH OFF
+            SKIP_BUILD_RPATH OFF
+            BUILD_WITH_INSTALL_RPATH OFF
+        )
+    endif()
+endforeach()
+
+# One definition of the vendored header-only helpers for everyone, plus the
+# system primitives every target needs. Keeping this in one place is what makes
+# the link line consistent across binaries and libraries.
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS ILMEEE_LIBRARY_TARGETS)
+    if(TARGET ${_t})
+        target_link_libraries(${_t} PRIVATE dl pthread m stb_impl)
+    endif()
+endforeach()
+
+# Executables -> <prefix>/bin
+foreach(_t IN LISTS ILMEEE_RUNTIME_TARGETS)
+    if(TARGET ${_t})
+        install(TARGETS ${_t}
+            RUNTIME DESTINATION ${ILMEEE_BIN_DIR}
+        )
+    endif()
+endforeach()
+
+# Runtime data the binaries expect next to themselves.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/
+    DESTINATION ${ILMEEE_ASSET_DIR}
+    USE_SOURCE_PERMISSIONS
+)
+if(EXISTS ${CMAKE_SOURCE_DIR}/res)
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/res/
+        DESTINATION ${ILMEEE_SHARE_DIR}/res
+        USE_SOURCE_PERMISSIONS
     )
 endif()
+install(FILES ${CMAKE_SOURCE_DIR}/LICENSE ${CMAKE_SOURCE_DIR}/README.md
+    DESTINATION ${ILMEEE_SHARE_DIR}
+    OPTIONAL
+)
+# The editor's portable game build runs these (File > Build > Portable).
+install(PROGRAMS
+    ${CMAKE_SOURCE_DIR}/scripts/bundle-deps.sh
+    ${CMAKE_SOURCE_DIR}/scripts/host-libs.sh
+    DESTINATION ${ILMEEE_SHARE_DIR}/scripts
+)
+
+# Public headers, mirroring the source tree so #include paths keep working.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
+    DESTINATION include/ilmeeeengine
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+)
+
+# Convenience launchers on the PATH: /usr/local/bin symlinks are left to the
+# packager; here we only emit a wrapper-free, relocatable tree.
+message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  bin    -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_BIN_DIR}")
+message(STATUS "  lib    -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_LIB_DIR}")
+message(STATUS "  assets -> ${CMAKE_INSTALL_PREFIX}/${ILMEEE_ASSET_DIR}")

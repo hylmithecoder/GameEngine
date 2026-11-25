@@ -1,0 +1,859 @@
+#pragma once
+#include "DialogComponent.hpp"
+#include "MediaComponents.hpp"
+#include "MovementScript.hpp"
+#include "NativeScriptTypes.hpp"
+#include "NprSettings.hpp"
+#include "BloomPass.hpp"
+#include "BloomSettings.hpp"
+#include "PMXLoader.hpp"
+#include "Physics.hpp"
+#include "Scene.hpp"
+#include "SkeletalAnimation.hpp"
+#include "SpringBone.hpp"
+#include "AnimationController.hpp"
+#include "TextureManager.hpp"
+#include "WorldText.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <imgui.h>
+#include <string>
+#include <unordered_map>
+#include <functional>
+#include <vector>
+#include <vulkan/vulkan.h>
+
+class SceneRenderer {
+public:
+  SceneRenderer(int width, int height);
+  ~SceneRenderer();
+
+  void SetViewportSize(int width, int height);
+  void RenderSceneToTexture(const Scene &scene);
+  void RenderScene(); // Test function
+
+  // Returns the descriptor set for ImGui to display the viewport
+  VkDescriptorSet GetViewportDescriptorSet() const;
+  VkDescriptorSet GetUiTextureDescriptor(const std::string &path) {
+    return textureManager.GetTextureDescriptor(path);
+  }
+
+  enum class EditMode { SELECT, MOVE, ROTATE, SCALE };
+
+  // Method untuk interaksi
+  void SetEditMode(EditMode mode);
+  EditMode GetEditMode() const { return currentMode; }
+  void SetGridVisible(bool visible);
+  void SetGridSize(float size);
+  void SetSnapToGrid(bool snap);
+  void ResetCamera();
+  void SetCameraZoom(float zoom);
+  void DrawSelectionGizmo(const GameObject &obj);
+
+  // Method konversi koordinat
+  glm::vec2 ViewportToWorldPosition(float viewX, float viewY) const;
+  glm::vec2 WorldToViewportPosition(float worldX, float worldY) const;
+  glm::vec2 cameraPosition;
+  Scene currentScene;
+
+  // Method handling interaksi
+  void HandleClick(float worldX, float worldY);
+  void HandleDrag(float deltaX, float deltaY);
+  void HandleZoom(float delta);
+  void MoveSelected(float deltaX, float deltaY);
+  void DrawGrid(VkCommandBuffer cmd, const glm::mat4 &projection,
+                const glm::mat4 &view);
+  void DeleteSelected();
+  bool HasSelectedObject() const;
+  void SetGridColor(float r, float g, float b, float a);
+  void SetBackgroundColor(float r, float g, float b, float a);
+
+  // Method untuk mendapatkan dimensi
+  int GetWidth() const { return width; }
+  int GetHeight() const { return height; }
+
+  float cameraZoom = 1.0f;
+  float GetZoom() const { return zoom; }
+  float zoom = 1.0f;
+
+  // Async: scene passes are submitted with a fence and only waited for
+  // before the next pass (or a staging write), so the GPU renders while the
+  // CPU runs the rest of the frame. Off (editor default): every pass waits
+  // for the queue to go idle, as before.
+  void SetAsyncSubmit(bool on) { asyncSubmit = on; }
+  // Blocks until the last scene pass has finished on the GPU.
+  void WaitOffscreenWork();
+
+  // Vulkan external initialization
+  void SetVulkanContext(VkDevice device, VkPhysicalDevice physicalDevice,
+                        VkQueue graphicsQueue, VkCommandPool commandPool,
+                        VkDescriptorPool descriptorPool);
+
+private:
+  int width, height;
+
+  // Viewport attributes
+  ImVec2 pan = ImVec2(0.0f, 0.0f);
+  ImVec2 lastMousePos = ImVec2(0.0f, 0.0f);
+  bool isDragging = false;
+
+  // Grid settings
+  float gridSize = 32.0f;
+  ImVec4 gridColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+  ImVec4 bgColor = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
+  ilmeee::NprSettings npr;
+
+  // Vulkan Context
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+  VkQueue graphicsQueue = VK_NULL_HANDLE;
+  VkCommandPool commandPool = VK_NULL_HANDLE;
+  VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+
+  // Last offscreen pass still in flight (async mode).
+  bool asyncSubmit = false;
+  VkFence offscreenFence = VK_NULL_HANDLE;
+  VkCommandBuffer offscreenCmd = VK_NULL_HANDLE;
+  // Submits a recorded offscreen command buffer and takes ownership of it.
+  void SubmitOffscreenCommands(VkCommandBuffer cmd);
+
+  // Offscreen resources
+  struct Offscreen {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkImage depthImage = VK_NULL_HANDLE;
+    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    VkImageView depthView = VK_NULL_HANDLE;
+    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+  } offscreen;
+
+  // Second offscreen target: renders the scene from the in-scene player
+  // camera for the Game tab. Fixed 16:9 size; shares the
+  // main offscreen render pass.
+  Offscreen preview;
+  int previewWidth = 480;
+  int previewHeight = 270;
+  bool previewReady = false;
+
+  // Pipelines
+  VkPipeline spritePipeline = VK_NULL_HANDLE;
+  VkPipelineLayout spritePipelineLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout spriteDescriptorSetLayout = VK_NULL_HANDLE;
+  VkPipeline gridPipeline = VK_NULL_HANDLE;
+  VkPipelineLayout gridPipelineLayout = VK_NULL_HANDLE;
+  // Editor-only line gizmos (dashed camera frustums + light direction
+  // rays). Lines are rebuilt on the CPU each frame into a growable
+  // host-visible buffer — counts are tiny (a few cameras/lights).
+  VkPipeline gizmoPipeline = VK_NULL_HANDLE;
+  VkPipelineLayout gizmoPipelineLayout = VK_NULL_HANDLE;
+  VkBuffer gizmoVertexBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory gizmoVertexMemory = VK_NULL_HANDLE;
+  VkDeviceSize gizmoCapacity = 0;
+  uint32_t gizmoVertexCount = 0;
+  bool gizmoVisible = true;
+  // Self-contained "hello triangle" — no descriptor sets, no vertex
+  // buffer, no UBO; vertex positions baked in the shader via
+  // gl_VertexIndex. Serves as a render-pipeline smoke test inside the
+  // Scene panel until proper scene content is wired up.
+  VkPipeline testTrianglePipeline = VK_NULL_HANDLE;
+  VkPipelineLayout testTrianglePipelineLayout = VK_NULL_HANDLE;
+  bool showTestTriangle = false;
+
+  // 3D mesh pipeline (pos + normal + uv vertex, MVP+model+material push
+  // constants, depth-tested, samples one albedo texture per submesh).
+  VkPipeline meshPipeline = VK_NULL_HANDLE;
+  VkPipeline worldTextPipeline = VK_NULL_HANDLE;
+  // NPR ink outline: inverted hull, same layout/descriptors as meshPipeline.
+  VkPipeline outlinePipeline = VK_NULL_HANDLE;
+  int worldTextFontTexture = 0;
+  VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
+  // set=0 binding=0 = combined image sampler (fragment). Defined identically
+  // to ImGui's texture layout so descriptors handed out by TextureManager
+  // (which uses ImGui_ImplVulkan_AddTexture) bind to this pipeline directly.
+  VkDescriptorSetLayout meshTextureSetLayout = VK_NULL_HANDLE;
+  struct MeshSceneUniforms { // matches `Scene` in scene_mesh.vert (std140)
+    glm::mat4 viewProj;
+    glm::vec4 lightPosOrDir;
+    glm::vec4 lightColorType;
+    glm::vec4 lightDir;
+    glm::vec4 lightParams;
+    glm::vec4 cameraPos;  // w = NPR on
+    glm::vec4 npr;        // bands, softness, specular size, specular strength
+    glm::vec4 nprShadow;  // shadow colour, rim width
+    glm::vec4 nprRim;     // rim colour, rim strength
+    glm::vec4 nprOutline; // outline colour, width (0 = no outline)
+  };
+  struct MeshPushConstants { // matches `PC` in scene_mesh.vert
+    glm::mat4 model;
+    glm::vec4 material;
+  };
+  // set=1 binding=0: per-pass uniform buffer (viewProj + light), written at
+  // the start of DrawMeshes. One buffer is enough: every pass waits for the
+  // previous one before it is recorded (see WaitOffscreenWork).
+  VkDescriptorSetLayout meshSceneSetLayout = VK_NULL_HANDLE;
+  VkBuffer meshSceneUbo = VK_NULL_HANDLE;
+  VkDeviceMemory meshSceneUboMemory = VK_NULL_HANDLE;
+  void *meshSceneUboMapped = nullptr;
+  VkDescriptorSet meshSceneSet = VK_NULL_HANDLE;
+  // 1x1 white fallback bound for submeshes with no texture (Vulkan requires
+  // every declared sampler be bound even when the shader ignores it).
+  VkImage whiteImage = VK_NULL_HANDLE;
+  VkDeviceMemory whiteMemory = VK_NULL_HANDLE;
+  VkImageView whiteView = VK_NULL_HANDLE;
+  VkDescriptorSet whiteDescriptor = VK_NULL_HANDLE;
+
+  // Vertex data
+  struct Buffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+  } quadBuffer, gridBuffer;
+
+public:
+  struct MeshVertex {
+    glm::vec3 pos;
+    glm::vec3 normal;
+    glm::vec2 uv{0.0f};
+  };
+
+  // A contiguous index range that shares one material/texture. For PMX
+  // models each PMXMaterial maps to one SubMesh (the "detected surface"
+  // the user can click and re-texture); OBJ meshes and primitives get a
+  // single SubMesh covering the whole index buffer.
+  struct SubMesh {
+    uint32_t indexOffset = 0;
+    uint32_t indexCount = 0;
+    std::string name;                       // material name (PMX) or ""
+    std::string texturePath;                // resolved absolute path, "" = none
+    glm::vec3 diffuse{0.84f, 0.80f, 0.74f}; // tint / fallback color
+    VkDescriptorSet textureDescriptor =
+        VK_NULL_HANDLE; // owned by TextureManager
+    bool hasTexture = false;
+  };
+
+  struct Mesh3D {
+    uint64_t objectId = ilmeee::NewObjectId();
+    std::vector<ilmeee::NativeScriptBinding> scripts;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+    uint32_t indexCount = 0;
+    uint32_t vertexCount = 0;
+    glm::vec3 aabbMin{0.0f};
+    glm::vec3 aabbMax{0.0f};
+    // Auto-fit baseline applied first (center on origin + uniform scale
+    // to ~1.5 units) so the user-facing transform starts at identity.
+    glm::mat4 autoFit = glm::mat4(1.0f);
+    glm::vec3 userPosition = glm::vec3(0.0f);
+    glm::vec3 userRotation = glm::vec3(0.0f); // euler degrees
+    glm::vec3 userScale = glm::vec3(1.0f);
+    std::string path;
+    std::string displayName;
+    // Scene hierarchy: index of the parent in meshes3d, -1 for a root.
+    // user* transform fields are local to the parent. Kept consistent by
+    // SetMesh3DParent / RemoveMesh3D — never assign it directly.
+    int parent = -1;
+    bool movable = false;
+    std::string movementScript;
+    float movementSpeed = 3.0f;
+    // Camera + UI joystick links. rig.camera is a meshes3d index, renumbered
+    // by RemoveMesh3D like `parent`.
+    ilmeee::MovementRig movementRig;
+    // PMX bone hierarchy (empty for OBJ meshes / primitives)
+    std::vector<pmx::PMXBone> bones;
+    std::vector<pmx::PMXVertex> skinVertices;
+    // Reused CPU skinning/upload storage, avoiding a mesh-sized allocation
+    // on every animation or spring-physics frame.
+    std::vector<MeshVertex> skinnedVertices;
+    std::vector<ilmeee::SkeletonBone> skeleton;
+    std::vector<glm::vec3> posedBones;
+    ilmeee::AnimationComponent animation;
+    bool isWorldText = false;
+    ilmeee::WorldTextComponent worldText;
+    std::string builtText;
+    float builtTextSize = -1;
+    int builtTextAlignment = -1;
+    ilmeee::AnimationClip animationClip;
+    std::string loadedAnimationPath;
+    std::string animationError;
+    float animationTime = 0;
+    ilmeee::ControllerRuntime locomotion;
+    bool poseActive = false;
+    // Hair/breast/skirt secondary motion, applied after the animated pose.
+    ilmeee::SpringBoneComponent springBones;
+    ilmeee::SpringBoneRuntime springRuntime;
+
+    // Per-material surface ranges. Always at least one entry after a
+    // successful load; DrawMeshes issues one draw per submesh so each can
+    // bind its own texture.
+    std::vector<SubMesh> submeshes;
+
+    // CPU copy of the geometry kept for click-picking (ray-triangle tests
+    // run against these in object space, transformed by ComputeModel()).
+    // Indices match the GPU index buffer 1:1 so a hit triangle maps back
+    // to the owning submesh range.
+    std::vector<glm::vec3> cpuPositions;
+    std::vector<uint32_t> cpuIndices;
+
+    // Light specific properties
+    bool isLight = false;
+    float lightGamma = 1.05f;
+    glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+    float lightIntensity = 1.0f;
+    int lightType = 0; // 0 = Directional, 1 = Point, 2 = Spotlight
+    float lightRange = 10.0f;
+    float lightSpotAngle = 30.0f;
+
+    // Camera specific properties (active only when isCamera == true). This
+    // is the in-scene "player" camera, distinct from the editor free-cam.
+    bool isCamera = false;
+    int camProjection = 0;     // 0 = Perspective, 1 = Orthographic
+    float camFov = 60.0f;      // perspective vertical FOV (degrees)
+    float camOrthoSize = 5.0f; // orthographic half-height (world units)
+    float camNear = 0.1f;
+    float camFar = 100.0f;
+
+    // Physics specific properties
+    bool hasPhysics = false;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float mass = 1.0f;
+    float drag = 0.0f;
+    float gravityY = -9.81f;
+    glm::vec3 velocity = glm::vec3(0.0f);
+    // Collider (any mesh; static unless it also has a Physics Body or a
+    // movement script). Run by ilmeee::PhysicsSystem during Play.
+    ilmeee::ColliderComponent collider;
+
+    // Audio Source / Video Player components (played by ilmeee::MediaSystem).
+    ilmeee::AudioSourceComponent audio;
+    ilmeee::VideoPlayerComponent video;
+    // Dialog component (run by ilmeee::DialogSystem).
+    ilmeee::DialogComponent dialog;
+    // Pure "Audio Source" object: its mesh is only an editor marker (hidden
+    // in the game, like light/camera markers).
+    bool isAudioEmitter = false;
+    // Current video frame, set every frame by MediaSystem; overrides the
+    // texture of video.surface while non-null. Not part of the scene data.
+    VkDescriptorSet videoTexture = VK_NULL_HANDLE;
+
+    // Optional source location for the call site that spawned this mesh.
+    // Populated via SetMesh3DDebugSource() and surfaced by Inspect Mode
+    // (--debug overlay) when hovering the object in the viewport.
+    std::string debugSrcFile;
+    int debugSrcLine = 0;
+
+    // Local transform only (no parent, no autoFit).
+    glm::mat4 ComputeLocal() const;
+    // Local transform with autoFit — what a root mesh is drawn with. For
+    // anything that may have a parent use GetMesh3DWorldModel().
+    glm::mat4 ComputeModel() const;
+  };
+  std::vector<Mesh3D> meshes3d;
+
+private:
+
+  // Infinite ground grid drawn on the XZ plane (Y=0). Rendered as one
+  // fullscreen triangle whose fragment shader raycasts the plane, so it
+  // covers exactly the visible ground with constant memory (no per-line
+  // vertex buffer). The buffer fields are unused now but kept for the
+  // shared cleanup path.
+  struct GridResources {
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    uint32_t vertexCount = 0;
+  } grid3d;
+  bool grid3dVisible = true;
+
+  // Decorative sun sphere drawn in the sky (unlit, depth test off). Kept
+  // separate from meshes3d so it stays out of the hierarchy / selection.
+  struct SunResources {
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+    uint32_t indexCount = 0;
+  } sun;
+  bool sunVisible = true;
+
+  // Texture manager
+  TextureManager textureManager;
+  std::string animationProjectRoot;
+  void UpdateWorldTexts();
+
+  struct DynamicTexture {
+    int width = 0, height = 0;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    void *mapped = nullptr;
+    VkDescriptorSet descriptor = VK_NULL_HANDLE;
+    bool pending = false;  // staging holds a frame not yet copied
+    bool uploaded = false; // image has been written at least once
+  };
+  std::unordered_map<int, DynamicTexture> dynamicTextures;
+  int nextDynamicTexture = 1;
+  // Lives as long as the renderer (offscreen.sampler is recreated on every
+  // viewport resize, which left descriptors built with it dangling). Used
+  // by the white fallback and the dynamic (video) textures.
+  VkSampler dynamicSampler = VK_NULL_HANDLE;
+  VkSampler EnsureDynamicSampler();
+  void FreeDynamicTexture(DynamicTexture &t);
+  void RecordDynamicTextureUploads(VkCommandBuffer cmd);
+
+  // Initialize components
+  void Init();
+  void InitVulkanResources();
+  void CreateOffscreenResources();
+  void DestroyOffscreenResources();
+  void InitPipelines();
+
+  // Helper functions
+  void DrawSprite(VkCommandBuffer cmd, VkDescriptorSet textureDescriptor,
+                  const glm::mat4 &mvp);
+  VkShaderModule LoadShader(const std::string &path);
+
+  // Test triangle helpers
+  void InitTestTrianglePipeline();
+  void DrawTestTriangle(VkCommandBuffer cmd);
+
+  // Mesh pipeline helpers
+  void InitMeshPipeline();
+  // drawMarkers: also draw the stand-in meshes of lights and cameras (editor
+  // only — a game never shows them).
+  void DrawMeshes(VkCommandBuffer cmd, const glm::mat4 &viewProj,
+                  bool drawMarkers);
+  bool UploadMeshBuffers(Mesh3D &mesh, const std::vector<MeshVertex> &verts,
+                         const std::vector<uint32_t> &indices);
+  void DestroyMesh(Mesh3D &mesh);
+  // Lazily create the 1x1 white fallback texture + its descriptor.
+  void InitWhiteTexture();
+  // Resolve a texture path to a bindable descriptor, falling back to the
+  // white texture on empty path or load failure.
+  VkDescriptorSet ResolveTextureDescriptor(const std::string &path);
+
+  // Grid helpers
+  void InitGridResources();
+  void DrawGrid3D(VkCommandBuffer cmd, const glm::mat4 &view,
+                  const glm::mat4 &proj);
+
+  // Sun helpers
+  void InitSunResources();
+  void DrawSun(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+
+  // Gizmo (dashed lines) helpers
+  void InitGizmoPipeline();
+  void DrawGizmos(VkCommandBuffer cmd, const glm::mat4 &viewProj);
+
+  // Preview (player-camera) helpers
+  void CreatePreviewResources();
+  void DestroyPreviewResources();
+  // Editor: sun, grid, light/camera markers and gizmos (each per its
+  // toggle). Game: the scene's meshes only — what a built game shows, and
+  // what the Game tab mirrors.
+  enum class WorldView { Editor, Game };
+  // Record the 3D world for the given camera matrices into an already-open
+  // render pass.
+  void RecordWorld(VkCommandBuffer cmd, const glm::mat4 &view3d,
+                   const glm::mat4 &proj3d, WorldView viewKind);
+  // Begin `target`'s render pass at w x h, clear to the background colour,
+  // run `record`, then submit and wait.
+  // `bloom`: run the bloom post-process on `target` after the pass.
+  void SubmitOffscreenPass(const Offscreen &target, int w, int h,
+                           const std::function<void(VkCommandBuffer)> &record,
+                           bool bloom = false);
+  // Bloom (BloomPass.hpp), applied to Game views (and Scene view on request).
+  ilmeee::BloomSettings bloom;
+  ilmeee::BloomPass bloomPass;
+  bool bloomInitTried = false;
+  void EnsureBloomPass();
+  // Compute the player camera's view/proj for the given aspect ratio.
+  // Returns false if there is no camera object in the scene.
+  bool ComputePlayerCameraMatrices(float aspect, glm::mat4 &view,
+                                   glm::mat4 &proj) const;
+
+public:
+  // Load an OBJ file into the 3D mesh list. Returns true on success.
+  bool LoadObjMesh(const std::string &path);
+  bool LoadWorldText(const std::string &name,
+                     const ilmeee::WorldTextComponent &text = {});
+
+  // Load a PMX (MikuMikuDance) model. Parses geometry, materials,
+  // and bones. Renders in bind pose using the mesh pipeline.
+  bool LoadPMXMesh(const std::string &path);
+
+  // Load an FBX model via ufbx. Merges all meshes into one Mesh3D with
+  // per-material submeshes (surfaces) and auto-loads diffuse textures.
+  bool LoadFbxMesh(const std::string &path);
+
+  // Procedural primitives — built on the same Mesh3D pipeline so they
+  // pick up the same lighting, picking, transform UI, etc. Each call
+  // appends a new mesh and returns true on success.
+  bool LoadCube(const std::string &name = "Cube", float size = 1.0f);
+  bool LoadSphere(const std::string &name = "Sphere", float radius = 0.5f,
+                  int segments = 24, int rings = 16);
+  bool LoadPlane(const std::string &name = "Plane", float size = 2.0f);
+  bool LoadLight(const std::string &name = "Light", int type = 0,
+                 const glm::vec3 &color = glm::vec3(1.0f, 0.96f, 0.88f),
+                 float intensity = 1.0f, float range = 10.0f,
+                 float spotAngle = 30.0f, float gamma = 1.05f);
+
+  // Vertical 16:9 quad in the XY plane facing +Z, UVs upright — the
+  // "Video Screen" object (with its Video Player component switched on).
+  bool LoadScreen(const std::string &name = "Video Screen",
+                  float width = 1.6f, float height = 0.9f);
+  // "Audio Source" object: an editor-only marker carrying an Audio Source
+  // component.
+  bool LoadAudioSource(const std::string &name = "Audio Source");
+
+  // In-scene player camera (separate from the editor free-cam). Appears as
+  // a small marker mesh plus a dashed frustum gizmo, and can be previewed.
+  bool LoadCamera(const std::string &name = "Camera", int projection = 0,
+                  float fov = 60.0f, float orthoSize = 5.0f, float nearP = 0.1f,
+                  float farP = 100.0f);
+
+  // Clear all loaded meshes (used when switching projects).
+  void ClearMeshes3D();
+
+  // Last value of `name` parameter for the i-th mesh (defaults to the
+  // OBJ filename stem or "Cube N" for primitives). Used by the
+  // hierarchy / inspector to label entries.
+  const std::string &GetMesh3DName(size_t i) const;
+
+  size_t GetMesh3DCount() const { return meshes3d.size(); }
+  glm::vec3 GetMesh3DPosition(size_t i) const;
+  glm::vec3 GetMesh3DRotation(size_t i) const;
+  glm::vec3 GetMesh3DScale(size_t i) const;
+  const std::string &GetMesh3DPath(size_t i) const;
+  uint32_t GetMesh3DVertexCount(size_t i) const;
+  uint32_t GetMesh3DTriangleCount(size_t i) const;
+  uint32_t GetMesh3DBoneCount(size_t i) const;
+  // physicsDelta >= 0 also steps the mesh's spring bones (play mode); the
+  // default leaves physics out, as the animation editor preview wants.
+  bool SetMesh3DAnimationPose(size_t i, const ilmeee::AnimationClip &clip,
+                             float time, float physicsDelta = -1);
+  void ResetMesh3DAnimationPose(size_t i);
+  void UpdateAnimations(float deltaSeconds);
+  void ResetAnimations();
+  void SetAnimationProjectRoot(const std::string &root) { animationProjectRoot = root; }
+  // ---- hierarchy ----------------------------------------------------------
+  int GetMesh3DParent(size_t i) const;
+  // True if `i` is `ancestor` or sits anywhere below it.
+  bool IsMesh3DInSubtree(size_t i, size_t ancestor) const;
+  // Reparent `child` under `parent` (-1 = root). With keepWorld the object
+  // stays where it is on screen (its local transform is recomputed);
+  // otherwise its local values are kept and it moves with the new parent.
+  // Refuses self-parenting and cycles.
+  bool SetMesh3DParent(size_t child, int parent, bool keepWorld = true);
+  // Removes the mesh and its whole subtree, freeing GPU resources, and
+  // renumbers the remaining parent links. Returns how many were removed.
+  // `remapOut` (optional) receives old index -> new index, -1 = removed.
+  size_t RemoveMesh3D(size_t i, std::vector<int> *remapOut = nullptr);
+  // Puts the meshes in the order `order` lists them (old indices, each
+  // exactly once); parent and rig-camera links follow. False (no change)
+  // when `order` is not a permutation.
+  bool ReorderMeshes3D(const std::vector<size_t> &order);
+  // Parent chain composed, without autoFit (what children inherit).
+  glm::mat4 GetMesh3DWorldTRS(size_t i) const;
+  // What mesh `i` is drawn and picked with: world TRS * autoFit.
+  glm::mat4 GetMesh3DWorldModel(size_t i) const;
+  glm::vec3 GetMesh3DWorldPosition(size_t i) const;
+  // Bounds of mesh `i` as drawn, in its own space (autoFit applied, its
+  // transform not) — the space Collider center/size use. False without
+  // CPU geometry.
+  bool GetMesh3DLocalBounds(size_t i, glm::vec3 &min, glm::vec3 &max) const;
+  // Rotates a local-space direction of mesh `i` by its parents' rotation.
+  glm::vec3 Mesh3DLocalDirToWorld(size_t i, const glm::vec3 &localDir) const;
+
+  void SetMesh3DTransform(size_t i, const glm::vec3 &position,
+                          const glm::vec3 &rotationEuler,
+                          const glm::vec3 &scale);
+
+  // --- Inspect Mode source tracking ---
+  // Attach the file:line of the call site that spawned mesh i. Called by
+  // scene bootstrap / spawn UI so the --debug overlay can report where a
+  // hovered scene object was created. Safe to call with a stale index.
+  void SetMesh3DDebugSource(size_t i, const char *file, int line);
+  const std::string &GetMesh3DDebugSrcFile(size_t i) const;
+  int GetMesh3DDebugSrcLine(size_t i) const;
+
+  // --- Surfaces (submeshes) and per-surface texturing ---
+  // A "surface" is one material range of the mesh. For PMX these are the
+  // model's materials (auto-detected); OBJ/primitives expose a single one.
+  uint32_t GetMesh3DSubmeshCount(size_t i) const;
+  const std::string &GetMesh3DSubmeshName(size_t i, uint32_t sub) const;
+  const std::string &GetMesh3DSubmeshTexture(size_t i, uint32_t sub) const;
+  glm::vec3 GetMesh3DSubmeshDiffuse(size_t i, uint32_t sub) const;
+  // Load `path` and bind it to surface `sub` of mesh `i`. Empty path or a
+  // load failure clears the binding (falls back to the diffuse color).
+  bool BindMesh3DSubmeshTexture(size_t i, uint32_t sub,
+                                const std::string &path);
+  void ClearMesh3DSubmeshTexture(size_t i, uint32_t sub);
+
+  // Click-pick: cast a ray through panel pixel (pxX,pxY) and return the
+  // nearest mesh + surface hit. Returns false if the ray misses everything.
+  bool PickMesh3DSurface(float pxX, float pxY, int &outMeshIndex,
+                         int &outSubmesh) const;
+  // Build a world-space ray from a panel pixel using the current 3D camera.
+  bool ScreenToRay(float pxX, float pxY, glm::vec3 &outOrigin,
+                   glm::vec3 &outDir) const;
+  // Editor 3D camera matrices for the current viewport size — the same ones
+  // RenderSceneToTexture draws with (used by the ImGui gizmo overlays).
+  glm::mat4 GetCamera3DView() const;
+  glm::mat4 GetCamera3DProj() const;
+
+  // Light property accessors
+  bool IsMesh3DLight(size_t i) const;
+  float GetMesh3DLightGamma(size_t i) const;
+  glm::vec3 GetMesh3DLightColor(size_t i) const;
+  float GetMesh3DLightIntensity(size_t i) const;
+  int GetMesh3DLightType(size_t i) const;
+  float GetMesh3DLightRange(size_t i) const;
+  float GetMesh3DLightSpotAngle(size_t i) const;
+
+  void SetMesh3DLightGamma(size_t i, float gamma);
+  void SetMesh3DLightColor(size_t i, const glm::vec3 &color);
+  void SetMesh3DLightIntensity(size_t i, float intensity);
+  void SetMesh3DLightType(size_t i, int type);
+  void SetMesh3DLightRange(size_t i, float range);
+  void SetMesh3DLightSpotAngle(size_t i, float angle);
+
+  // Camera property accessors
+  bool IsMesh3DCamera(size_t i) const;
+  int GetMesh3DCameraProjection(size_t i) const;
+  float GetMesh3DCameraFov(size_t i) const;
+  float GetMesh3DCameraOrthoSize(size_t i) const;
+  float GetMesh3DCameraNear(size_t i) const;
+  float GetMesh3DCameraFar(size_t i) const;
+  void SetMesh3DCameraProjection(size_t i, int projection);
+  void SetMesh3DCameraFov(size_t i, float fov);
+  void SetMesh3DCameraOrthoSize(size_t i, float size);
+  void SetMesh3DCameraNear(size_t i, float nearP);
+  void SetMesh3DCameraFar(size_t i, float farP);
+
+  // Player-camera preview. Render the scene from the first camera object
+  // into the preview target; the Scene UI shows it in a small window.
+  bool HasPlayerCamera() const;
+  // World pose of the game camera (the audio listener). False without one.
+  bool GetPlayerCameraPose(glm::vec3 &position, glm::vec3 &right,
+                           glm::vec3 &forward) const;
+
+  // Streaming RGBA8 textures (video frames), bindable on meshes. Ids stay
+  // valid until destroyed. Update copies into a staging buffer; the GPU
+  // upload is recorded at the start of the next render.
+  int CreateDynamicTexture(int width, int height);
+  void UpdateDynamicTexture(int id, const uint8_t *rgba);
+  // Null until the first frame has been handed over.
+  VkDescriptorSet GetDynamicTextureDescriptor(int id) const;
+  void DestroyDynamicTexture(int id);
+  void RenderPlayerCameraPreview();
+  VkDescriptorSet GetPlayerCameraPreviewDescriptor() const;
+  // Render the whole viewport target (size set by SetViewportSize) from the
+  // player camera in Game view — the runtime player's frame. Show it with
+  // GetViewportDescriptorSet(), V flipped like the editor viewport. Returns
+  // false (nothing rendered) when the scene has no camera.
+  bool RenderGameView();
+  // Copy the viewport target back to the CPU as tightly packed RGBA8, top
+  // row first. For screenshots and automated checks; stalls the GPU.
+  bool ReadbackViewport(std::vector<uint8_t> &rgba, int &outWidth,
+                        int &outHeight);
+  int GetPreviewWidth() const { return previewWidth; }
+  int GetPreviewHeight() const { return previewHeight; }
+  // Translate the i-th mesh in the camera's screen plane by (dxPx, dyPx)
+  // mouse pixels. Resolves pixel→world using the object's distance from
+  // the camera and the viewport height.
+  void DragMesh3DScreen(size_t i, float dxPx, float dyPx, int viewportHeight);
+
+  void SetGrid3DVisible(bool v) { grid3dVisible = v; }
+  bool IsGrid3DVisible() const { return grid3dVisible; }
+
+  void SetSunVisible(bool v) { sunVisible = v; }
+  bool IsSunVisible() const { return sunVisible; }
+
+  // Forward direction of the 3D camera (normalized), matching the render
+  // path. Useful for placing objects in front of the camera.
+  glm::vec3 GetCameraForward() const;
+
+  // Unproject a viewport pixel (top-left origin, panel pixels) onto the
+  // y=0 ground plane using the current 3D camera. Returns false when the
+  // ray is parallel to the ground or the hit is behind the camera.
+  bool ScreenToGround(float pxX, float pxY, glm::vec3 &outWorld) const;
+
+  bool IsSnapToGrid() const { return snapToGrid; }
+
+  // 2D grid helpers — exposed so the Scene panel can render a dynamic
+  // ImDrawList overlay that respects pan/zoom without needing a
+  // dedicated Vulkan grid pipeline.
+  float GetGridSize() const { return gridSize; }
+  bool IsGridVisible() const { return gridVisible; }
+  glm::vec4 GetGridColor() const {
+    return glm::vec4(gridColor.x, gridColor.y, gridColor.z, gridColor.w);
+  }
+  // Scene-wide toon lighting (saved in the scene, applied to every 3D view).
+  // Scene-wide bloom (saved in the scene). Game view, Game tab and player;
+  // the editor Scene view only with bloom.sceneView.
+  const ilmeee::BloomSettings &GetBloom() const { return bloom; }
+  void SetBloom(const ilmeee::BloomSettings &settings) {
+    bloom = settings;
+    bloom.Clamp();
+  }
+  // False when the bloom shaders/pipelines could not be created (true
+  // until the first attempt, which happens on the first bloomed frame).
+  bool BloomAvailable() const { return !bloomInitTried || bloomPass.Ready(); }
+  const ilmeee::NprSettings &GetNpr() const { return npr; }
+  void SetNpr(const ilmeee::NprSettings &settings) {
+    npr = settings;
+    npr.Clamp();
+  }
+  glm::vec4 GetBackgroundColor() const {
+    return glm::vec4(bgColor.x, bgColor.y, bgColor.z, bgColor.w);
+  }
+
+  // Unity-style directional sun light. Direction points *toward* the
+  // light source (i.e. the shader computes max(dot(N, sunDir), 0)).
+  struct SunLight {
+    glm::vec3 direction = glm::normalize(glm::vec3(0.55f, 0.80f, 0.30f));
+    glm::vec3 color = glm::vec3(1.0f, 0.96f, 0.88f);
+    float intensity = 0.90f;
+  } sunLight;
+
+  // FPS-style 3D camera driven by the Scene viewport. The 2D pan/zoom
+  // controls are kept for sprite scenes; when meshes3d is non-empty the
+  // 3D camera takes over the matrix used for rendering.
+  struct Camera3D {
+    glm::vec3 position = glm::vec3(0.0f, 1.6f, 3.0f);
+    float yaw = -90.0f; // facing -Z
+    float pitch = 0.0f;
+    float fovDeg = 60.0f;
+    float nearPlane = 0.01f;
+    float farPlane = 500.0f;
+    float moveSpeed = 2.5f;
+    float mouseSensitivity = 0.12f;
+  } camera3d;
+
+  // Logical editor state used by the per-engine-session undo history. GPU
+  // handles and decoded vertex data deliberately stay out of this snapshot;
+  // RestoreEditorSnapshot recreates those resources from the asset paths.
+  struct EditorEntitySnapshot {
+    uint64_t objectId = 0;
+    std::vector<ilmeee::NativeScriptBinding> scripts;
+    std::string name;
+    std::string path;
+    int parent = -1; // index into EditorSnapshot::entities
+    glm::vec3 position{0.0f};
+    glm::vec3 rotation{0.0f};
+    glm::vec3 scale{1.0f};
+    bool movable = false;
+    std::string movementScript;
+    float movementSpeed = 3.0f;
+    ilmeee::MovementRig movementRig; // camera = index into entities
+
+    bool isLight = false;
+    float lightGamma = 1.05f;
+    glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+    float lightIntensity = 1.0f;
+    int lightType = 0;
+    float lightRange = 10.0f;
+    float lightSpotAngle = 30.0f;
+
+    bool isCamera = false;
+    int camProjection = 0;
+    float camFov = 60.0f;
+    float camOrthoSize = 5.0f;
+    float camNear = 0.1f;
+    float camFar = 100.0f;
+
+    bool hasPhysics = false;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float mass = 1.0f;
+    float drag = 0.0f;
+    float gravityY = -9.81f;
+    glm::vec3 velocity{0.0f};
+    ilmeee::ColliderComponent collider;
+
+    ilmeee::AudioSourceComponent audio;
+    ilmeee::VideoPlayerComponent video;
+    ilmeee::DialogComponent dialog;
+    ilmeee::AnimationComponent animation;
+    ilmeee::SpringBoneComponent springBones;
+    bool isWorldText = false;
+    ilmeee::WorldTextComponent worldText;
+    bool isAudioEmitter = false;
+
+    std::string debugSrcFile;
+    int debugSrcLine = 0;
+    std::vector<std::string> submeshTextures;
+  };
+
+  struct EditorSnapshot {
+    std::vector<EditorEntitySnapshot> entities;
+    glm::vec2 cameraPosition{0.0f};
+    float cameraZoom = 1.0f;
+    float zoom = 1.0f;
+    float gridSize = 50.0f;
+    glm::vec4 gridColor{0.7f, 0.7f, 0.7f, 1.0f};
+    glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
+    int editMode = 0;
+    bool gridVisible = true;
+    bool snapToGrid = false;
+    bool grid3dVisible = true;
+    bool sunVisible = true;
+    Camera3D camera3d;
+    SunLight sunLight;
+  };
+
+  EditorSnapshot CaptureEditorSnapshot() const;
+  bool RestoreEditorSnapshot(const EditorSnapshot &snapshot);
+
+  // One-frame snapshot of input collected by the Scene window. Only the
+  // panel that owns mouse/keyboard focus should populate this; the
+  // renderer treats it as authoritative.
+  struct ViewportInput {
+    bool hovered = false;
+    bool rmbDown = false;
+    float mouseDeltaX = 0.0f;
+    float mouseDeltaY = 0.0f;
+    bool wDown = false;
+    bool aDown = false;
+    bool sDown = false;
+    bool dDown = false;
+    bool qDown = false;
+    bool eDown = false;
+    bool shiftDown = false;
+    float scroll = 0.0f;
+    float deltaTime = 1.0f / 60.0f;
+  };
+  void UpdateCamera3D(const ViewportInput &in);
+  bool HasMesh3D() const { return !meshes3d.empty(); }
+
+  void SetTestTriangleVisible(bool v) { showTestTriangle = v; }
+  bool IsTestTriangleVisible() const { return showTestTriangle; }
+
+private:
+  // Grid properties
+  bool gridVisible = true;
+  bool snapToGrid = true;
+
+  // Edit properties
+  // MOVE by default so selecting an object shows the transform gizmo.
+  EditMode currentMode = EditMode::MOVE;
+  GameObject *selectedObject = nullptr;
+  int selectedObjectIndex = -1;
+
+  uint32_t findMemoryType(uint32_t typeFilter,
+                          VkMemoryPropertyFlags properties);
+};

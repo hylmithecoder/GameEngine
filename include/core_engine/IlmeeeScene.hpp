@@ -1,0 +1,930 @@
+#pragma once
+// `.ilmeeescene` — Ilmeee engine native scene container.
+//
+// Binary format v1 (little-endian assumed; ASCII strings):
+//
+//   uint8  magic[4]      = 'I','L','M','S'
+//   uint16 versionMajor  = 1
+//   uint16 versionMinor  = 0
+//   uint32 entityCount
+//   for each entity:
+//     uint16 nameLen
+//     char   name[nameLen]
+//     uint8  kind         (0 = ExternalObj, 1 = Cube, 2 = Sphere, 3 = Plane)
+//     uint16 externalPathLen
+//     char   externalPath[externalPathLen]   (relative to project root)
+//     float32 position[3]
+//     float32 rotationEulerDeg[3]
+//     float32 scale[3]
+//     -- v1.1 light, v1.2 camera + surface textures (see SaveScene) --
+//     int32   parent      (v1.3) index of the parent entity, -1 = root;
+//                         position/rotation/scale are then parent-local
+//   -- after all entities, v1.4 environment --
+//   float32 backgroundColor[4]   clear colour the scene is shown against
+//   -- v1.5 UI entities: Canvas/UiText/UiImage/UiButton carry screen-space
+//      properties after their parent field; world entities have no extra data --
+//   -- v1.6 every entity carries movable, movementScript, movementSpeed
+//      after its optional UI fields --
+//   -- v1.7 then int32 rigCamera (entity index, -1 = Game view camera),
+//      uint32 cameraStyle, float32 distance, float32 height,
+//      string moveJoystick, string lookJoystick; UiJoystick entities --
+//   -- v1.8 then Audio Source: uint32 enabled, string clip, float32 volume,
+//      uint32 flags (1 loop, 2 playOnStart, 4 spatial), float32 minDistance,
+//      float32 maxDistance; Video Player: uint32 enabled, string clip,
+//      uint32 flags (1 loop, 2 playOnStart, 4 unlit), float32 volume,
+//      int32 surface; AudioSource / Screen entities --
+//   -- v1.9 then uint64 objectId, uint32 scriptCount, per script: string
+//      source, string class, uint32 enabled, uint32 valueCount, per value:
+//      string name, uint32 type, float32 number, uint32 boolean,
+//      uint64 object --
+//   -- v1.10 each script value also carries float32 x, y, z (Vec3 type) --
+//   -- v1.11 then uint32 uiVisible; Dialog: uint32 enabled, uint64 box,
+//      uint64 text, uint64 speaker, uint64 prompt (UI objectIds), string
+//      lines, string file, uint32 trigger, float32 range,
+//      float32 charsPerSecond, uint32 flags (1 repeatable, 2 freezePlayer) --
+//   -- v1.12 then animation: uint32 enabled, string clip, float32 speed,
+//      uint32 loop --
+//   -- v1.13 WorldText only: string text, float32 size, vec4 color,
+//      uint32 alignment, uint32 visible (after animation) --
+//   -- v1.14 each script value then carries string text, uint32 elementType,
+//      uint32 itemCount, and per item (List type): float32 number,
+//      uint32 boolean, uint64 object, float32 x, y, z, string text --
+//   -- v1.15 after backgroundColor, NPR lighting: uint32 flags (1 enabled,
+//      2 rim, 4 specular, 8 outline), uint32 bands, float32 softness,
+//      vec3 shadowColor, vec3 rimColor, float32 rimWidth, rimStrength,
+//      specularSize, specularStrength, vec3 outlineColor,
+//      float32 outlineWidth --
+//   -- v1.16 after animation.loop: string animation controller --
+//   -- v1.17 after the controller, spring bones: uint32 enabled, vec3 wind,
+//      uint32 chainCount, per chain: string rootBone, float32 stiffness,
+//      drag, gravity, hitRadius, uint32 useColliders; uint32 colliderCount,
+//      per collider: string bone, vec3 offset, vec3 tailOffset,
+//      float32 radius --
+//   -- v1.18 after the spring bones, Physics Body: uint32 flags (1 enabled,
+//      2 useGravity, 4 isKinematic), float32 mass, drag, gravityY;
+//      Collider: uint32 flags (1 enabled, 2 isTrigger), uint32 shape
+//      (0 box, 1 sphere, 2 capsule), vec3 center, vec3 size,
+//      float32 radius, height, friction, bounciness --
+//   -- v1.19 additional UI anchor/stretch modes --
+//   -- v1.20 script values may have type 6 (Asset: a .ilmeeeasset path in
+//      the string field), also as List element type --
+//   -- v1.21 after NPR, bloom: uint32 flags (1 enabled, 2 sceneView),
+//      float32 threshold, softKnee, intensity, radius, vec3 tint,
+//      uint32 iterations --
+//
+// Why a custom binary container instead of JSON: scenes will get big
+// (lots of meshes, transforms, hierarchy, per-instance overrides), and
+// keeping them out of text editors signals to authors that the scene
+// graph is authored through the editor — not by hand.
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <sstream>
+#include <string_view>
+#include "DialogComponent.hpp"
+#include "MediaComponents.hpp"
+#include "MovementScript.hpp"
+#include "NprSettings.hpp"
+#include "BloomSettings.hpp"
+#include "NativeScriptTypes.hpp"
+#include "Physics.hpp"
+#include "SkeletalAnimation.hpp"
+#include "SpringBone.hpp"
+#include "WorldText.hpp"
+#include <glm/glm.hpp>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+namespace ilmeee {
+
+// v1.16 adds an animation controller asset string after animation.loop;
+// v1.17 adds the spring bone component after it; v1.18 Physics Body +
+// Collider after that.
+// Newest minor version this code reads and writes. A newer file is refused:
+// its extra per-entity fields would be misread as the next entity (garbage
+// counts → huge allocations), e.g. an old Android player with a new scene.
+constexpr uint16_t kSceneFormatMinor = 21; // v1.21: bloom settings
+
+enum class PrimitiveKind : uint8_t {
+  ExternalObj = 0,
+  Cube = 1,
+  Sphere = 2,
+  Plane = 3,
+  ExternalPmx = 4,
+  Light = 5,
+  Camera = 6,
+  Canvas = 7,
+  UiText = 8,
+  UiImage = 9,
+  UiButton = 10,
+  UiJoystick = 11,
+  AudioSource = 12, // editor-only marker + Audio Source component (v1.8)
+  Screen = 13,      // 16:9 video screen quad (v1.8)
+  WorldText = 14,   // world-space text, not part of the Canvas (v1.13)
+};
+
+inline bool IsUiElementKind(PrimitiveKind kind) {
+  return kind == PrimitiveKind::UiText || kind == PrimitiveKind::UiImage ||
+         kind == PrimitiveKind::UiButton || kind == PrimitiveKind::UiJoystick;
+}
+
+// One per-surface texture override: which material/surface index of the
+// entity's mesh, and the texture path (relative to project root when it
+// lives inside the project, otherwise absolute).
+struct SurfaceTexture {
+  uint32_t surfaceIndex = 0;
+  std::string texturePath;
+};
+
+struct SceneEntity {
+  uint64_t objectId = 0;
+  std::vector<NativeScriptBinding> scripts;
+  std::string name;
+  PrimitiveKind kind = PrimitiveKind::Cube;
+  std::string externalPath; // relative to project root, for ExternalObj
+  glm::vec3 position{0.0f};
+  glm::vec3 rotationEuler{0.0f};
+  glm::vec3 scale{1.0f};
+
+  // Light properties (active only when kind == PrimitiveKind::Light)
+  float lightGamma = 1.05f;
+  glm::vec3 lightColor{1.0f, 0.96f, 0.88f};
+  float lightIntensity = 1.0f;
+  int lightType = 0; // 0 = Directional, 1 = Point, 2 = Spotlight
+  float lightRange = 10.0f;
+  float lightSpotAngle = 30.0f;
+
+  // Camera properties (active only when kind == PrimitiveKind::Camera) — v1.2
+  int camProjection = 0; // 0 = Perspective, 1 = Orthographic
+  float camFov = 60.0f;
+  float camOrthoSize = 5.0f;
+  float camNear = 0.1f;
+  float camFar = 100.0f;
+
+  // Per-surface texture bindings (v1.2). Empty for entities the user never
+  // re-textured beyond the model's own embedded textures.
+  std::vector<SurfaceTexture> surfaceTextures;
+
+  // Index of the parent in IlmeeeScene::entities, -1 for a root (v1.3).
+  int32_t parent = -1;
+
+  // v1.6 native movement component. Empty script means no movement.
+  bool movable = false;
+  std::string movementScript;
+  float movementSpeed = 3.0f;
+  // v1.7 camera rig + joystick links; rig.camera is an entity index.
+  MovementRig movementRig;
+  // v1.8 media components (any entity may carry them).
+  AudioSourceComponent audio;
+  VideoPlayerComponent video;
+  // v1.11 Dialog component (any entity may carry it).
+  DialogComponent dialog;
+  // v1.12: editable animation clip asset, shared by editor and players.
+  AnimationComponent animation;
+  SpringBoneComponent springBones; // v1.17, PMX/skinned meshes only
+  RigidBodyComponent rigidBody;    // v1.18
+  ColliderComponent collider;      // v1.18
+  WorldTextComponent worldText; // v1.13, used only by WorldText entities
+
+  // v1.5 screen-space UI. Canvas uses uiWidth/uiHeight as reference size;
+  // child elements use them as their displayed size.
+  uint8_t uiAnchor = 0;
+  float uiX = 0.0f, uiY = 0.0f;
+  float uiWidth = 160.0f, uiHeight = 44.0f;
+  float uiFontSize = 24.0f;
+  std::string uiText;
+  std::string uiImagePath;
+  std::string uiAction;
+  glm::vec4 uiColor{1.0f};
+  glm::vec4 uiBackground{0.14f, 0.20f, 0.31f, 0.92f};
+  bool uiVisible = true; // v1.11
+};
+
+struct IlmeeeScene {
+  std::vector<SceneEntity> entities;
+  // v1.4. Default matches SceneRenderer's, so older files look unchanged.
+  glm::vec4 backgroundColor{0.2f, 0.2f, 0.2f, 1.0f};
+  NprSettings npr; // v1.15; default off, so older files look unchanged
+  BloomSettings bloom; // v1.21; default off
+};
+
+namespace detail {
+
+inline void WriteBytes(std::ostream &f, const void *data, size_t n) {
+  f.write(reinterpret_cast<const char *>(data), (std::streamsize)n);
+}
+inline bool ReadBytes(std::istream &f, void *data, size_t n) {
+  f.read(reinterpret_cast<char *>(data), (std::streamsize)n);
+  return f.good() || (f.eof() && (size_t)f.gcount() == n);
+}
+
+inline void WriteU16(std::ostream &f, uint16_t v) { WriteBytes(f, &v, 2); }
+inline void WriteU32(std::ostream &f, uint32_t v) { WriteBytes(f, &v, 4); }
+inline void WriteU64(std::ostream &f, uint64_t v) { WriteBytes(f, &v, 8); }
+inline void WriteF32(std::ostream &f, float v) { WriteBytes(f, &v, 4); }
+inline void WriteVec3(std::ostream &f, const glm::vec3 &v) {
+  WriteF32(f, v.x);
+  WriteF32(f, v.y);
+  WriteF32(f, v.z);
+}
+inline void WriteVec4(std::ostream &f, const glm::vec4 &v) {
+  for (int i = 0; i < 4; ++i) WriteF32(f, v[i]);
+}
+inline void WriteString(std::ostream &f, const std::string &s) {
+  uint16_t n = (uint16_t)std::min<size_t>(s.size(), 65535);
+  WriteU16(f, n);
+  if (n)
+    f.write(s.data(), n);
+}
+
+inline bool ReadU16(std::istream &f, uint16_t &v) {
+  return (bool)f.read(reinterpret_cast<char *>(&v), 2);
+}
+inline bool ReadU32(std::istream &f, uint32_t &v) {
+  return (bool)f.read(reinterpret_cast<char *>(&v), 4);
+}
+inline bool ReadU64(std::istream &f, uint64_t &v) {
+  return (bool)f.read(reinterpret_cast<char *>(&v), 8);
+}
+inline bool ReadF32(std::istream &f, float &v) {
+  return (bool)f.read(reinterpret_cast<char *>(&v), 4);
+}
+inline bool ReadVec3(std::istream &f, glm::vec3 &v) {
+  return ReadF32(f, v.x) && ReadF32(f, v.y) && ReadF32(f, v.z);
+}
+inline bool ReadVec4(std::istream &f, glm::vec4 &v) {
+  for (int i = 0; i < 4; ++i)
+    if (!ReadF32(f, v[i])) return false;
+  return true;
+}
+inline bool ReadString(std::istream &f, std::string &out) {
+  uint16_t n = 0;
+  if (!ReadU16(f, n))
+    return false;
+  out.resize(n);
+  if (n && !f.read(out.data(), n))
+    return false;
+  return true;
+}
+
+// Payload shared by script values and List items (v1.9+ / v1.10+ / v1.14+).
+inline void WriteScriptScalar(std::ostream &f, const ScriptValue &value) {
+  WriteF32(f, value.number);
+  WriteU32(f, value.boolean ? 1 : 0);
+  WriteBytes(f, &value.object, sizeof(value.object));
+  for (float component : value.vec3)
+    WriteF32(f, component);
+  WriteString(f, value.string);
+}
+inline bool ReadScriptScalar(std::istream &f, ScriptValue &value) {
+  uint32_t boolean = 0;
+  if (!ReadF32(f, value.number) || !ReadU32(f, boolean) ||
+      !ReadBytes(f, &value.object, sizeof(value.object)))
+    return false;
+  value.boolean = boolean != 0;
+  for (float &component : value.vec3)
+    if (!ReadF32(f, component)) return false;
+  return ReadString(f, value.string);
+}
+// One named script value (v1.14+ layout), shared with .ilmeeeasset files.
+inline void WriteScriptValue(std::ostream &f, const ScriptValue &value) {
+  WriteString(f, value.name);
+  WriteU32(f, static_cast<uint32_t>(value.type));
+  WriteScriptScalar(f, value);
+  const auto items = std::min(value.items.size(), kMaxScriptListItems);
+  WriteU32(f, static_cast<uint32_t>(value.elementType));
+  WriteU32(f, static_cast<uint32_t>(items));
+  for (size_t i = 0; i < items; ++i)
+    WriteScriptScalar(f, value.items[i]);
+}
+// `newest`: the highest type the file's version may contain.
+inline bool ReadScriptValue(std::istream &f, ScriptValue &value,
+                            ScriptValueType newest) {
+  uint32_t type = 0, element = 0, items = 0;
+  if (!ReadString(f, value.name) || !ReadU32(f, type) ||
+      type > static_cast<uint32_t>(newest))
+    return false;
+  value.type = static_cast<ScriptValueType>(type);
+  if (!ReadScriptScalar(f, value) || !ReadU32(f, element) ||
+      element == static_cast<uint32_t>(ScriptValueType::List) ||
+      element > static_cast<uint32_t>(newest) || !ReadU32(f, items) ||
+      items > kMaxScriptListItems)
+    return false;
+  value.elementType = static_cast<ScriptValueType>(element);
+  value.items.resize(items);
+  for (auto &item : value.items) {
+    item.type = value.elementType;
+    if (!ReadScriptScalar(f, item)) return false;
+  }
+  return true;
+}
+
+} // namespace detail
+
+namespace detail {
+// Scenes ('ILMS') and prefabs ('ILMP') share one body layout.
+inline bool WriteSceneContainer(std::ostream &f, const IlmeeeScene &scene,
+                                const char *magic) {
+  detail::WriteBytes(f, magic, 4);
+  detail::WriteU16(f, 1); // major
+  detail::WriteU16(f, kSceneFormatMinor); // minor
+  detail::WriteU32(f, (uint32_t)scene.entities.size());
+  for (const auto &e : scene.entities) {
+    detail::WriteString(f, e.name);
+    uint8_t k = (uint8_t)e.kind;
+    detail::WriteBytes(f, &k, 1);
+    detail::WriteString(f, e.externalPath);
+    detail::WriteVec3(f, e.position);
+    detail::WriteVec3(f, e.rotationEuler);
+    detail::WriteVec3(f, e.scale);
+
+    // Version 1.1 extra fields
+    detail::WriteF32(f, e.lightGamma);
+    detail::WriteVec3(f, e.lightColor);
+    detail::WriteF32(f, e.lightIntensity);
+    detail::WriteU32(f, (uint32_t)e.lightType);
+    detail::WriteF32(f, e.lightRange);
+    detail::WriteF32(f, e.lightSpotAngle);
+
+    // Version 1.2: camera params + per-surface texture bindings
+    detail::WriteU32(f, (uint32_t)e.camProjection);
+    detail::WriteF32(f, e.camFov);
+    detail::WriteF32(f, e.camOrthoSize);
+    detail::WriteF32(f, e.camNear);
+    detail::WriteF32(f, e.camFar);
+    detail::WriteU32(f, (uint32_t)e.surfaceTextures.size());
+    for (const auto &st : e.surfaceTextures) {
+      detail::WriteU32(f, st.surfaceIndex);
+      detail::WriteString(f, st.texturePath);
+    }
+
+    // Version 1.3: hierarchy
+    detail::WriteU32(f, (uint32_t)e.parent);
+    // Version 1.5: only UI entities carry screen-space data.
+    if (e.kind == PrimitiveKind::Canvas) {
+      detail::WriteF32(f, e.uiWidth);
+      detail::WriteF32(f, e.uiHeight);
+    } else if (IsUiElementKind(e.kind)) {
+      detail::WriteBytes(f, &e.uiAnchor, 1);
+      detail::WriteF32(f, e.uiX);
+      detail::WriteF32(f, e.uiY);
+      detail::WriteF32(f, e.uiWidth);
+      detail::WriteF32(f, e.uiHeight);
+      detail::WriteF32(f, e.uiFontSize);
+      detail::WriteString(f, e.uiText);
+      detail::WriteString(f, e.uiImagePath);
+      detail::WriteString(f, e.uiAction);
+      detail::WriteVec4(f, e.uiColor);
+      detail::WriteVec4(f, e.uiBackground);
+    }
+    // Version 1.6: movement component, including inactive/default values.
+    detail::WriteU32(f, e.movable ? 1u : 0u);
+    detail::WriteString(f, e.movementScript);
+    detail::WriteF32(f, e.movementSpeed);
+    // Version 1.7: camera rig and joystick links.
+    detail::WriteU32(f, (uint32_t)e.movementRig.camera);
+    detail::WriteU32(f, (uint32_t)e.movementRig.style);
+    detail::WriteF32(f, e.movementRig.distance);
+    detail::WriteF32(f, e.movementRig.height);
+    detail::WriteString(f, e.movementRig.moveJoystick);
+    detail::WriteString(f, e.movementRig.lookJoystick);
+    // Version 1.8: media components.
+    detail::WriteU32(f, e.audio.enabled ? 1u : 0u);
+    detail::WriteString(f, e.audio.clip);
+    detail::WriteF32(f, e.audio.volume);
+    detail::WriteU32(f, (e.audio.loop ? 1u : 0u) |
+                            (e.audio.playOnStart ? 2u : 0u) |
+                            (e.audio.spatial ? 4u : 0u));
+    detail::WriteF32(f, e.audio.minDistance);
+    detail::WriteF32(f, e.audio.maxDistance);
+    detail::WriteU32(f, e.video.enabled ? 1u : 0u);
+    detail::WriteString(f, e.video.clip);
+    detail::WriteU32(f, (e.video.loop ? 1u : 0u) |
+                            (e.video.playOnStart ? 2u : 0u) |
+                            (e.video.unlit ? 4u : 0u));
+    detail::WriteF32(f, e.video.volume);
+    detail::WriteU32(f, (uint32_t)e.video.surface);
+    // Version 1.9: stable object identities and bound native scripts.
+    detail::WriteBytes(f, &e.objectId, sizeof(e.objectId));
+    detail::WriteU32(f, static_cast<uint32_t>(e.scripts.size()));
+    for (const auto &script : e.scripts) {
+      detail::WriteString(f, script.source);
+      detail::WriteString(f, script.className);
+      detail::WriteU32(f, script.enabled ? 1 : 0);
+      detail::WriteU32(f, static_cast<uint32_t>(script.values.size()));
+      // Version 1.10: Vec3 fields; 1.14: strings and lists; 1.20: assets.
+      for (const auto &value : script.values)
+        detail::WriteScriptValue(f, value);
+    }
+    // Version 1.11: UI visibility and the Dialog component.
+    detail::WriteU32(f, e.uiVisible ? 1u : 0u);
+    detail::WriteU32(f, e.dialog.enabled ? 1u : 0u);
+    detail::WriteU64(f, e.dialog.box);
+    detail::WriteU64(f, e.dialog.text);
+    detail::WriteU64(f, e.dialog.speaker);
+    detail::WriteU64(f, e.dialog.prompt);
+    detail::WriteString(f, e.dialog.lines);
+    detail::WriteString(f, e.dialog.file);
+    detail::WriteU32(f, static_cast<uint32_t>(e.dialog.trigger));
+    detail::WriteF32(f, e.dialog.range);
+    detail::WriteF32(f, e.dialog.charsPerSecond);
+    detail::WriteU32(f, (e.dialog.repeatable ? 1u : 0u) |
+                            (e.dialog.freezePlayer ? 2u : 0u));
+    detail::WriteU32(f, e.animation.enabled ? 1u : 0u);
+    detail::WriteString(f, e.animation.clip);
+    detail::WriteF32(f, e.animation.speed);
+    detail::WriteU32(f, e.animation.loop ? 1u : 0u);
+    // Version 1.16: reusable locomotion controller asset.
+    detail::WriteString(f, e.animation.controller);
+    // Version 1.17: spring bones (hair / breast / skirt secondary motion).
+    const SpringBoneComponent &spring = e.springBones;
+    detail::WriteU32(f, spring.enabled ? 1u : 0u);
+    detail::WriteVec3(f, spring.wind);
+    detail::WriteU32(f, (uint32_t)spring.chains.size());
+    for (const auto &chain : spring.chains) {
+      detail::WriteString(f, chain.rootBone);
+      detail::WriteF32(f, chain.stiffness);
+      detail::WriteF32(f, chain.drag);
+      detail::WriteF32(f, chain.gravity);
+      detail::WriteF32(f, chain.hitRadius);
+      detail::WriteU32(f, chain.useColliders ? 1u : 0u);
+    }
+    detail::WriteU32(f, (uint32_t)spring.colliders.size());
+    for (const auto &collider : spring.colliders) {
+      detail::WriteString(f, collider.bone);
+      detail::WriteVec3(f, collider.offset);
+      detail::WriteVec3(f, collider.tailOffset);
+      detail::WriteF32(f, collider.radius);
+    }
+    // Version 1.18: Physics Body + Collider.
+    const RigidBodyComponent &body = e.rigidBody;
+    detail::WriteU32(f, (body.enabled ? 1u : 0u) | (body.useGravity ? 2u : 0u) |
+                            (body.isKinematic ? 4u : 0u));
+    detail::WriteF32(f, body.mass);
+    detail::WriteF32(f, body.drag);
+    detail::WriteF32(f, body.gravityY);
+    const ColliderComponent &collider = e.collider;
+    detail::WriteU32(f, (collider.enabled ? 1u : 0u) |
+                            (collider.isTrigger ? 2u : 0u));
+    detail::WriteU32(f, static_cast<uint32_t>(collider.shape));
+    detail::WriteVec3(f, collider.center);
+    detail::WriteVec3(f, collider.size);
+    detail::WriteF32(f, collider.radius);
+    detail::WriteF32(f, collider.height);
+    detail::WriteF32(f, collider.friction);
+    detail::WriteF32(f, collider.bounciness);
+    if (e.kind == PrimitiveKind::WorldText) {
+      detail::WriteString(f, e.worldText.text);
+      detail::WriteF32(f, e.worldText.size);
+      detail::WriteVec4(f, e.worldText.color);
+      detail::WriteU32(f, static_cast<uint32_t>(e.worldText.alignment));
+      detail::WriteU32(f, e.worldText.visible ? 1u : 0u);
+    }
+  }
+
+  // Version 1.4: environment
+  for (int c = 0; c < 4; ++c)
+    detail::WriteF32(f, scene.backgroundColor[c]);
+
+  // Version 1.15: NPR lighting
+  const NprSettings &npr = scene.npr;
+  detail::WriteU32(f, npr.PackFlags());
+  detail::WriteU32(f, (uint32_t)npr.bands);
+  detail::WriteF32(f, npr.softness);
+  detail::WriteVec3(f, npr.shadowColor);
+  detail::WriteVec3(f, npr.rimColor);
+  detail::WriteF32(f, npr.rimWidth);
+  detail::WriteF32(f, npr.rimStrength);
+  detail::WriteF32(f, npr.specularSize);
+  detail::WriteF32(f, npr.specularStrength);
+  detail::WriteVec3(f, npr.outlineColor);
+  detail::WriteF32(f, npr.outlineWidth);
+
+  // Version 1.21: bloom
+  const BloomSettings &bloom = scene.bloom;
+  detail::WriteU32(f, bloom.PackFlags());
+  detail::WriteF32(f, bloom.threshold);
+  detail::WriteF32(f, bloom.softKnee);
+  detail::WriteF32(f, bloom.intensity);
+  detail::WriteF32(f, bloom.radius);
+  detail::WriteVec3(f, bloom.tint);
+  detail::WriteU32(f, (uint32_t)bloom.iterations);
+  return f.good();
+}
+
+inline bool ReadSceneContainer(std::istream &f, IlmeeeScene &out,
+                               const char *expectedMagic) {
+  char magic[4];
+  if (!f.read(magic, 4))
+    return false;
+  if (std::memcmp(magic, expectedMagic, 4) != 0)
+    return false;
+  uint16_t major = 0, minor = 0;
+  if (!detail::ReadU16(f, major) || !detail::ReadU16(f, minor))
+    return false;
+  if (major != 1 || minor > kSceneFormatMinor)
+    return false; // v1 only; newer minors need a newer engine
+  uint32_t count = 0;
+  if (!detail::ReadU32(f, count))
+    return false;
+  out.entities.clear();
+  out.entities.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    SceneEntity e;
+    if (!detail::ReadString(f, e.name))
+      return false;
+    uint8_t k = 0;
+    if (!f.read(reinterpret_cast<char *>(&k), 1))
+      return false;
+    e.kind = (PrimitiveKind)k;
+    if (!detail::ReadString(f, e.externalPath))
+      return false;
+    if (!detail::ReadVec3(f, e.position))
+      return false;
+    if (!detail::ReadVec3(f, e.rotationEuler))
+      return false;
+    if (!detail::ReadVec3(f, e.scale))
+      return false;
+
+    // Load version 1.1 fields if available
+    if (minor >= 1) {
+      if (!detail::ReadF32(f, e.lightGamma))
+        return false;
+      if (!detail::ReadVec3(f, e.lightColor))
+        return false;
+      if (!detail::ReadF32(f, e.lightIntensity))
+        return false;
+      uint32_t lt = 0;
+      if (!detail::ReadU32(f, lt))
+        return false;
+      e.lightType = (int)lt;
+      if (!detail::ReadF32(f, e.lightRange))
+        return false;
+      if (!detail::ReadF32(f, e.lightSpotAngle))
+        return false;
+    }
+
+    // Load version 1.2 fields if available (camera + surface textures).
+    if (minor >= 2) {
+      uint32_t proj = 0;
+      if (!detail::ReadU32(f, proj))
+        return false;
+      e.camProjection = (int)proj;
+      if (!detail::ReadF32(f, e.camFov))
+        return false;
+      if (!detail::ReadF32(f, e.camOrthoSize))
+        return false;
+      if (!detail::ReadF32(f, e.camNear))
+        return false;
+      if (!detail::ReadF32(f, e.camFar))
+        return false;
+      uint32_t texCount = 0;
+      if (!detail::ReadU32(f, texCount))
+        return false;
+      e.surfaceTextures.resize(texCount);
+      for (uint32_t t = 0; t < texCount; ++t) {
+        if (!detail::ReadU32(f, e.surfaceTextures[t].surfaceIndex))
+          return false;
+        if (!detail::ReadString(f, e.surfaceTextures[t].texturePath))
+          return false;
+      }
+    }
+
+    // Load version 1.3 fields if available (hierarchy).
+    if (minor >= 3) {
+      uint32_t parent = 0;
+      if (!detail::ReadU32(f, parent))
+        return false;
+      e.parent = (int32_t)parent;
+    }
+    if (minor >= 5) {
+      if (e.kind == PrimitiveKind::Canvas) {
+        if (!detail::ReadF32(f, e.uiWidth) ||
+            !detail::ReadF32(f, e.uiHeight)) return false;
+      } else if (IsUiElementKind(e.kind)) {
+        if (!detail::ReadBytes(f, &e.uiAnchor, 1) ||
+            !detail::ReadF32(f, e.uiX) || !detail::ReadF32(f, e.uiY) ||
+            !detail::ReadF32(f, e.uiWidth) ||
+            !detail::ReadF32(f, e.uiHeight) ||
+            !detail::ReadF32(f, e.uiFontSize) ||
+            !detail::ReadString(f, e.uiText) ||
+            !detail::ReadString(f, e.uiImagePath) ||
+            !detail::ReadString(f, e.uiAction) ||
+            !detail::ReadVec4(f, e.uiColor) ||
+            !detail::ReadVec4(f, e.uiBackground)) return false;
+      }
+    }
+    if (minor >= 6) {
+      uint32_t movable = 0;
+      if (!detail::ReadU32(f, movable) ||
+          !detail::ReadString(f, e.movementScript) ||
+          !detail::ReadF32(f, e.movementSpeed)) return false;
+      e.movable = movable != 0;
+    }
+    if (minor >= 7) {
+      uint32_t camera = 0, style = 0;
+      if (!detail::ReadU32(f, camera) || !detail::ReadU32(f, style) ||
+          !detail::ReadF32(f, e.movementRig.distance) ||
+          !detail::ReadF32(f, e.movementRig.height) ||
+          !detail::ReadString(f, e.movementRig.moveJoystick) ||
+          !detail::ReadString(f, e.movementRig.lookJoystick)) return false;
+      e.movementRig.camera = (int32_t)camera;
+      e.movementRig.style = style <= (uint32_t)CameraStyle::TopDown
+                                ? (CameraStyle)style : CameraStyle::None;
+    }
+    if (minor >= 8) {
+      uint32_t aOn = 0, aFlags = 0, vOn = 0, vFlags = 0, surface = 0;
+      if (!detail::ReadU32(f, aOn) || !detail::ReadString(f, e.audio.clip) ||
+          !detail::ReadF32(f, e.audio.volume) || !detail::ReadU32(f, aFlags) ||
+          !detail::ReadF32(f, e.audio.minDistance) ||
+          !detail::ReadF32(f, e.audio.maxDistance) ||
+          !detail::ReadU32(f, vOn) || !detail::ReadString(f, e.video.clip) ||
+          !detail::ReadU32(f, vFlags) || !detail::ReadF32(f, e.video.volume) ||
+          !detail::ReadU32(f, surface)) return false;
+      e.audio.enabled = aOn != 0;
+      e.audio.loop = (aFlags & 1u) != 0;
+      e.audio.playOnStart = (aFlags & 2u) != 0;
+      e.audio.spatial = (aFlags & 4u) != 0;
+      e.video.enabled = vOn != 0;
+      e.video.loop = (vFlags & 1u) != 0;
+      e.video.playOnStart = (vFlags & 2u) != 0;
+      e.video.unlit = (vFlags & 4u) != 0;
+      e.video.surface = (int32_t)surface;
+    }
+    if (minor >= 9) {
+      uint32_t count = 0;
+      if (!detail::ReadBytes(f, &e.objectId, sizeof(e.objectId)) ||
+          !detail::ReadU32(f, count) || count > 256) return false;
+      for (uint32_t s = 0; s < count; ++s) {
+        NativeScriptBinding script;
+        uint32_t enabled = 0, values = 0;
+        if (!detail::ReadString(f, script.source) || !detail::ReadString(f, script.className) ||
+            !detail::ReadU32(f, enabled) || !detail::ReadU32(f, values) || values > 1024) return false;
+        script.enabled = enabled != 0;
+        for (uint32_t v = 0; v < values; ++v) {
+          ScriptValue value;
+          const auto newest = minor >= 20   ? ScriptValueType::Asset
+                              : minor >= 14 ? ScriptValueType::List
+                              : minor >= 10 ? ScriptValueType::Vec3
+                                            : ScriptValueType::Object;
+          if (minor >= 14) {
+            if (!detail::ReadScriptValue(f, value, newest)) return false;
+          } else {
+            uint32_t type = 0, boolean = 0;
+            if (!detail::ReadString(f, value.name) || !detail::ReadU32(f, type) ||
+                type > static_cast<uint32_t>(newest)) return false;
+            value.type = static_cast<ScriptValueType>(type);
+            if (!detail::ReadF32(f, value.number) || !detail::ReadU32(f, boolean) ||
+                !detail::ReadBytes(f, &value.object, sizeof(value.object))) return false;
+            value.boolean = boolean != 0;
+            if (minor >= 10)
+              for (float &component : value.vec3)
+                if (!detail::ReadF32(f, component)) return false;
+          }
+          script.values.push_back(std::move(value));
+        }
+        e.scripts.push_back(std::move(script));
+      }
+    }
+    if (minor >= 11) {
+      uint32_t visible = 0, enabled = 0, trigger = 0, flags = 0;
+      DialogComponent &d = e.dialog;
+      if (!detail::ReadU32(f, visible) || !detail::ReadU32(f, enabled) ||
+          !detail::ReadU64(f, d.box) || !detail::ReadU64(f, d.text) ||
+          !detail::ReadU64(f, d.speaker) || !detail::ReadU64(f, d.prompt) ||
+          !detail::ReadString(f, d.lines) || !detail::ReadString(f, d.file) ||
+          !detail::ReadU32(f, trigger) || !detail::ReadF32(f, d.range) ||
+          !detail::ReadF32(f, d.charsPerSecond) || !detail::ReadU32(f, flags))
+        return false;
+      e.uiVisible = visible != 0;
+      d.enabled = enabled != 0;
+      d.trigger = trigger <= static_cast<uint32_t>(DialogTrigger::ScriptOnly)
+                      ? static_cast<DialogTrigger>(trigger)
+                      : DialogTrigger::Interact;
+      if (!std::isfinite(d.range) || d.range < 0) d.range = DialogComponent().range;
+      if (!std::isfinite(d.charsPerSecond) || d.charsPerSecond < 0)
+        d.charsPerSecond = DialogComponent().charsPerSecond;
+      d.repeatable = (flags & 1u) != 0;
+      d.freezePlayer = (flags & 2u) != 0;
+    }
+    if (minor >= 12) {
+      uint32_t enabled = 0, loop = 0;
+      if (!detail::ReadU32(f, enabled) || !detail::ReadString(f, e.animation.clip) ||
+          !detail::ReadF32(f, e.animation.speed) || !detail::ReadU32(f, loop))
+        return false;
+      e.animation.enabled = enabled != 0;
+      e.animation.loop = loop != 0;
+      if (!std::isfinite(e.animation.speed) || e.animation.speed < 0 ||
+          e.animation.speed > 100) e.animation.speed = 1;
+    }
+    if (minor >= 16 && !detail::ReadString(f, e.animation.controller)) return false;
+    if (minor >= 17) {
+      SpringBoneComponent &spring = e.springBones;
+      uint32_t enabled = 0, chains = 0, colliders = 0;
+      if (!detail::ReadU32(f, enabled) || !detail::ReadVec3(f, spring.wind) ||
+          !detail::ReadU32(f, chains) || chains > 4096)
+        return false;
+      spring.enabled = enabled != 0;
+      if (!std::isfinite(spring.wind.x) || !std::isfinite(spring.wind.y) ||
+          !std::isfinite(spring.wind.z)) spring.wind = glm::vec3(0.0f);
+      spring.chains.resize(chains);
+      for (auto &chain : spring.chains) {
+        uint32_t useColliders = 1;
+        if (!detail::ReadString(f, chain.rootBone) ||
+            !detail::ReadF32(f, chain.stiffness) || !detail::ReadF32(f, chain.drag) ||
+            !detail::ReadF32(f, chain.gravity) || !detail::ReadF32(f, chain.hitRadius) ||
+            !detail::ReadU32(f, useColliders))
+          return false;
+        const SpringBoneChain fallback;
+        if (!std::isfinite(chain.stiffness) || chain.stiffness < 0) chain.stiffness = fallback.stiffness;
+        if (!std::isfinite(chain.drag)) chain.drag = fallback.drag;
+        chain.drag = std::clamp(chain.drag, 0.0f, 1.0f);
+        if (!std::isfinite(chain.gravity)) chain.gravity = fallback.gravity;
+        if (!std::isfinite(chain.hitRadius) || chain.hitRadius < 0) chain.hitRadius = 0;
+        chain.useColliders = useColliders != 0;
+      }
+      if (!detail::ReadU32(f, colliders) || colliders > 4096) return false;
+      spring.colliders.resize(colliders);
+      for (auto &collider : spring.colliders) {
+        if (!detail::ReadString(f, collider.bone) ||
+            !detail::ReadVec3(f, collider.offset) ||
+            !detail::ReadVec3(f, collider.tailOffset) ||
+            !detail::ReadF32(f, collider.radius))
+          return false;
+        if (!std::isfinite(collider.radius) || collider.radius < 0) collider.radius = 0;
+      }
+    }
+    if (minor >= 18) {
+      RigidBodyComponent &body = e.rigidBody;
+      ColliderComponent &collider = e.collider;
+      uint32_t bodyFlags = 0, colliderFlags = 0, shape = 0;
+      if (!detail::ReadU32(f, bodyFlags) || !detail::ReadF32(f, body.mass) ||
+          !detail::ReadF32(f, body.drag) || !detail::ReadF32(f, body.gravityY) ||
+          !detail::ReadU32(f, colliderFlags) || !detail::ReadU32(f, shape) ||
+          !detail::ReadVec3(f, collider.center) ||
+          !detail::ReadVec3(f, collider.size) ||
+          !detail::ReadF32(f, collider.radius) ||
+          !detail::ReadF32(f, collider.height) ||
+          !detail::ReadF32(f, collider.friction) ||
+          !detail::ReadF32(f, collider.bounciness))
+        return false;
+      body.enabled = (bodyFlags & 1u) != 0;
+      body.useGravity = (bodyFlags & 2u) != 0;
+      body.isKinematic = (bodyFlags & 4u) != 0;
+      const RigidBodyComponent fallback;
+      if (!std::isfinite(body.mass) || body.mass <= 0 || body.mass > 100000)
+        body.mass = fallback.mass;
+      if (!std::isfinite(body.drag) || body.drag < 0 || body.drag > 1000)
+        body.drag = fallback.drag;
+      if (!std::isfinite(body.gravityY) || std::fabs(body.gravityY) > 1000)
+        body.gravityY = fallback.gravityY;
+      collider.enabled = (colliderFlags & 1u) != 0;
+      collider.isTrigger = (colliderFlags & 2u) != 0;
+      collider.shape = static_cast<ColliderShape>(shape);
+      collider.Clamp();
+    }
+    if (e.kind == PrimitiveKind::WorldText) {
+      uint32_t alignment = 1, visible = 1;
+      if (minor < 13 || !detail::ReadString(f, e.worldText.text) ||
+          !detail::ReadF32(f, e.worldText.size) ||
+          !detail::ReadVec4(f, e.worldText.color) ||
+          !detail::ReadU32(f, alignment) || !detail::ReadU32(f, visible))
+        return false;
+      if (!std::isfinite(e.worldText.size) || e.worldText.size <= 0 ||
+          e.worldText.size > 100) e.worldText.size = 0.5f;
+      for (int c = 0; c < 4; ++c)
+        e.worldText.color[c] = std::isfinite(e.worldText.color[c])
+            ? std::clamp(e.worldText.color[c], 0.0f, 1.0f) : 1.0f;
+      e.worldText.alignment = alignment <= 2 ? static_cast<int>(alignment) : 1;
+      e.worldText.visible = visible != 0;
+    }
+    out.entities.push_back(std::move(e));
+  }
+
+  out.backgroundColor = IlmeeeScene().backgroundColor;
+  if (minor >= 4) {
+    for (int c = 0; c < 4; ++c)
+      if (!detail::ReadF32(f, out.backgroundColor[c]))
+        return false;
+  }
+  out.npr = NprSettings();
+  out.bloom = BloomSettings();
+  if (minor >= 15) {
+    NprSettings &npr = out.npr;
+    uint32_t flags = 0, bands = 0;
+    if (!detail::ReadU32(f, flags) || !detail::ReadU32(f, bands) ||
+        !detail::ReadF32(f, npr.softness) ||
+        !detail::ReadVec3(f, npr.shadowColor) ||
+        !detail::ReadVec3(f, npr.rimColor) ||
+        !detail::ReadF32(f, npr.rimWidth) ||
+        !detail::ReadF32(f, npr.rimStrength) ||
+        !detail::ReadF32(f, npr.specularSize) ||
+        !detail::ReadF32(f, npr.specularStrength) ||
+        !detail::ReadVec3(f, npr.outlineColor) ||
+        !detail::ReadF32(f, npr.outlineWidth))
+      return false;
+    npr.UnpackFlags(flags);
+    npr.bands = (int)std::min<uint32_t>(bands, 5);
+    npr.Clamp();
+  }
+  if (minor >= 21) {
+    BloomSettings &bloom = out.bloom;
+    uint32_t flags = 0, iterations = 0;
+    if (!detail::ReadU32(f, flags) || !detail::ReadF32(f, bloom.threshold) ||
+        !detail::ReadF32(f, bloom.softKnee) ||
+        !detail::ReadF32(f, bloom.intensity) ||
+        !detail::ReadF32(f, bloom.radius) || !detail::ReadVec3(f, bloom.tint) ||
+        !detail::ReadU32(f, iterations))
+      return false;
+    bloom.UnpackFlags(flags);
+    bloom.iterations = (int)std::min<uint32_t>(iterations, 64);
+    bloom.Clamp();
+  }
+
+  // A link that points outside the file, at itself, or into a loop would
+  // hang or confuse the hierarchy; demote such entities to roots.
+  const int32_t n = (int32_t)out.entities.size();
+  std::unordered_set<uint64_t> identities;
+  for (auto &e : out.entities) {
+    if (!e.objectId || !identities.insert(e.objectId).second) {
+      do { e.objectId = NewObjectId(); } while (!identities.insert(e.objectId).second);
+    }
+  }
+  for (auto &e : out.entities)
+    if (e.movementRig.camera < -1 || e.movementRig.camera >= n)
+      e.movementRig.camera = -1;
+  for (int32_t i = 0; i < n; ++i) {
+    int32_t p = out.entities[i].parent;
+    if (p < -1 || p >= n || p == i) {
+      out.entities[i].parent = -1;
+      continue;
+    }
+    int32_t cur = p;
+    for (int32_t steps = 0; cur >= 0 && steps <= n; ++steps) {
+      if (cur == i) {
+        out.entities[i].parent = -1;
+        break;
+      }
+      cur = out.entities[cur].parent;
+    }
+  }
+  return true;
+}
+
+inline bool SaveSceneContainer(const std::string &path,
+                               const IlmeeeScene &scene, const char *magic) {
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  return f.is_open() && WriteSceneContainer(f, scene, magic);
+}
+
+inline bool LoadSceneContainer(const std::string &path, IlmeeeScene &out,
+                               const char *expectedMagic) {
+  std::ifstream f(path, std::ios::binary);
+  return f.is_open() && ReadSceneContainer(f, out, expectedMagic);
+}
+
+} // namespace detail
+
+// In-memory form of a scene file (same bytes as SaveScene writes). Used to
+// ship scene entities over the network (realtime collaboration).
+inline std::string SaveSceneToBytes(const IlmeeeScene &scene) {
+  std::ostringstream f(std::ios::binary);
+  if (!detail::WriteSceneContainer(f, scene, "ILMS"))
+    return {};
+  return std::move(f).str();
+}
+inline bool LoadSceneFromBytes(std::string_view bytes, IlmeeeScene &out) {
+  std::istringstream f(std::string(bytes), std::ios::binary);
+  IlmeeeScene loaded;
+  if (!detail::ReadSceneContainer(f, loaded, "ILMS"))
+    return false;
+  out = std::move(loaded);
+  return true;
+}
+
+inline bool SaveScene(const std::string &path, const IlmeeeScene &scene) {
+  return detail::SaveSceneContainer(path, scene, "ILMS");
+}
+inline bool LoadScene(const std::string &path, IlmeeeScene &out) {
+  return detail::LoadSceneContainer(path, out, "ILMS");
+}
+
+// Default scene used the first time a project is opened: one Cube at
+// origin. Hub generates this automatically when the user hits
+// "+ New Project" but the editor also self-heals when opening a
+// project that has no scenes/main.ilmeeescene yet.
+inline IlmeeeScene DefaultScene() {
+  IlmeeeScene s;
+  SceneEntity e;
+  e.name = "Cube";
+  e.kind = PrimitiveKind::Cube;
+  e.scale = glm::vec3(1.0f);
+  s.entities.push_back(std::move(e));
+  return s;
+}
+
+} // namespace ilmeee

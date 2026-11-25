@@ -1,0 +1,1295 @@
+#include "../../../include/core_engine/NativeScripts.hpp"
+#include "../../../include/core_engine/IlmeeeAsset.hpp"
+#include "../../../include/core_engine/ScriptWorkspace.hpp"
+#include "../../../include/core_engine/UserDataDir.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <json.hpp>
+#include <set>
+#include <stdexcept>
+#ifdef _WIN32
+#include "../../../include/core_engine/Platform.hpp"
+// dlopen-style shim so module loading below is one code path.
+namespace {
+constexpr int RTLD_NOW = 0, RTLD_LOCAL = 0;
+thread_local std::string g_dlError;
+// Takes path::c_str() (UTF-16 on Windows), so non-ASCII project paths work.
+void *dlopen(const wchar_t *path, int) {
+  // Resolve the module's own dependencies next to it, like $ORIGIN on Linux.
+  HMODULE h = LoadLibraryExW(path, nullptr,
+                             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                 LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  if (!h)
+    g_dlError = "LoadLibrary failed for " +
+                std::filesystem::path(path).string() + ", error " +
+                std::to_string(GetLastError());
+  return reinterpret_cast<void *>(h);
+}
+void *dlsym(void *library, const char *name) {
+  return reinterpret_cast<void *>(
+      GetProcAddress(reinterpret_cast<HMODULE>(library), name));
+}
+int dlclose(void *library) {
+  return FreeLibrary(reinterpret_cast<HMODULE>(library)) ? 0 : -1;
+}
+const char *dlerror() { return g_dlError.c_str(); }
+
+// CommandLineToArgvW quoting for one argument.
+std::wstring QuoteArg(const std::wstring &arg) {
+  if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos)
+    return arg;
+  std::wstring out = L"\"";
+  for (size_t i = 0;; ++i) {
+    size_t slashes = 0;
+    while (i < arg.size() && arg[i] == L'\\') {
+      ++i;
+      ++slashes;
+    }
+    if (i == arg.size()) {
+      out.append(slashes * 2, L'\\');
+      break;
+    }
+    if (arg[i] == L'"')
+      out.append(slashes * 2 + 1, L'\\');
+    else
+      out.append(slashes, L'\\');
+    out += arg[i];
+  }
+  return out + L"\"";
+}
+
+// Runs args[0] with stdout+stderr in `log`; returns the exit code, or -1
+// with `error` set when it could not start. No console window flashes up.
+int RunToLog(const std::vector<std::filesystem::path> &args,
+             const std::filesystem::path &log, std::string &error) {
+  std::wstring cmd;
+  for (const auto &a : args) {
+    if (!cmd.empty())
+      cmd += L' ';
+    cmd += QuoteArg(a.wstring());
+  }
+  SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+  HANDLE out = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (out == INVALID_HANDLE_VALUE) {
+    error = "cannot write " + log.string();
+    return -1;
+  }
+  STARTUPINFOW si{};
+  si.cb = sizeof si;
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = out;
+  si.hStdError = out;
+  PROCESS_INFORMATION pi{};
+  const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                 CREATE_NO_WINDOW, nullptr,
+                                 nullptr, &si, &pi);
+  CloseHandle(out);
+  if (!ok) {
+    error = "error " + std::to_string(GetLastError());
+    return -1;
+  }
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return (int)code;
+}
+
+// A MinGW g++ for project scripts: $ILMEEE_SCRIPT_CXX, then PATH, then the
+// default MSYS2 UCRT64 install (the toolchain the engine is built with, so
+// the C++ ABI matches).
+std::filesystem::path FindWindowsCompiler() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (const char *env = std::getenv("PATH")) {
+    std::string path = env;
+    size_t start = 0;
+    while (start <= path.size()) {
+      size_t end = path.find(';', start);
+      if (end == std::string::npos)
+        end = path.size();
+      const fs::path dir = path.substr(start, end - start);
+      for (const char *name : {"g++.exe", "c++.exe"})
+        if (!dir.empty() && fs::is_regular_file(dir / name, ec))
+          return dir / name;
+      start = end + 1;
+    }
+  }
+  for (const char *root : {"C:\\msys64\\ucrt64\\bin", "C:\\msys64\\mingw64\\bin"})
+    if (fs::is_regular_file(fs::path(root) / "g++.exe", ec))
+      return fs::path(root) / "g++.exe";
+  return {};
+}
+} // namespace
+#else
+#include <cerrno>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#ifndef __ANDROID__
+#include <spawn.h>
+#endif
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#endif
+
+namespace ilmeee {
+namespace fs = std::filesystem;
+namespace {
+bool Inside(const fs::path &root, const fs::path &path) {
+  const auto relative = path.lexically_relative(root);
+  return !relative.empty() && !relative.is_absolute() &&
+         *relative.begin() != "..";
+}
+std::string ReadLog(const fs::path &file) {
+  std::ifstream input(file);
+  std::string result(128 * 1024, '\0');
+  input.read(result.data(), result.size());
+  result.resize(static_cast<size_t>(input.gcount()));
+  return result;
+}
+std::string AndroidTriple(const std::string &abi) {
+  if (abi == "arm64-v8a") return "aarch64-linux-android";
+  if (abi == "armeabi-v7a") return "armv7a-linux-androideabi";
+  if (abi == "x86_64") return "x86_64-linux-android";
+  if (abi == "x86") return "i686-linux-android";
+  throw std::runtime_error("Unsupported Android script ABI: " + abi);
+}
+std::string ReadFile(const fs::path &file) {
+  std::ifstream input(file, std::ios::binary);
+  if (!input) throw std::runtime_error("Cannot read script SDK header: " + file.string());
+  return {std::istreambuf_iterator<char>(input), {}};
+}
+std::string ScriptRevision(const fs::path &project) {
+  std::string revision;
+  std::error_code ec;
+  const auto scripts = project / "assets/scripts";
+  if (!fs::is_directory(scripts, ec))
+    return revision;
+  fs::recursive_directory_iterator it(
+      scripts, fs::directory_options::skip_permission_denied, ec),
+      end;
+  for (; !ec && it != end; it.increment(ec)) {
+    const auto extension = it->path().extension();
+    if (!it->is_regular_file(ec) ||
+        (extension != ".cpp" && extension != ".hpp"))
+      continue;
+    const auto time = fs::last_write_time(it->path(), ec);
+    if (!ec)
+      revision +=
+          it->path().string() + std::to_string(static_cast<long long>(time.time_since_epoch().count()));
+  }
+  return revision;
+}
+// One element of each Inspector type, handed to a script's ListAccess.
+struct ScalarSlot {
+  float number = 0;
+  bool boolean = false;
+  std::string text;
+  script::Vec3 vec;
+  GameObjectRef object;
+  script::AssetRefBase asset;
+  void *For(ScriptValueType type) {
+    switch (type) {
+    case ScriptValueType::Float: return &number;
+    case ScriptValueType::Bool: return &boolean;
+    case ScriptValueType::String: return &text;
+    case ScriptValueType::Vec3: return &vec;
+    case ScriptValueType::Object: return &object;
+    case ScriptValueType::Asset: return &asset;
+    default: return nullptr;
+    }
+  }
+};
+void ReadScalar(ScriptValueType type, const void *from, ScriptValue &value) {
+  if (type == ScriptValueType::Float)
+    value.number = *static_cast<const float *>(from);
+  if (type == ScriptValueType::Bool)
+    value.boolean = *static_cast<const bool *>(from);
+  if (type == ScriptValueType::String)
+    value.string = *static_cast<const std::string *>(from);
+  if (type == ScriptValueType::Object)
+    value.object = static_cast<const GameObjectRef *>(from)->id;
+  if (type == ScriptValueType::Asset)
+    value.string = static_cast<const script::AssetRefBase *>(from)->path;
+  if (type == ScriptValueType::Vec3) {
+    const auto *vec = static_cast<const script::Vec3 *>(from);
+    value.vec3[0] = vec->x;
+    value.vec3[1] = vec->y;
+    value.vec3[2] = vec->z;
+  }
+}
+void WriteScalar(ScriptValueType type, void *to, const ScriptValue &value,
+                 const script::HostApi *host) {
+  if (type == ScriptValueType::Float)
+    *static_cast<float *>(to) = value.number;
+  if (type == ScriptValueType::Bool)
+    *static_cast<bool *>(to) = value.boolean;
+  if (type == ScriptValueType::String)
+    *static_cast<std::string *>(to) = value.string;
+  if (type == ScriptValueType::Vec3)
+    *static_cast<script::Vec3 *>(to) = {value.vec3[0], value.vec3[1],
+                                        value.vec3[2]};
+  if (type == ScriptValueType::Object) {
+    auto *ref = static_cast<GameObjectRef *>(to);
+    ref->id = value.object;
+    ref->Bind(host);
+  }
+  if (type == ScriptValueType::Asset) {
+    auto *ref = static_cast<script::AssetRefBase *>(to);
+    ref->path = value.string;
+    ref->Bind(host);
+  }
+}
+bool ValidField(const ScriptProperty &field) {
+  if (field.type == ScriptValueType::List)
+    return field.list && IsScriptScalar(field.elementType);
+  return IsScriptScalar(field.type);
+}
+ScriptValue ReadProperty(const ScriptProperty &field) {
+  ScriptValue value;
+  value.name = field.name;
+  value.type = field.type;
+  if (field.assetClass)
+    value.assetClass = field.assetClass;
+  if (field.type != ScriptValueType::List) {
+    ReadScalar(field.type, field.value, value);
+    return value;
+  }
+  value.elementType = field.elementType;
+  const size_t count = field.list->size(field.value);
+  for (size_t i = 0; i < count; ++i) {
+    ScalarSlot slot;
+    field.list->get(field.value, i, slot.For(field.elementType));
+    ScriptValue item;
+    item.type = field.elementType;
+    ReadScalar(item.type, slot.For(item.type), item);
+    value.items.push_back(std::move(item));
+  }
+  return value;
+}
+bool Finite(const ScriptValue &value) {
+  if (value.type == ScriptValueType::Float)
+    return std::isfinite(value.number);
+  if (value.type == ScriptValueType::Vec3)
+    return std::isfinite(value.vec3[0]) && std::isfinite(value.vec3[1]) &&
+           std::isfinite(value.vec3[2]);
+  if (value.type == ScriptValueType::List)
+    return value.items.size() <= kMaxScriptListItems &&
+           std::all_of(value.items.begin(), value.items.end(),
+                       [](const ScriptValue &item) { return Finite(item); });
+  return true;
+}
+// `properties`: what the component / ScriptableObject described.
+void ApplyProperties(const ScriptProperties &properties,
+                     const std::vector<ScriptValue> &stored,
+                     const script::HostApi *host) {
+  for (const auto &field : properties.fields) {
+    if (!ValidField(field))
+      continue;
+    ScriptValue shape;
+    shape.name = field.name;
+    shape.type = field.type;
+    shape.elementType = field.elementType;
+    for (const auto &value : stored) {
+      if (!SameScriptShape(value, shape) || !Finite(value))
+        continue;
+      if (field.type != ScriptValueType::List) {
+        WriteScalar(field.type, field.value, value, host);
+        continue;
+      }
+      field.list->resize(field.value, value.items.size());
+      for (size_t i = 0; i < value.items.size(); ++i) {
+        ScalarSlot slot;
+        WriteScalar(field.elementType, slot.For(field.elementType),
+                    value.items[i], host);
+        field.list->set(field.value, i, slot.For(field.elementType));
+      }
+    }
+    // Defaults the Inspector never touched still need the host.
+    if (field.type == ScriptValueType::Object)
+      static_cast<GameObjectRef *>(field.value)->Bind(host);
+    if (field.type == ScriptValueType::Asset)
+      static_cast<script::AssetRefBase *>(field.value)->Bind(host);
+    if (field.type == ScriptValueType::List &&
+        (field.elementType == ScriptValueType::Object ||
+         field.elementType == ScriptValueType::Asset)) {
+      const size_t count = field.list->size(field.value);
+      for (size_t i = 0; i < count; ++i) {
+        ScalarSlot slot;
+        void *item = slot.For(field.elementType);
+        field.list->get(field.value, i, item);
+        if (field.elementType == ScriptValueType::Object)
+          slot.object.Bind(host);
+        else
+          slot.asset.Bind(host);
+        field.list->set(field.value, i, item);
+      }
+    }
+  }
+}
+void ApplyProperties(Component &component, const NativeScriptBinding &binding,
+                     const script::HostApi *host) {
+  ScriptProperties properties;
+  component.DescribeProperties(properties);
+  ApplyProperties(properties, binding.values, host);
+}
+} // namespace
+
+ScriptCompileOptions DefaultScriptCompileOptions(const fs::path &project) {
+  ScriptCompileOptions options;
+  options.project = project;
+  options.cache = project / ".ilmeee/native-scripts";
+#ifdef ILMEEE_SCRIPT_INCLUDE
+  if (fs::exists(fs::path(ILMEEE_SCRIPT_INCLUDE) /
+                 "core_engine/core/Component.hpp"))
+    options.sdkInclude = ILMEEE_SCRIPT_INCLUDE;
+#endif
+  if (options.sdkInclude.empty()) {
+    for (const auto &path : {ExecutableDir() / "../../include",
+                             ExecutableDir() / "../include/ilmeeeengine",
+                             ExecutableDir() / "include"})
+      if (fs::exists(path / "core_engine/core/Component.hpp")) {
+        options.sdkInclude = fs::weakly_canonical(path);
+        break;
+      }
+  }
+#ifdef ILMEEE_SCRIPT_COMPILER
+  if (fs::exists(ILMEEE_SCRIPT_COMPILER))
+    options.compiler = ILMEEE_SCRIPT_COMPILER;
+#endif
+  if (const char *compiler = std::getenv("ILMEEE_SCRIPT_CXX");
+      compiler && *compiler)
+    options.compiler = compiler;
+#ifdef _WIN32
+  // The portable default "c++" is not on a Windows PATH: find a real g++.
+  if (std::error_code ec; !fs::is_regular_file(options.compiler, ec))
+    if (auto found = FindWindowsCompiler(); !found.empty())
+      options.compiler = found.string();
+#endif
+  return options;
+}
+
+ScriptCompileOptions AndroidScriptCompileOptions(const fs::path &project,
+                                                 const fs::path &player,
+                                                 const std::string &abi) {
+  AndroidTriple(abi); // Validate before constructing any paths.
+  auto options = DefaultScriptCompileOptions(project);
+  const auto metadata = player / ("script-toolchain-" + abi + ".json");
+  std::ifstream input(metadata);
+  if (!input)
+    throw std::runtime_error("Android player has no native-script toolchain for " + abi +
+                             ". Rebuild it with scripts/android/build-player.sh.");
+  const auto config = nlohmann::json::parse(input);
+  if (config.at("schema").get<int>() != 1 ||
+      config.at("abi").get<std::string>() != abi ||
+      config.at("stl").get<std::string>() != "c++_shared")
+    throw std::runtime_error("Incompatible Android script toolchain; rebuild the Android player.");
+  options.compiler = config.at("compiler").get<std::string>();
+  options.androidAbi = abi;
+  options.androidApi = config.at("api").get<int>();
+  if (options.androidApi != 26)
+    throw std::runtime_error("Android script API must match the APK minSdk (26); rebuild the player.");
+  if (!fs::is_regular_file(options.compiler))
+    throw std::runtime_error("Player's Android NDK compiler is missing: " + options.compiler +
+                             ". Restore that NDK or rebuild the Android player.");
+  const auto snapshot = player / "script-sdk" / abi;
+  const auto current = options.sdkInclude;
+  if (!fs::is_directory(current / "core_engine/script"))
+    throw std::runtime_error("Current engine script SDK not found.");
+  std::vector<fs::path> headers = {"core_engine/core/Component.hpp", "core_engine/NativeScriptTypes.hpp"};
+  for (const auto &entry : fs::recursive_directory_iterator(current / "core_engine/script"))
+    if (entry.is_regular_file()) headers.push_back(entry.path().lexically_relative(current));
+  for (const auto &header : headers)
+    if (!fs::is_regular_file(snapshot / header) ||
+        ReadFile(current / header) != ReadFile(snapshot / header))
+      throw std::runtime_error("Android player script SDK is outdated (" + header.generic_string() +
+                               "); rebuild with scripts/android/build-player.sh.");
+  options.sdkInclude = snapshot;
+  options.cache = project / ".ilmeee/native-scripts-android" / abi;
+  return options;
+}
+
+std::vector<std::string> DiscoverNativeScripts(const fs::path &project) {
+  std::vector<std::string> sources;
+  std::error_code ec;
+  const auto root = fs::weakly_canonical(project, ec);
+  const auto scripts = root / "assets/scripts";
+  if (ec || !fs::is_directory(scripts, ec))
+    return sources;
+  fs::recursive_directory_iterator it(
+      scripts, fs::directory_options::skip_permission_denied, ec),
+      end;
+  for (; !ec && it != end; it.increment(ec)) {
+    std::error_code itemError;
+    if (!it->is_regular_file(itemError) || it->path().extension() != ".cpp")
+      continue;
+    const auto source = fs::weakly_canonical(it->path(), itemError);
+    auto header = source;
+    header.replace_extension(".hpp");
+    header = fs::weakly_canonical(header, itemError);
+    if (!itemError && Inside(root, source) && Inside(root, header) &&
+        fs::is_regular_file(header, itemError))
+      sources.push_back(source.lexically_relative(root).generic_string());
+  }
+  std::sort(sources.begin(), sources.end());
+  return sources;
+}
+
+bool WriteScriptCompilationDatabase(const ScriptCompileOptions &options,
+                                    std::string &error) {
+  try {
+    const auto file = options.project / "compile_commands.json";
+    nlohmann::json entries = nlohmann::json::array();
+    std::ifstream old(file);
+    if (old) {
+      entries = nlohmann::json::parse(old, nullptr, false);
+      if (!entries.is_array()) {
+        error = "Existing compile_commands.json is invalid; left unchanged.";
+        return false;
+      }
+    }
+    const auto sources = DiscoverNativeScripts(options.project);
+    std::set<std::string> current;
+    for (const auto &source : sources)
+      current.insert(fs::absolute(options.project / source).string());
+    nlohmann::json merged = nlohmann::json::array();
+    for (const auto &entry : entries)
+      if (entry.is_object() && !current.contains(entry.value("file", "")))
+        merged.push_back(entry);
+    for (const auto &source : sources) {
+      const auto path = fs::absolute(options.project / source).string();
+      merged.push_back({{"directory", fs::absolute(options.project).string()},
+                        {"file", path},
+                        {"arguments",
+                         {options.compiler, "-std=c++20", "-fPIC",
+                          "-DILMEEE_SCRIPT_BUILD", "-I",
+                          options.sdkInclude.string(), "-c", path}}});
+    }
+    old.close();
+    std::ofstream output(file);
+    output << merged.dump(2) << '\n';
+    output.close();
+    if (!output) {
+      error = "Cannot write compile_commands.json";
+      return false;
+    }
+    return true;
+  } catch (const std::exception &e) {
+    error = e.what();
+    return false;
+  }
+}
+
+CompiledScript CompileNativeScript(const ScriptCompileOptions &options,
+                                   const std::string &source) {
+  CompiledScript result;
+  result.source = source;
+  result.className = fs::path(source).stem().string();
+#ifdef __ANDROID__
+  result.diagnostics = "Compile project scripts on the desktop with the Android NDK, not on the device.";
+  return result;
+#else
+  try {
+    if (!options.androidAbi.empty()) AndroidTriple(options.androidAbi);
+    result.diagnostics = ValidateScriptName(result.className);
+    if (!result.diagnostics.empty())
+      return result;
+    const auto root = fs::canonical(options.project);
+    const auto path = fs::canonical(root / source);
+    auto header = path;
+    header.replace_extension(".hpp");
+    if (!Inside(root, path) || !Inside(root, fs::canonical(header))) {
+      result.diagnostics = "Script files must be inside the project.";
+      return result;
+    }
+    if (!fs::exists(options.sdkInclude / "core_engine/core/Component.hpp")) {
+      result.diagnostics =
+          "Engine script SDK not found. Install the public engine headers.";
+      return result;
+    }
+    const auto build = options.cache /
+                       (result.className + "-" + std::to_string(NewObjectId()));
+    fs::create_directories(build);
+    const auto wrapper = build / "factory.cpp";
+    std::ofstream output(wrapper);
+    // A source holds either a Component or a ScriptableObject; the wrapper
+    // exports a factory for whichever it is (the other one returns null).
+    const auto &name = result.className;
+    output << "#include \"" << name << ".hpp\"\n#include <string_view>\n"
+           << "#include <type_traits>\n"
+           << "#ifdef _WIN32\n#define ILMEEE_EXPORT __declspec(dllexport)\n"
+           << "#else\n#define ILMEEE_EXPORT __attribute__((visibility(\"default\")))\n"
+           << "#endif\n"
+           << "constexpr bool kIsAsset = std::is_base_of_v<ScriptableObject, "
+           << name << ">;\n"
+           << "static_assert(std::is_base_of_v<Component, " << name
+           << "> || kIsAsset, \"Script class must derive from Component or "
+              "ScriptableObject\");\n"
+           << "static_assert(!(std::is_base_of_v<Component, " << name
+           << "> && kIsAsset), \"A class cannot be both a Component and a "
+              "ScriptableObject\");\n"
+           << "static_assert(std::is_default_constructible_v<" << name
+           << ">, \"Script class needs a public default constructor\");\n"
+           << "static_assert(!std::is_abstract_v<" << name
+           << ">, \"Script class cannot be abstract\");\n"
+           << "template <class T> constexpr bool NamedAsset() {\n"
+           << "  if constexpr (requires { T::kAssetClass; })\n"
+           << "    return std::string_view(T::kAssetClass) == \"" << name
+           << "\";\n  else\n    return false;\n}\n"
+           << "static_assert(!kIsAsset || NamedAsset<" << name
+           << ">(), \"A ScriptableObject needs ILMEEE_SCRIPTABLE_OBJECT("
+           << name << ") in its class body\");\n"
+           << "template <class T, class B> B *Make() {\n"
+           << "  if constexpr (std::is_base_of_v<B, T>) return new T();\n"
+           << "  else return nullptr;\n}\n"
+           << "extern \"C\" ILMEEE_EXPORT unsigned "
+              "ilmeee_script_api() { return ilmeee::script::kApiVersion; }\n"
+           << "extern \"C\" ILMEEE_EXPORT uint64_t "
+              "ilmeee_script_abi() { return ilmeee::script::kComponentAbi; }\n"
+           << "extern \"C\" ILMEEE_EXPORT unsigned "
+              "ilmeee_script_kind() { return kIsAsset ? 1u : 0u; }\n"
+           << "extern \"C\" ILMEEE_EXPORT "
+              "Component* ilmeee_script_create() { return Make<"
+           << name << ", Component>(); }\n"
+           << "extern \"C\" ILMEEE_EXPORT void "
+              "ilmeee_script_destroy(Component* value) { delete value; }\n"
+           << "extern \"C\" ILMEEE_EXPORT "
+              "ScriptableObject* ilmeee_asset_create() { return Make<"
+           << name << ", ScriptableObject>(); }\n"
+           << "extern \"C\" ILMEEE_EXPORT void "
+              "ilmeee_asset_destroy(ScriptableObject* value) { delete value; }\n";
+    output.close();
+    if (!output) {
+      result.diagnostics = "Cannot write the script build wrapper.";
+      return result;
+    }
+#if defined(_WIN32)
+    if (options.compiler.empty() || !fs::is_regular_file(options.compiler)) {
+      result.diagnostics =
+          "No C++ compiler found for project scripts. Install MSYS2 "
+          "(https://www.msys2.org) and run: pacman -S "
+          "mingw-w64-ucrt-x86_64-gcc  - or set ILMEEE_SCRIPT_CXX to a MinGW "
+          "g++.exe.";
+      return result;
+    }
+    result.library = build / "component.dll";
+    const auto log = build / "compiler.log";
+    const std::vector<fs::path> args = {
+        options.compiler, "-Wall", "-Wextra", "-Werror=overloaded-virtual",
+        "-std=c++20", "-DILMEEE_SCRIPT_BUILD", "-shared", "-g",
+        // Self-contained DLL: no libstdc++/libgcc DLLs needed on PATH.
+        "-static-libgcc", "-static-libstdc++",
+        "-I", options.sdkInclude, "-I", path.parent_path(), path, wrapper,
+        "-o", result.library};
+    std::string startError;
+    const int code = RunToLog(args, log, startError);
+    if (code < 0) {
+      result.diagnostics = "Cannot start C++ compiler " +
+                           options.compiler + ": " + startError;
+      return result;
+    }
+    result.diagnostics = ReadLog(log);
+    result.ok = code == 0;
+    if (!result.ok && result.diagnostics.empty())
+      result.diagnostics = "C++ compiler did not finish successfully.";
+#else
+    result.library = build / "component.so";
+    const auto log = build / "compiler.log";
+    std::vector<std::string> args = {options.compiler,
+                                     "-Wall",
+                                     "-Wextra",
+                                     "-Werror=overloaded-virtual",
+                                     "-std=c++20",
+                                     "-DILMEEE_SCRIPT_BUILD",
+                                     "-shared",
+                                     "-fPIC",
+                                     "-fvisibility=hidden",
+                                     "-g",
+                                     "-Wl,-z,defs",
+                                     "-Wl,-rpath,$ORIGIN",
+                                     "-I",
+                                     options.sdkInclude.string(),
+                                     "-I",
+                                     path.parent_path().string(),
+                                     path.string(),
+                                     wrapper.string(),
+                                     "-o",
+                                     result.library.string()};
+    if (!options.androidAbi.empty()) {
+      if (options.androidApi < 26 || options.androidApi > 100)
+        throw std::runtime_error("Invalid Android script API level.");
+      args.insert(args.begin() + 1,
+                  {"--target=" + AndroidTriple(options.androidAbi) + std::to_string(options.androidApi),
+                   "-O2", "-stdlib=libc++", "-nostdlib++", "-Wl,-z,max-page-size=16384"});
+      // One shared libc++ for the player and all modules (no static STL copies).
+      args.push_back("-lc++_shared");
+    }
+    std::vector<char *> argv;
+    for (auto &arg : args)
+      argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    const int descriptor =
+        open(log.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (descriptor < 0) {
+      result.diagnostics = std::strerror(errno);
+      return result;
+    }
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, descriptor, STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, descriptor, STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, descriptor);
+    pid_t pid;
+    const int status = posix_spawnp(&pid, options.compiler.c_str(), &actions,
+                                    nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(descriptor);
+    if (status) {
+      result.diagnostics =
+          "Cannot start C++ compiler: " + std::string(std::strerror(status));
+      return result;
+    }
+    int exitStatus = 0;
+    pid_t waited;
+    do {
+      waited = waitpid(pid, &exitStatus, 0);
+    } while (waited < 0 && errno == EINTR);
+    result.diagnostics = ReadLog(log);
+    result.ok =
+        waited == pid && WIFEXITED(exitStatus) && WEXITSTATUS(exitStatus) == 0;
+    if (!result.ok && result.diagnostics.empty())
+      result.diagnostics = "C++ compiler did not finish successfully.";
+#endif
+  } catch (const std::exception &e) {
+    result.diagnostics = e.what();
+  }
+  return result;
+#endif
+}
+
+struct NativeScripts::Module {
+  void *library = nullptr;
+  std::string className;
+  bool isAsset = false; // ScriptableObject class instead of a Component
+  Component *(*create)() = nullptr;
+  void (*destroy)(Component *) = nullptr;
+  ScriptableObject *(*createAsset)() = nullptr;
+  void (*destroyAsset)(ScriptableObject *) = nullptr;
+  Component *prototype = nullptr;
+  ScriptableObject *assetPrototype = nullptr;
+  std::vector<ScriptValue> defaults;
+  ~Module() {
+    if (prototype && destroy)
+      destroy(prototype);
+    if (assetPrototype && destroyAsset)
+      destroyAsset(assetPrototype);
+    if (library)
+      dlclose(library);
+  }
+};
+struct NativeScripts::LoadedAsset {
+  std::shared_ptr<Module> module; // keeps the library loaded
+  ScriptableObject *object = nullptr;
+  ~LoadedAsset() {
+    if (object)
+      module->destroyAsset(object);
+  }
+};
+struct NativeScripts::Instance {
+  std::shared_ptr<Module> module;
+  Component *component = nullptr;
+  uint64_t owner = 0;
+  std::string className;
+  bool failed = false;
+  bool dead = false; // destroyed during Play, freed by FlushLifecycle
+  ~Instance() {
+    if (component)
+      module->destroy(component);
+  }
+};
+NativeScripts::NativeScripts() = default;
+NativeScripts::~NativeScripts() {
+  Stop();
+  if (job_.valid())
+    job_.wait();
+}
+bool NativeScripts::Configure(const ScriptCompileOptions &options) {
+  if (options.project == options_.project &&
+      options.sdkInclude == options_.sdkInclude)
+    return false;
+  Stop();
+  modules_.clear();
+  errors_.clear();
+  options_ = options;
+  sourceRevision_ = ScriptRevision(options.project);
+  if (!options.project.empty() &&
+      !DiscoverNativeScripts(options.project).empty())
+    CompileAll();
+  return true;
+}
+bool NativeScripts::IsCompiling() const { return job_.valid(); }
+void NativeScripts::CompileAll() {
+  if (options_.project.empty())
+    return;
+  if (active_) {
+    if (log)
+      log("[WARNING] [Scripts] Stop Play before compiling scripts.");
+    return;
+  }
+  if (job_.valid()) {
+    pending_ = true;
+    return;
+  }
+  const auto options = options_;
+  sourceRevision_ = ScriptRevision(options.project);
+  jobProject_ = options.project.string();
+  job_ = std::async(std::launch::async, [options] {
+    std::vector<CompiledScript> results;
+    std::string error;
+    WriteScriptCompilationDatabase(options, error);
+    for (const auto &source : DiscoverNativeScripts(options.project))
+      results.push_back(CompileNativeScript(options, source));
+    if (!error.empty())
+      results.push_back({"compile_commands.json", "", error, {}, false});
+    return results;
+  });
+  if (log)
+    log("[INFO] [Scripts] Compiling project scripts...");
+}
+CompiledScript NativeScripts::CompileAndLoad(const std::string &source) {
+  CompiledScript result;
+  result.source = source;
+  result.className = fs::path(source).stem().string();
+  if (options_.project.empty()) {
+    result.diagnostics = "No project is configured.";
+    return result;
+  }
+  if (active_) {
+    result.diagnostics = "Stop Play before compiling scripts.";
+    return result;
+  }
+  if (job_.valid()) {
+    job_.wait();
+    Poll();
+  }
+  std::string dbError;
+  WriteScriptCompilationDatabase(options_, dbError);
+  sourceRevision_ = ScriptRevision(options_.project);
+  lastScan_ = std::chrono::steady_clock::now();
+  result = CompileNativeScript(options_, source);
+  std::string error = result.diagnostics;
+  const bool ok = result.ok && Load(result, error);
+  result.ok = ok;
+  if (!ok)
+    result.diagnostics = error;
+  errors_[source] = ok ? "" : error;
+  if (log)
+    log(std::string(ok ? "[INFO] [Scripts] " : "[ERROR] [Scripts] ") + source +
+        (ok ? ": compiled and validated" : ": compile failed\n" + error));
+  return result;
+}
+void NativeScripts::Poll() {
+  if (active_)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (!options_.project.empty() && now - lastScan_ > std::chrono::seconds(1)) {
+    lastScan_ = now;
+    if (ScriptRevision(options_.project) != sourceRevision_)
+      CompileAll();
+  }
+  if (!job_.valid() ||
+      job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    return;
+  try {
+    const auto results = job_.get();
+    if (jobProject_ == options_.project.string()) {
+      std::set<std::string> found;
+      for (const auto &result : results) {
+        found.insert(result.source);
+        std::string error = result.diagnostics;
+        const bool ok = result.ok && Load(result, error);
+        errors_[result.source] = ok ? "" : error;
+        if (log)
+          log(std::string(ok ? "[INFO] [Scripts] " : "[ERROR] [Scripts] ") +
+              result.source +
+              (ok ? ": compiled and validated" : ": compile failed\n" + error));
+      }
+      std::erase_if(modules_, [&](const auto &entry) {
+        return !found.contains(entry.first);
+      });
+      std::erase_if(errors_, [&](const auto &entry) {
+        return !found.contains(entry.first);
+      });
+    }
+  } catch (const std::exception &e) {
+    if (log)
+      log(std::string("[ERROR] [Scripts] ") + e.what());
+  }
+  if (pending_) {
+    pending_ = false;
+    CompileAll();
+  }
+}
+bool NativeScripts::Load(const CompiledScript &result, std::string &error) {
+  if (!result.ok) {
+    error = result.diagnostics;
+    return false;
+  }
+  auto module = std::make_shared<Module>();
+  module->library = dlopen(result.library.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!module->library) {
+    error = dlerror();
+    return false;
+  }
+  auto api = reinterpret_cast<unsigned (*)()>(
+      dlsym(module->library, "ilmeee_script_api"));
+  auto abi = reinterpret_cast<uint64_t (*)()>(
+      dlsym(module->library, "ilmeee_script_abi"));
+  module->create = reinterpret_cast<Component *(*)()>(
+      dlsym(module->library, "ilmeee_script_create"));
+  module->destroy = reinterpret_cast<void (*)(Component *)>(
+      dlsym(module->library, "ilmeee_script_destroy"));
+  auto kind = reinterpret_cast<unsigned (*)()>(
+      dlsym(module->library, "ilmeee_script_kind"));
+  module->createAsset = reinterpret_cast<ScriptableObject *(*)()>(
+      dlsym(module->library, "ilmeee_asset_create"));
+  module->destroyAsset = reinterpret_cast<void (*)(ScriptableObject *)>(
+      dlsym(module->library, "ilmeee_asset_destroy"));
+  if (!api || api() != script::kApiVersion || !abi ||
+      abi() != script::kComponentAbi || !kind || !module->create ||
+      !module->destroy || !module->createAsset || !module->destroyAsset) {
+    error = "Script module has an incompatible engine API or compiler ABI. "
+            "Recompile using the engine toolchain.";
+    return false;
+  }
+  module->className = result.className;
+  module->isAsset = kind() == 1;
+  try {
+    ScriptProperties properties;
+    if (module->isAsset) {
+      module->assetPrototype = module->createAsset();
+      if (!module->assetPrototype) {
+        error = "Script factory returned no ScriptableObject.";
+        return false;
+      }
+      module->assetPrototype->DescribeProperties(properties);
+    } else {
+      module->prototype = module->create();
+      if (!module->prototype) {
+        error = "Script factory returned no component.";
+        return false;
+      }
+      module->prototype->DescribeProperties(properties);
+    }
+    if (properties.fields.size() > 1024) {
+      error = "A component may expose at most 1024 fields.";
+      return false;
+    }
+    std::set<std::string> names;
+    for (const auto &field : properties.fields) {
+      if (!field.value || field.name.empty() || field.name.size() > 256 ||
+          !names.insert(field.name).second) {
+        error = "Exposed script fields must have unique non-empty names.";
+        return false;
+      }
+      if (!ValidField(field)) {
+        error = "Field '" + field.name + "' has an unsupported type.";
+        return false;
+      }
+      const auto value = ReadProperty(field);
+      if (!Finite(value)) {
+        error = "Exposed float and Vec3 defaults must be finite, and lists "
+                "may hold at most " +
+                std::to_string(kMaxScriptListItems) + " items.";
+        return false;
+      }
+      module->defaults.push_back(value);
+    }
+  } catch (const std::exception &e) {
+    error = e.what();
+    return false;
+  } catch (...) {
+    error =
+        "Unknown exception while constructing or inspecting the script class.";
+    return false;
+  }
+  modules_[result.source] = std::move(module);
+  errors_[result.source].clear();
+  return true;
+}
+bool NativeScripts::Ready(const std::string &source) const {
+  return modules_.contains(source) && Diagnostics(source).empty();
+}
+bool NativeScripts::IsAsset(const std::string &source) const {
+  const auto it = modules_.find(source);
+  return it != modules_.end() && it->second->isAsset;
+}
+std::vector<std::string> NativeScripts::AssetClasses() const {
+  std::vector<std::string> sources;
+  for (const auto &[source, module] : modules_)
+    if (module->isAsset && Ready(source))
+      sources.push_back(source);
+  std::sort(sources.begin(), sources.end());
+  return sources;
+}
+void NativeScripts::SetAssetRoot(const fs::path &root) { assetRoot_ = root; }
+const ScriptableObject *NativeScripts::ResolveAsset(void *opaque,
+                                                    const char *path,
+                                                    const char *className) {
+  auto *self = static_cast<NativeScripts *>(opaque);
+  if (!self || !self->active_ || !path || !*path)
+    return nullptr;
+  const std::string key = fs::path(path).lexically_normal().generic_string();
+  const auto warnOnce = [&](const std::string &message) {
+    if (self->failedAssets_.insert(key).second && self->log)
+      self->log("[WARNING] [Scripts] Asset " + key + ": " + message);
+  };
+  auto found = self->assets_.find(key);
+  if (found == self->assets_.end()) {
+    if (self->failedAssets_.contains(key))
+      return nullptr;
+    const fs::path root =
+        self->assetRoot_.empty() ? self->options_.project : self->assetRoot_;
+    std::error_code ec;
+    const auto canonicalRoot = fs::weakly_canonical(root, ec);
+    const auto file = fs::weakly_canonical(root / key, ec);
+    if (ec || fs::path(key).is_absolute() || !Inside(canonicalRoot, file)) {
+      warnOnce("path must be inside the project");
+      return nullptr;
+    }
+    DataAssetFile data;
+    if (!LoadDataAsset(file.string(), data)) {
+      warnOnce("missing or not a valid .ilmeeeasset file");
+      return nullptr;
+    }
+    const auto module = self->modules_.find(data.source);
+    if (module == self->modules_.end() || !module->second->isAsset ||
+        module->second->className != data.className ||
+        !self->Ready(data.source)) {
+      warnOnce("class " + data.className + " (" + data.source +
+               ") is not a compiled ScriptableObject");
+      return nullptr;
+    }
+    auto loaded = std::make_unique<LoadedAsset>();
+    loaded->module = module->second;
+    try {
+      loaded->object = loaded->module->createAsset();
+      if (!loaded->object)
+        throw std::runtime_error("factory returned no object");
+      loaded->object->BindHost(&self->host_);
+      ScriptProperties properties;
+      loaded->object->DescribeProperties(properties);
+      ApplyProperties(properties, data.values, &self->host_);
+      loaded->object->OnLoad();
+    } catch (const std::exception &e) {
+      warnOnce(e.what());
+      return nullptr;
+    } catch (...) {
+      warnOnce("unknown exception while loading");
+      return nullptr;
+    }
+    found = self->assets_.emplace(key, std::move(loaded)).first;
+  }
+  const auto &loaded = *found->second;
+  if (className && loaded.module->className != className) {
+    if (self->log && self->failedAssets_.insert(key + "|" + className).second)
+      self->log("[WARNING] [Scripts] Asset " + key + " is a " +
+                loaded.module->className + ", not a " + className);
+    return nullptr;
+  }
+  return loaded.object;
+}
+std::vector<std::string> NativeScripts::Sources() const {
+  std::set<std::string> sources;
+  for (const auto &[source, module] : modules_)
+    sources.insert(source);
+  for (const auto &[source, error] : errors_)
+    if (fs::path(source).extension() == ".cpp")
+      sources.insert(source);
+  return {sources.begin(), sources.end()};
+}
+std::string NativeScripts::Diagnostics(const std::string &source) const {
+  const auto it = errors_.find(source);
+  return it == errors_.end() ? "" : it->second;
+}
+std::vector<ScriptValue>
+NativeScripts::Properties(const NativeScriptBinding &binding) const {
+  const auto it = modules_.find(binding.source);
+  if (it == modules_.end())
+    return binding.values;
+  auto values = it->second->defaults;
+  for (auto &value : values)
+    for (const auto &stored : binding.values)
+      if (SameScriptShape(value, stored)) {
+        auto assetClass = std::move(value.assetClass);
+        value = stored;
+        value.assetClass = std::move(assetClass);
+      }
+  return values;
+}
+std::unique_ptr<NativeScripts::Instance>
+NativeScripts::CreateInstance(uint64_t owner,
+                              const NativeScriptBinding &binding) {
+  if (!binding.enabled || detached_.contains(owner))
+    return nullptr;
+  const auto module = modules_.find(binding.source);
+  if (module != modules_.end() && module->second->isAsset) {
+    if (log)
+      log("[WARNING] [Scripts] " + binding.className +
+          " is a ScriptableObject, not a component; skipped.");
+    return nullptr;
+  }
+  if (module == modules_.end() || !Ready(binding.source)) {
+    if (log)
+      log("[WARNING] [Scripts] " + binding.className +
+          ": not running; compile this script first.");
+    return nullptr;
+  }
+  auto instance = std::make_unique<Instance>();
+  instance->module = module->second;
+  instance->className = binding.className;
+  try {
+    instance->component = instance->module->create();
+    if (!instance->component)
+      throw std::runtime_error("Script factory returned no instance");
+    instance->owner = owner;
+    instance->component->Bind(&host_, owner);
+    ApplyProperties(*instance->component, binding, &host_);
+    instance->component->Awake();
+    instance->component->OnEnable();
+    return instance;
+  } catch (const std::exception &e) {
+    if (log)
+      log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
+  } catch (...) {
+    if (log)
+      log("[ERROR] [Scripts] " + binding.className +
+          ": unknown exception during initialization");
+  }
+  return nullptr;
+}
+void NativeScripts::Start(script::HostApi host,
+                          const std::vector<ScriptOwner> &owners) {
+  Stop();
+  host_ = host;
+  host_.asset = &NativeScripts::ResolveAsset;
+  host_.assetContext = this;
+  active_ = true;
+  updating_ = true; // a Start() that spawns must not grow instances_ now
+  // Copied first: a script that spawns from Awake/Start may reallocate the
+  // storage owner.scripts points into.
+  std::vector<std::pair<uint64_t, NativeScriptBinding>> bindings;
+  for (const auto &owner : owners)
+    if (owner.scripts)
+      for (const auto &binding : *owner.scripts)
+        bindings.emplace_back(owner.id, binding);
+  for (const auto &[ownerId, binding] : bindings) {
+    auto instance = CreateInstance(ownerId, binding);
+    if (!instance)
+      continue;
+    try {
+      instance->component->Start();
+      instances_.push_back(std::move(instance));
+    } catch (const std::exception &e) {
+      if (log)
+        log("[ERROR] [Scripts] " + binding.className + ": " + e.what());
+    } catch (...) {
+      if (log)
+        log("[ERROR] [Scripts] " + binding.className +
+            ": unknown exception during initialization");
+    }
+  }
+  updating_ = false;
+  FlushLifecycle();
+}
+void NativeScripts::Attach(const std::vector<ScriptOwner> &owners) {
+  if (!active_)
+    return;
+  for (const auto &owner : owners) {
+    if (!owner.scripts)
+      continue;
+    for (const auto &binding : *owner.scripts)
+      if (auto instance = CreateInstance(owner.id, binding))
+        spawned_.push_back(std::move(instance));
+  }
+  if (!updating_)
+    FlushLifecycle();
+}
+void NativeScripts::Detach(const std::vector<uint64_t> &ownerIds) {
+  if (!active_ || ownerIds.empty())
+    return;
+  const std::set<uint64_t> doomed(ownerIds.begin(), ownerIds.end());
+  detached_.insert(doomed.begin(), doomed.end());
+  const auto kill = [&](Instance &instance) {
+    if (instance.dead || !doomed.contains(instance.owner))
+      return;
+    instance.dead = true;
+    if (instance.failed)
+      return;
+    try {
+      instance.component->OnDisable();
+      instance.component->OnDestroy();
+    } catch (const std::exception &e) {
+      if (log)
+        log("[ERROR] [Scripts] " + instance.className + " OnDestroy: " +
+            e.what());
+    } catch (...) {
+      if (log)
+        log("[ERROR] [Scripts] " + instance.className +
+            " OnDestroy: unknown exception");
+    }
+  };
+  // Index loops: OnDestroy may spawn (push_back) or destroy more objects.
+  for (size_t i = 0; i < instances_.size(); ++i)
+    kill(*instances_[i]);
+  for (size_t i = 0; i < spawned_.size(); ++i)
+    kill(*spawned_[i]);
+  if (!updating_)
+    FlushLifecycle();
+}
+size_t NativeScripts::InstanceCount() const {
+  size_t count = 0;
+  for (const auto &instance : instances_)
+    count += instance->dead ? 0 : 1;
+  for (const auto &instance : spawned_)
+    count += instance->dead ? 0 : 1;
+  return count;
+}
+void NativeScripts::FlushLifecycle() {
+  // Start may spawn again; those join this loop and also Start this frame.
+  updating_ = true;
+  while (!spawned_.empty()) {
+    auto batch = std::move(spawned_);
+    spawned_.clear();
+    for (auto &instance : batch) {
+      if (!instance->dead && !instance->failed) {
+        try {
+          instance->component->Start();
+        } catch (const std::exception &e) {
+          instance->failed = true;
+          if (log)
+            log("[ERROR] [Scripts] " + instance->className + ": " + e.what());
+        } catch (...) {
+          instance->failed = true;
+          if (log)
+            log("[ERROR] [Scripts] " + instance->className +
+                ": unknown exception during Start");
+        }
+      }
+      instances_.push_back(std::move(instance));
+    }
+  }
+  updating_ = false;
+  std::erase_if(instances_, [](const auto &instance) { return instance->dead; });
+}
+void NativeScripts::DispatchPhysicsEvents(
+    const std::vector<std::pair<uint64_t, uint64_t>> &triggers,
+    const std::vector<std::pair<uint64_t, uint64_t>> &collisions) {
+  if (!active_)
+    return;
+  const auto dispatch =
+      [&](const std::vector<std::pair<uint64_t, uint64_t>> &pairs,
+          std::set<std::pair<uint64_t, uint64_t>> &active,
+          void (Component::*onEnter)(script::GameObject),
+          void (Component::*onStay)(script::GameObject),
+          void (Component::*onExit)(script::GameObject)) {
+        std::set<std::pair<uint64_t, uint64_t>> current;
+        for (const auto &[a, b] : pairs) {
+          if (a != 0 && b != 0 && a != b) {
+            current.emplace(a, b);
+            current.emplace(b, a);
+          }
+        }
+        const auto call = [&](uint64_t ownerId, uint64_t otherId,
+                              void (Component::*fn)(script::GameObject)) {
+          for (size_t i = 0; i < instances_.size(); ++i) {
+            auto &instance = instances_[i];
+            if (instance->failed || instance->dead ||
+                instance->owner != ownerId)
+              continue;
+            try {
+              (instance->component->*fn)({otherId, &host_});
+            } catch (const std::exception &e) {
+              instance->failed = true;
+              if (log)
+                log(std::string("[ERROR] [Scripts] Event stopped: ") +
+                    e.what());
+            } catch (...) {
+              instance->failed = true;
+              if (log)
+                log("[ERROR] [Scripts] Event stopped: unknown exception");
+            }
+          }
+        };
+        for (const auto &[ownerId, otherId] : active)
+          if (!current.contains({ownerId, otherId}))
+            call(ownerId, otherId, onExit);
+        for (const auto &[ownerId, otherId] : current)
+          call(ownerId, otherId,
+               active.contains({ownerId, otherId}) ? onStay : onEnter);
+        active = std::move(current);
+      };
+  updating_ = true; // handlers may Instantiate/Destroy
+  dispatch(triggers, activeTriggers_, &Component::OnTriggerEnter,
+           &Component::OnTriggerStay, &Component::OnTriggerExit);
+  dispatch(collisions, activeCollisions_, &Component::OnCollisionEnter,
+           &Component::OnCollisionStay, &Component::OnCollisionExit);
+  updating_ = false;
+  FlushLifecycle();
+}
+void NativeScripts::Update(float deltaTime) {
+  if (!std::isfinite(deltaTime) || deltaTime <= 0)
+    return;
+  updating_ = true;
+  // Index loop: a script may Instantiate (spawned_) or Destroy (dead flag)
+  // here; instances_ itself only changes in FlushLifecycle.
+  for (size_t i = 0; i < instances_.size(); ++i) {
+    auto &instance = instances_[i];
+    if (instance->failed || instance->dead)
+      continue;
+    try {
+      const float step = std::min(deltaTime, 0.25f);
+      instance->component->Update(step);
+      instance->component->TickCoroutines(step);
+    } catch (const std::exception &e) {
+      instance->failed = true;
+      if (log)
+        log(std::string("[ERROR] [Scripts] Update stopped: ") + e.what());
+    } catch (...) {
+      instance->failed = true;
+      if (log)
+        log("[ERROR] [Scripts] Update stopped: unknown exception");
+    }
+  }
+  updating_ = false;
+  FlushLifecycle();
+}
+void NativeScripts::Stop() {
+  active_ = false;
+  activeTriggers_.clear();
+  activeCollisions_.clear();
+  for (auto *list : {&instances_, &spawned_})
+    for (auto &instance : *list) {
+      if (instance->dead)
+        continue;
+      try {
+        instance->component->OnDisable();
+      } catch (...) {
+      }
+    }
+  instances_.clear();
+  spawned_.clear();
+  detached_.clear();
+  updating_ = false;
+  // After the components: their destructors may still hold asset pointers.
+  assets_.clear();
+  failedAssets_.clear();
+}
+} // namespace ilmeee
