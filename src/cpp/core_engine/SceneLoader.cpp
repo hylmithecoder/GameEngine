@@ -16,17 +16,54 @@ std::string LowerExtension(const fs::path &path) {
                  [](unsigned char c) { return (char)std::tolower(c); });
   return ext;
 }
-// Project-relative when `path` is inside the project, else unchanged.
+// UTF-8 std::string <-> path, independent of the Windows ANSI code page.
+fs::path Utf8Path(const std::string &s) {
+  return fs::path(std::u8string(s.begin(), s.end()));
+}
+std::string GenericUtf8(const fs::path &p) {
+  const std::u8string s = p.generic_u8string();
+  return std::string(s.begin(), s.end());
+}
+// Project-relative ('/'-separated) when `path` is inside the project, else
+// unchanged. Never "..": a path that leaves the project stays absolute so it
+// is not mistaken for a project file on another device.
 std::string ProjectRelative(const std::string &path,
                             const fs::path &projectRoot) {
   if (projectRoot.empty() || path.empty())
-    return path;
+    return NormalizeAssetPath(path);
+  const fs::path p = Utf8Path(NormalizeAssetPath(path));
+  if (!p.is_absolute())
+    return NormalizeAssetPath(path);
   std::error_code ec;
-  const fs::path rel = fs::relative(fs::path(path), projectRoot, ec);
-  const std::string relStr = ec ? std::string() : rel.generic_string();
-  return !relStr.empty() && relStr.rfind("..", 0) != 0 ? relStr : path;
+  const fs::path rel = fs::relative(p, projectRoot, ec);
+  const std::string relStr = ec ? std::string() : GenericUtf8(rel);
+  return !relStr.empty() && relStr != "." && relStr.rfind("..", 0) != 0
+             ? relStr
+             : NormalizeAssetPath(path);
 }
 } // namespace
+
+std::string NormalizeAssetPath(std::string path) {
+  // Windows editors used to store "Assets\\model.pmx"; '/' works everywhere.
+  std::replace(path.begin(), path.end(), '\\', '/');
+  return path;
+}
+
+std::string ResolveAssetPath(const std::string &stored,
+                             const fs::path &projectRoot) {
+  if (stored.empty())
+    return stored;
+  const std::string norm = NormalizeAssetPath(stored);
+  const fs::path p = Utf8Path(norm);
+  // "/home/..." is not absolute on Windows (no drive) and "C:/..." is not on
+  // Linux: neither is a project file, so keep it as written.
+  const bool foreignAbsolute =
+      !norm.empty() && (norm[0] == '/' ||
+                        (norm.size() > 1 && norm[1] == ':'));
+  if (p.is_absolute() || foreignAbsolute || projectRoot.empty())
+    return GenericUtf8(p);
+  return GenericUtf8(projectRoot / p);
+}
 
 void ApplySceneEntityState(SceneRenderer &renderer, size_t idx,
                            const SceneEntity &e, const fs::path &projectRoot,
@@ -83,10 +120,8 @@ void ApplySceneEntityState(SceneRenderer &renderer, size_t idx,
   for (const auto &st : e.surfaceTextures) {
     if (st.texturePath.empty())
       continue;
-    const fs::path tp(st.texturePath);
-    const std::string full =
-        tp.is_absolute() ? st.texturePath : (projectRoot / tp).string();
-    renderer.BindMesh3DSubmeshTexture(idx, st.surfaceIndex, full);
+    renderer.BindMesh3DSubmeshTexture(
+        idx, st.surfaceIndex, ResolveAssetPath(st.texturePath, projectRoot));
   }
 }
 
@@ -106,19 +141,19 @@ int LoadSceneEntity(SceneRenderer &renderer, const SceneEntity &e,
     ok = renderer.LoadPlane(e.name);
     break;
   case PrimitiveKind::ExternalObj: {
-    const fs::path full = projectRoot / e.externalPath;
-    const std::string ext = LowerExtension(full);
+    const std::string full = ResolveAssetPath(e.externalPath, projectRoot);
+    const std::string ext = LowerExtension(Utf8Path(full));
     // Auto-detect by extension: .pmx → PMX, .fbx → FBX, else OBJ.
     if (ext == ".pmx")
-      ok = renderer.LoadPMXMesh(full.string());
+      ok = renderer.LoadPMXMesh(full);
     else if (ext == ".fbx")
-      ok = renderer.LoadFbxMesh(full.string());
+      ok = renderer.LoadFbxMesh(full);
     else
-      ok = renderer.LoadObjMesh(full.string());
+      ok = renderer.LoadObjMesh(full);
     break;
   }
   case PrimitiveKind::ExternalPmx:
-    ok = renderer.LoadPMXMesh((projectRoot / e.externalPath).string());
+    ok = renderer.LoadPMXMesh(ResolveAssetPath(e.externalPath, projectRoot));
     break;
   case PrimitiveKind::Light:
     ok = renderer.LoadLight(e.name, e.lightType, e.lightColor,
@@ -258,13 +293,9 @@ SceneEntity CaptureSceneEntity(const SceneRenderer &renderer, size_t i,
     } else if (path.empty()) {
       e.kind = PrimitiveKind::Cube; // unknown mesh → safe default
     } else {
-      if (!projectRoot.empty()) {
-        std::error_code ec;
-        const fs::path rel = fs::relative(fs::path(path), projectRoot, ec);
-        e.externalPath = ec ? path : rel.string();
-      } else {
-        e.externalPath = path;
-      }
+      // '/'-separated and project-relative (rel.string() gave
+      // "Assets\\x.pmx" on Windows, which no other device could load).
+      e.externalPath = ProjectRelative(path, projectRoot);
       e.kind = LowerExtension(path) == ".pmx" ? PrimitiveKind::ExternalPmx
                                                : PrimitiveKind::ExternalObj;
     }

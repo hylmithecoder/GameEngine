@@ -142,6 +142,13 @@ private:
   ilmeee::TransformGizmoState transformGizmo;
   ilmeee::OrientationGizmoState orientationGizmo;
   bool viewportCameraHistoryActive = false;
+  // Scene focus (Ctrl+Shift+F, Esc leaves): the mouse is captured and flies
+  // the editor camera without holding the right button; WASD/QE move from
+  // anywhere. Mouse motion comes from raw SDL events (relative mode keeps
+  // ImGui's cursor still), summed here until the Scene window reads them.
+  bool sceneFocusMode = false;
+  float sceneFocusDX = 0.0f, sceneFocusDY = 0.0f, sceneFocusWheel = 0.0f;
+  void SetSceneFocusMode(bool on);
   static constexpr float MIN_PANEL_WIDTH = 100.0f;
   float explorerSplitPosition = 200.0f;
 
@@ -247,6 +254,7 @@ public:
   void OnInit() override;
   void OnUpdate(float deltaTime) override;
   void OnRender(VkCommandBuffer cmd) override;
+  void OnEvent(const SDL_Event &event) override;
   void OnCleanup() override;
   void OnResize(int width, int height) override;
   void log(const char *message);

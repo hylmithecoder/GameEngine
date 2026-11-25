@@ -33,6 +33,11 @@ add_link_options(-static-libgcc -static-libstdc++)
 # Unicode Win32 API (W functions) for any code that includes Platform.hpp.
 add_compile_definitions(UNICODE _UNICODE _WIN32_WINNT=0x0A00)
 
+# res/resources.rc: app icon + manifest (UTF-8 code page, long paths) for
+# every .exe. It names its files relative to the repo root.
+enable_language(RC)
+set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I${CMAKE_SOURCE_DIR}")
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 find_package(Vulkan REQUIRED)
@@ -147,6 +152,7 @@ add_executable(IlmeeePlayer
     src/cpp/core_engine/NativeScripts.cpp src/cpp/core_engine/NativeScriptScene.cpp
     src/cpp/core_engine/ScriptWorkspace.cpp
     src/cpp/player/PlayerMain.cpp
+    res/resources.rc
     src/cpp/core_engine/AudioEngine.cpp
     src/cpp/core_engine/VideoDecoder.cpp
     src/cpp/core_engine/MediaHttp.cpp
@@ -194,9 +200,6 @@ target_link_libraries(IlmeeePlayer PRIVATE
 # reports "editor binary not found" when opening a project).
 
 find_package(OpenGL REQUIRED)
-enable_language(RC)
-# res/resources.rc names its icon relative to the repo root.
-set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I${CMAKE_SOURCE_DIR}")
 add_executable(IlmeeeHub
     src/cpp/Hub.cpp
     res/resources.rc
@@ -383,7 +386,7 @@ target_compile_definitions(IlmeeeEditor PRIVATE ILMEEEDITOR_EXPORTS)
 target_link_libraries(IlmeeeEditor PRIVATE
     ilmeee_net PkgConfig::SDL3 OpenGL::GL Threads::Threads ole32 uuid shell32)
 
-add_executable(HandlerIlmeeeEngine src/cpp/core_engine/core/Launcher.cpp)
+add_executable(HandlerIlmeeeEngine src/cpp/core_engine/core/Launcher.cpp res/resources.rc)
 target_include_directories(HandlerIlmeeeEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${JSON_DIR})
 target_link_libraries(HandlerIlmeeeEngine PRIVATE Threads::Threads)

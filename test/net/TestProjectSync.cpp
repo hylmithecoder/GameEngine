@@ -61,6 +61,19 @@ int main() {
   CHECK(!ValidSyncPath(""));
   const std::string utf8 = "assets/\xE6\xAD\xA6\xE5\x99\xA8.pmx"; // 武器.pmx
   CHECK(ValidSyncPath(utf8));
+
+  // Names a Linux project can hold but Windows cannot write.
+  CHECK(WindowsNameProblem("assets/textures/a.png").empty());
+  CHECK(WindowsNameProblem("assets/console.png").empty());
+  CHECK(WindowsNameProblem(utf8).empty());
+  CHECK(!WindowsNameProblem("assets/what?.png").empty());
+  CHECK(!WindowsNameProblem("a\"b.txt").empty());
+  CHECK(!WindowsNameProblem("assets/aux.png").empty());
+  CHECK(!WindowsNameProblem("NUL").empty());
+  CHECK(!WindowsNameProblem("x/com1.txt").empty());
+  CHECK(WindowsNameProblem("x/com0.txt").empty());
+  CHECK(!WindowsNameProblem("folder./a.png").empty());
+  CHECK(!WindowsNameProblem("a.png ").empty());
   CHECK(PathToUtf8(PathFromUtf8(utf8)) == utf8);
 
   // ---- ignore rules ----
@@ -172,6 +185,30 @@ int main() {
     auto none = DownloadProject(url, token, room + "-nope", root / "y");
     CHECK(!none.ok);
     CHECK(none.error.find("no project files") != std::string::npos);
+
+    // One file that cannot be fetched must not stop the others (it used to
+    // abort the whole download). Needs the server's blob folder to break it.
+    if (const char *fd = std::getenv("ILMEEE_RT_FILES_DIR"); fd && *fd) {
+      const fs::path broken = root / "broken";
+      WriteFile(broken / "a.txt", "file a");
+      WriteFile(broken / "b.txt", "file b, lost on the server");
+      WriteFile(broken / "c.txt", "file c");
+      const std::string room2 = room + "-broken";
+      CHECK(PublishProject(url, token, room2, broken, "tester").ok);
+      const std::string hb = Sha256Hex("file b, lost on the server", 26);
+      std::error_code rec;
+      CHECK(fs::remove(fs::path(fd) / "blobs" / hb.substr(0, 2) / hb, rec));
+      const fs::path got = root / "broken-copy";
+      auto part = DownloadProject(url, token, room2, got);
+      CHECK(!part.ok);
+      CHECK(part.failed.size() == 1);
+      CHECK(!part.failed.empty() && part.failed[0].rfind("b.txt: ", 0) == 0);
+      CHECK(part.transferred == 3 || part.transferred == 2); // .ilmeee state may be listed
+      CHECK(ReadFile(got / "a.txt") == "file a");
+      CHECK(ReadFile(got / "c.txt") == "file c");
+      CHECK(!fs::exists(got / "b.txt"));
+      CHECK(part.error.find("could not be downloaded") != std::string::npos);
+    }
   } else {
     std::cout << "(ILMEEE_RT_URL not set: online round trip skipped)\n";
   }

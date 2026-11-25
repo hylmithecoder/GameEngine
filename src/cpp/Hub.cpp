@@ -1226,10 +1226,21 @@ private:
       std::lock_guard<std::mutex> lock(syncJob.mutex);
       r = syncJob.result;
     }
+    for (const auto &f : r.failed)
+      logStore.Push("Hub", "  not downloaded: " + f);
+    for (const auto &w : r.warnings)
+      logStore.Push("Hub", "  warning: " + w);
     if (!r.ok) {
       syncMessage = std::string(syncJob.upload ? "Upload" : "Download") + " failed: " + r.error;
       syncMessageError = true;
       logStore.Push("Hub", syncMessage);
+      // Some files failed but the rest are here: open anyway, the editor
+      // reports each object whose asset is missing.
+      if (!syncJob.upload && !r.failed.empty() && r.failed.size() < r.files &&
+          syncJob.openAfter) {
+        syncMessage += " - opening with the files that did arrive (see Logs)";
+        OpenWorkspace(syncJob.project, syncJob.room);
+      }
       return;
     }
     char buf[256];
@@ -1243,6 +1254,9 @@ private:
                     HumanBytes(r.transferredBytes).c_str(),
                     r.removed ? ", old files removed" : "");
     syncMessage = buf;
+    if (!r.warnings.empty())
+      syncMessage += " " + std::to_string(r.warnings.size()) +
+                     " file(s) may not download on every device (e.g. Windows) - see Logs.";
     syncMessageError = false;
     logStore.Push("Hub", syncMessage);
     lastFetch = -1000.0; // show the new file info right away

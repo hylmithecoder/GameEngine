@@ -170,6 +170,21 @@ bisa langsung join:
   `RT_MAX_STORAGE_BYTES` (16 GiB total), lokasi `RT_FILES_DIR`
   (default `<data dir>/files`). File yang tidak dirujuk manifest mana pun
   dihapus otomatis setelah 1 jam; manifest ikut terhapus saat room kedaluwarsa.
+- **Kalau ada file yang gagal** (nama tidak valid di Windows, file hilang di
+  server, koneksi putus sesaat), file lain tetap di-download: tiap file dicoba
+  sampai 3x, lalu yang gagal ditulis di **Logs** Hub (`not downloaded: <path>:
+  <alasan>`) dan editor tetap dibuka dengan file yang sudah ada. Download baru
+  berhenti total kalau server tidak bisa dihubungi 3 file berturut-turut.
+- **Nama file yang tidak bisa dipakai di Windows** — karakter `< > " | ? *`,
+  nama device (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`9`, `LPT1`–`9`, juga
+  dengan ekstensi seperti `aux.png`), nama yang berakhiran titik/spasi, dua file
+  yang hanya beda huruf besar/kecil, dan path > 150 karakter — dilaporkan
+  sebagai *warning* saat **Go online / Upload files**. Ganti namanya di project
+  asli supaya peer Windows bisa mengambilnya.
+- Path asset di scene selalu disimpan relatif ke project dengan `/`
+  (`Assets/model.pmx`). Asset **di luar** folder project tetap tersimpan
+  absolut — file itu tidak ikut di-upload dan tidak akan ada di device lain;
+  pindahkan ke dalam project dulu.
 - Salinan hasil download adalah milik server: perubahan file lokal di folder
   cache akan ditimpa versi server saat Join berikutnya (scene tetap aman, karena
   scene datang dari room). Upload hanya dari salinan asli.
@@ -190,6 +205,8 @@ nix-shell --run "cmake --build build --target TestCollabClient"
 ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestCollabClient
 # file project: SHA-256, aturan ignore, lalu publish -> download fresh -> update
 ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestProjectSync
+# + cek "1 file gagal tidak menghentikan yang lain" (menghapus blob di server):
+ILMEEE_RT_URL=... ILMEEE_RT_TOKEN=dev ILMEEE_RT_FILES_DIR=server/realtime/data/files ./build/bin/TestProjectSync
 ```
 
 ## 4. Protokol (untuk tool lain)

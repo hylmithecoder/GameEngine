@@ -180,6 +180,40 @@ bool ValidSyncPath(const std::string &rel) {
   return true;
 }
 
+std::string WindowsNameProblem(const std::string &rel) {
+  for (unsigned char c : rel)
+    if (c == '<' || c == '>' || c == '"' || c == '|' || c == '?' || c == '*')
+      return std::string("contains '") + (char)c + "', which Windows does not allow";
+  std::size_t start = 0;
+  while (start < rel.size()) {
+    std::size_t end = rel.find('/', start);
+    if (end == std::string::npos)
+      end = rel.size();
+    const std::string part = rel.substr(start, end - start);
+    start = end + 1;
+    if (part.empty())
+      continue;
+    if (part.back() == '.' || part.back() == ' ')
+      return "'" + part + "' ends with a dot or space (Windows drops it)";
+    // Device names are reserved with any extension: "aux.png", "nul.txt".
+    std::string stem = part.substr(0, part.find('.'));
+    while (!stem.empty() && stem.back() == ' ')
+      stem.pop_back();
+    for (auto &ch : stem)
+      ch = (char)std::toupper((unsigned char)ch);
+    static const char *const kReserved[] = {"CON", "PRN", "AUX", "NUL"};
+    bool reserved = false;
+    for (const char *r : kReserved)
+      reserved |= stem == r;
+    if (stem.size() == 4 && (stem.rfind("COM", 0) == 0 || stem.rfind("LPT", 0) == 0) &&
+        stem[3] >= '1' && stem[3] <= '9')
+      reserved = true;
+    if (reserved)
+      return "'" + part + "' is a reserved device name on Windows";
+  }
+  return {};
+}
+
 namespace {
 const char *const kSyncStateRel = ".ilmeee/sync-state.json";
 const char *const kPartSuffix = ".ilmeee-part";
@@ -497,6 +531,27 @@ bool ReadFileBytes(const fs::path &p, std::string &out) {
   in.read(out.data(), len);
   return static_cast<bool>(in) || out.empty();
 }
+// Files a peer on another OS will fail to write (see SyncResult::warnings).
+std::vector<std::string> PortabilityWarnings(const std::vector<SyncFile> &files) {
+  std::vector<std::string> out;
+  std::map<std::string, std::string> folded; // lower-case path -> first path
+  for (const auto &f : files) {
+    if (std::string why = WindowsNameProblem(f.path); !why.empty())
+      out.push_back(f.path + ": " + why);
+    std::string lower = f.path;
+    for (auto &c : lower)
+      c = (char)std::tolower((unsigned char)c);
+    auto [it, inserted] = folded.emplace(lower, f.path);
+    if (!inserted)
+      out.push_back(f.path + ": differs from '" + it->second +
+                    "' only in upper/lower case (one overwrites the other on Windows)");
+    // The workspace folder on Windows (C:\Users\<name>\.ilmeeeengine\workspaces
+    // \<host>\<room>\) already takes ~100 of the 260 characters Windows allows.
+    if (f.path.size() > 150)
+      out.push_back(f.path + ": path is very long; Windows may not be able to open it");
+  }
+  return out;
+}
 } // namespace
 
 SyncResult PublishProject(const std::string &wsUrl, const std::string &token,
@@ -515,6 +570,7 @@ SyncResult PublishProject(const std::string &wsUrl, const std::string &token,
   res.files = files.size();
   for (const auto &f : files)
     res.bytes += f.size;
+  res.warnings = PortabilityWarnings(files);
 
   std::map<std::string, const SyncFile *> byHash;
   for (const auto &f : files)
@@ -698,30 +754,33 @@ SyncResult DownloadProject(const std::string &wsUrl, const std::string &token,
   s.totalFiles = need.size();
   for (const auto *f : need)
     s.totalBytes += f->size;
-  for (const SyncFile *f : need) {
-    if (Cancelled(cancel)) {
-      res.error = "cancelled";
-      SaveState(dir, state);
-      return res;
-    }
-    if (progress) {
-      s.file = f->path;
-      progress(s);
-    }
-    const fs::path local = dir / PathFromUtf8(f->path);
-    fs::create_directories(local.parent_path(), ec);
+
+  // One file. Returns "" on success, else why it failed; `connection` tells a
+  // server that cannot be reached (worth stopping for) from a bad file.
+  auto fetchOne = [&](const SyncFile &f, bool &connection) -> std::string {
+    connection = false;
+#ifdef _WIN32
+    if (std::string why = WindowsNameProblem(f.path); !why.empty())
+      return why + "; rename it in the original project";
+#endif
+    const fs::path local = dir / PathFromUtf8(f.path);
+    std::error_code fec;
+    fs::create_directories(local.parent_path(), fec);
+    if (fec)
+      return "cannot create folder: " + fec.message();
     fs::path part = local;
     part += kPartSuffix;
     std::ofstream out(part, std::ios::binary | std::ios::trunc);
-    if (!out) {
-      res.error = "cannot write " + PathToUtf8(part);
-      return res;
-    }
+    if (!out)
+      return "cannot write " + PathToUtf8(part) + " (path too long or not allowed?)";
     Sha256 hasher;
     std::uint64_t got = 0;
-    const std::string url = http.base + "/files/blob/" + f->hash;
+    const std::string url = http.base + "/files/blob/" + f.hash;
     auto a = http.Args(url, 3600);
     a->compress = false;
+    // Raw bytes only: a proxy that gzips the body would break the hash check
+    // (this IXWebSocket build has no zlib to undo it).
+    a->extraHeaders["Accept-Encoding"] = "identity";
     const std::uint64_t before = s.doneBytes;
     a->onChunkCallback = [&](const std::string &chunk) {
       out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
@@ -739,32 +798,83 @@ SyncResult DownloadProject(const std::string &wsUrl, const std::string &token,
     };
     const auto br = http.client.get(url, a);
     out.close();
+    const bool wrote = static_cast<bool>(out);
     const bool okStatus = br && br->statusCode == 200;
     const std::string digest = hasher.FinishHex();
-    if (!okStatus || !out || got != f->size || digest != f->hash) {
-      fs::remove(part, ec);
-      if (Cancelled(cancel))
-        res.error = "cancelled";
-      else if (!okStatus)
-        res.error = f->path + ": " + Describe(br);
-      else
-        res.error = f->path + ": download was damaged (hash mismatch)";
-      SaveState(dir, state);
-      return res;
+    std::string why;
+    if (!okStatus) {
+      connection = !br || br->statusCode == 0;
+      why = Describe(br);
+    } else if (auto enc = br->headers.find("Content-Encoding");
+               enc != br->headers.end() && !enc->second.empty() && enc->second != "identity") {
+      why = "the server or a proxy compressed the file (" + enc->second + ")";
+    } else if (!wrote) {
+      why = "cannot write " + PathToUtf8(part) + " (disk full?)";
+    } else if (got != f.size) {
+      why = "incomplete download (" + std::to_string(got) + " of " + std::to_string(f.size) +
+            " bytes)";
+    } else if (digest != f.hash) {
+      why = "download was damaged (hash mismatch)";
     }
-    fs::rename(part, local, ec);
-    if (ec) {
+    if (!why.empty()) {
+      fs::remove(part, fec);
+      s.doneBytes = before;
+      return why;
+    }
+    fs::rename(part, local, fec);
+    if (fec) {
       // Windows refuses to replace a file another program has open.
-      fs::remove(part, ec);
-      res.error = "cannot replace " + f->path + " (is it open in another program?)";
+      fs::remove(part, fec);
+      s.doneBytes = before;
+      return "cannot replace the old copy (is it open in another program?)";
+    }
+    state.hashes[f.path] = CachedHash{f.size, MTimeOf(local), f.hash};
+    s.doneBytes = before + f.size;
+    return {};
+  };
+
+  int unreachableInARow = 0;
+  for (const SyncFile *f : need) {
+    if (Cancelled(cancel)) {
+      res.error = "cancelled";
       SaveState(dir, state);
       return res;
     }
-    state.hashes[f->path] = CachedHash{f->size, MTimeOf(local), f->hash};
-    ++res.transferred;
-    res.transferredBytes += f->size;
+    if (progress) {
+      s.file = f->path;
+      progress(s);
+    }
+    std::string why;
+    bool connection = false;
+    // A dropped connection or a damaged transfer usually works the second
+    // time; a name Windows rejects never does.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      why = fetchOne(*f, connection);
+      if (why.empty() || Cancelled(cancel))
+        break;
+      if (why.find("Windows") != std::string::npos || why.find("cannot create") == 0 ||
+          why.find("cannot write") == 0)
+        break;
+    }
+    if (Cancelled(cancel)) {
+      res.error = "cancelled";
+      SaveState(dir, state);
+      return res;
+    }
     ++s.doneFiles;
-    s.doneBytes = before + f->size;
+    if (why.empty()) {
+      unreachableInARow = 0;
+      ++res.transferred;
+      res.transferredBytes += f->size;
+      continue;
+    }
+    res.failed.push_back(f->path + ": " + why);
+    unreachableInARow = connection ? unreachableInARow + 1 : 0;
+    if (unreachableInARow >= 3) {
+      res.error = "lost the connection to the server (" + why + ")";
+      SaveState(dir, state);
+      return res;
+    }
   }
 
   // Files our previous download created that the project dropped.
@@ -780,6 +890,11 @@ SyncResult DownloadProject(const std::string &wsUrl, const std::string &token,
   }
   state.downloaded = std::move(now);
   SaveState(dir, state);
+  if (!res.failed.empty()) {
+    res.error = std::to_string(res.failed.size()) + " of " + std::to_string(files.size()) +
+                " files could not be downloaded (first: " + res.failed.front() + ")";
+    return res;
+  }
   res.ok = true;
   return res;
 }

@@ -489,6 +489,11 @@ void MainWindow::CollabApply(const CollabOp &op) {
     return;
   }
   ed.entity.objectId = id;
+  // Editors before the path fix sent Windows separators; compare and load
+  // with '/' so "Assets\x.pmx" and "Assets/x.pmx" are the same object.
+  ed.entity.externalPath = ilmeee::NormalizeAssetPath(ed.entity.externalPath);
+  for (auto &st : ed.entity.surfaceTextures)
+    st.texturePath = ilmeee::NormalizeAssetPath(st.texturePath);
 
   int idx = CollabFindMesh(id);
   // Keep the transform we have; the xform slot owns it.

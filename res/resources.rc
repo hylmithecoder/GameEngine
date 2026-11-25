@@ -1,1 +1,7 @@
 IDI_APP_ICON ICON "assets/icons/app_icon.ico"
+
+// Application manifest (RT_MANIFEST = 24, id 1): UTF-8 code page + long
+// paths, see res/ilmeee.manifest. LANGUAGE 0,0 matches MinGW's default
+// manifest so the linker drops that one in favour of this.
+LANGUAGE 0, 0
+1 24 "res/ilmeee.manifest"

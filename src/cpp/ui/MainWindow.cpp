@@ -189,6 +189,55 @@ void MainWindow::OnInit() {
   ::Log("MainWindow::OnInit - Completed");
 }
 
+void MainWindow::SetSceneFocusMode(bool on) {
+  if (on == sceneFocusMode)
+    return;
+  sceneFocusMode = on;
+  sceneFocusDX = sceneFocusDY = sceneFocusWheel = 0.0f;
+  // Relative mode hides the cursor and keeps reporting motion past the
+  // window edge, so the view can turn all the way round (mouse or trackpad).
+  if (SDL_Window *w = GetWindow())
+    SDL_SetWindowRelativeMouseMode(w, on);
+  // The hidden cursor must not hover or click editor widgets meanwhile.
+  ImGuiIO &io = ImGui::GetIO();
+  if (on)
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+  else
+    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+  if (on) {
+    focusSceneTab = true;
+    showScene = true;
+    ImGui::SetWindowFocus(nullptr); // no text field keeps the keyboard
+  } else if (viewportCameraHistoryActive) {
+    viewportCameraHistoryActive = false;
+    RecordEditorHistory();
+  }
+  ::Log(on ? "Scene focus: ON (WASD/QE move, mouse looks, Esc leaves)"
+           : "Scene focus: OFF",
+        Debug::LogLevel::INFO);
+}
+
+void MainWindow::OnEvent(const SDL_Event &event) {
+  if (!sceneFocusMode)
+    return;
+  switch (event.type) {
+  case SDL_EVENT_MOUSE_MOTION:
+    sceneFocusDX += event.motion.xrel;
+    sceneFocusDY += event.motion.yrel;
+    break;
+  case SDL_EVENT_MOUSE_WHEEL:
+    sceneFocusWheel += event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED
+                           ? -event.wheel.y
+                           : event.wheel.y;
+    break;
+  case SDL_EVENT_WINDOW_FOCUS_LOST:
+    SetSceneFocusMode(false); // never keep the mouse captured behind Alt+Tab
+    break;
+  default:
+    break;
+  }
+}
+
 void MainWindow::OnUpdate(float deltaTime) {
   // Engine IPC handlers run here, on the main thread, because they touch
   // scene and UI state.
@@ -309,6 +358,15 @@ void MainWindow::OnRender(VkCommandBuffer cmd) {
   if (!io.WantTextInput && io.KeyCtrl &&
       ImGui::IsKeyPressed(ImGuiKey_B, false))
     StartGameBuild(io.KeyShift);
+
+  // Ctrl+Shift+F toggles scene focus (fly the camera without holding the
+  // right button); Esc also leaves it. Only while editing (Play owns input).
+  if (!io.WantTextInput && io.KeyCtrl && io.KeyShift &&
+      ImGui::IsKeyPressed(ImGuiKey_F, false))
+    SetSceneFocusMode(!sceneFocusMode && builder.IsStopped());
+  if (sceneFocusMode &&
+      (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || !builder.IsStopped() || !showScene))
+    SetSceneFocusMode(false);
 
   // F2 toggles Inspect Mode. Honored even when --debug wasn't passed so
   // a running session can flip the overlay on for ad-hoc UI archaeology.

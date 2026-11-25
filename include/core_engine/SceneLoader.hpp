@@ -19,6 +19,14 @@ struct SceneLoadReport {
   size_t failed = 0; // entities whose asset could not be loaded (skipped)
 };
 
+// A stored asset path with '/' separators (older Windows editors wrote '\').
+std::string NormalizeAssetPath(std::string path);
+// The file a stored asset path (scene / collab entity) refers to: relative
+// paths resolve against `projectRoot`; absolute ones (this OS's or another's)
+// are kept. UTF-8, '/'-separated.
+std::string ResolveAssetPath(const std::string &stored,
+                             const std::filesystem::path &projectRoot);
+
 // Appends every entity to `renderer` (meshes already there are kept), with
 // relative asset paths resolved against `projectRoot`; then applies surface
 // textures, the parent hierarchy and the scene's background colour.

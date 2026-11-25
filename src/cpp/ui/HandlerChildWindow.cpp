@@ -2165,7 +2165,18 @@ void MainWindow::RenderSceneWindow() {
     vpIn.mouseDeltaX = dragDelta.x;
     vpIn.mouseDeltaY = dragDelta.y;
     vpIn.scroll = io.MouseWheel;
-    if (vpIn.hovered) {
+    if (sceneFocusMode && !gameCameraView) {
+      // Captured mouse: motion looks around without the right button (the
+      // renderer's mouselook keys off rmbDown), keys fly from anywhere, and
+      // the hidden cursor can neither pick nor open the Add menu.
+      vpIn.hovered = true;
+      vpIn.rmbDown = true;
+      vpIn.mouseDeltaX = sceneFocusDX;
+      vpIn.mouseDeltaY = sceneFocusDY;
+      vpIn.scroll = sceneFocusWheel;
+    }
+    sceneFocusDX = sceneFocusDY = sceneFocusWheel = 0.0f;
+    if (vpIn.hovered && !io.WantTextInput) {
       vpIn.wDown = IsKeyDown(ImGuiKey_W);
       vpIn.aDown = IsKeyDown(ImGuiKey_A);
       vpIn.sDown = IsKeyDown(ImGuiKey_S);
@@ -2235,6 +2246,20 @@ void MainWindow::RenderSceneWindow() {
         SetCursorPosY(GetCursorPosY() + (contentSize.y - imageSize.y) * 0.5f);
       }
       Image((ImTextureID)sceneDesc, imageSize, ImVec2(0, 1), ImVec2(1, 0));
+      if (sceneFocusMode && !gameCameraView) {
+        const char *hint = "SCENE FOCUS   WASD move  Q/E down/up  Mouse look  "
+                           "Shift faster  Wheel forward   Esc / Ctrl+Shift+F exit";
+        const ImVec2 r0 = GetItemRectMin();
+        const ImVec2 r1 = GetItemRectMax();
+        const ImVec2 ts = CalcTextSize(hint);
+        const ImVec2 p(r0.x + (r1.x - r0.x - ts.x) * 0.5f, r1.y - ts.y - 14.0f);
+        ImDrawList *dl = GetWindowDrawList();
+        dl->AddRectFilled(ImVec2(p.x - 10.0f, p.y - 5.0f),
+                          ImVec2(p.x + ts.x + 10.0f, p.y + ts.y + 5.0f),
+                          IM_COL32(15, 18, 24, 190), 6.0f);
+        dl->AddText(p, IM_COL32(235, 240, 250, 255), hint);
+        dl->AddRect(r0, r1, IM_COL32(90, 160, 255, 200), 0.0f, 0, 2.0f);
+      }
       if (gameCameraView) {
         const ImVec2 imagePos = GetItemRectMin();
         const bool overImage = IsItemHovered();
@@ -3334,6 +3359,9 @@ void MainWindow::RenderMenuBar() {
         fullscreen = !fullscreen;
         SDL_SetWindowFullscreen(window, fullscreen);
       }
+      if (MenuItem("Scene Focus (fly camera)", "Ctrl+Shift+F", sceneFocusMode,
+                   builder.IsStopped()))
+        SetSceneFocusMode(!sceneFocusMode);
       ImGui::EndMenu();
     }
 

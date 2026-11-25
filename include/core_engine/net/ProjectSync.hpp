@@ -47,6 +47,12 @@ std::filesystem::path PathFromUtf8(const std::string &s);
 // Same rule as the server: relative, '/' separators, cannot leave the folder.
 bool ValidSyncPath(const std::string &rel);
 
+// Why `rel` cannot exist on Windows ("" when it can): reserved characters
+// (<>"|?*), a reserved device name (CON, NUL, COM1, ...), a name ending in a
+// dot or space. Linux / Android accept all of these, so a project made there
+// can hold files a Windows peer could never write.
+std::string WindowsNameProblem(const std::string &rel);
+
 // Build output, editor caches and per-machine files never leave the device.
 // `userRules` are the lines of the project's .ilmeeeignore:
 //   "dir/"  a folder (from the project root)   "*.ext"  a file suffix
@@ -85,6 +91,14 @@ struct SyncResult {
   std::size_t transferred = 0;    // files actually sent / received
   std::uint64_t transferredBytes = 0;
   std::size_t removed = 0;        // DownloadProject: stale files deleted
+  // DownloadProject: "path: reason" of every file that could not be fetched.
+  // The others are still downloaded (one bad file no longer stops the rest);
+  // ok is false while this is non-empty.
+  std::vector<std::string> failed;
+  // PublishProject: files that are published but will not work on every
+  // device (Windows-illegal names, names differing only in case, very long
+  // paths). Publishing still succeeds.
+  std::vector<std::string> warnings;
 };
 
 // Uploads `dir` as the project of `room` (only files the server lacks).
