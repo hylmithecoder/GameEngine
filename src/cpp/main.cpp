@@ -223,15 +223,8 @@ int main(int argc, char *argv[]) {
   std::setvbuf(stderr, nullptr, _IOLBF, 0);
 
   // The editor loads assets/ (shaders, icons, fonts) relative to the working
-  // directory. Started from a shortcut or another folder, an installed editor
-  // (assets/ next to the exe, as on Windows) still finds them.
-  {
-    std::error_code ec;
-    const auto exeDir = ilmeee::ExecutableDir();
-    if (!std::filesystem::is_directory("assets", ec) &&
-        std::filesystem::is_directory(exeDir / "assets", ec))
-      std::filesystem::current_path(exeDir, ec);
-  }
+  // directory; an installed editor started from elsewhere still finds them.
+  ilmeee::EnterEngineDataDir();
 
   // Print startup information
   PrintStartupInfo();

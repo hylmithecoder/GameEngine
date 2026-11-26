@@ -76,6 +76,24 @@ inline std::string SiblingExecutable(const std::string &name) {
   return name;
 }
 
+// Engine data (assets/: shaders, icons, fonts) is loaded relative to the
+// working directory. Started from a shortcut, a desktop launcher or another
+// folder, switch to wherever assets/ really is: next to the executable
+// (Windows install, build tree) or one level up (Linux install: bin/ + assets/).
+// The working directory is left alone when it already has assets/.
+inline void EnterEngineDataDir() {
+  std::error_code ec;
+  if (std::filesystem::is_directory("assets", ec))
+    return;
+  const std::filesystem::path exeDir = ExecutableDir();
+  for (const auto &dir : {exeDir, exeDir.parent_path()}) {
+    if (std::filesystem::is_directory(dir / "assets", ec)) {
+      std::filesystem::current_path(dir, ec);
+      return;
+    }
+  }
+}
+
 // User-specified .ilmeee directory for layout settings and legacy
 // configurations.
 inline std::filesystem::path IlmeeeDir() {

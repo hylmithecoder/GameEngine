@@ -1884,6 +1884,8 @@ private:
 };
 
 int main(int argc, char *argv[]) {
+  // Fonts and icons load from assets/ relative to the working directory.
+  ilmeee::EnterEngineDataDir();
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--debug") == 0) {
       g_DebugMode = true;

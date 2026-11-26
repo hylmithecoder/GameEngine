@@ -76,3 +76,6 @@ docs/*
 .env
 
 .opencode
+
+# installer/*/package.sh output
+/dist/

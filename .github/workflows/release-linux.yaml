@@ -1,0 +1,159 @@
+name: Linux — Build, Test & Package
+
+# Builds the Linux version on Ubuntu 24.04 (glibc 2.39, so the archive runs on
+# Ubuntu 24.04+, Debian 13, Fedora 40+, Arch, ...), runs the headless tests and
+# packs a relocatable tarball (installer/linux/package.sh): every library the
+# engine needs is inside lib/, only libc and the GPU driver come from the host.
+#
+# For now the tarball is only kept as a run artifact (Actions -> run ->
+# Artifacts). A GitHub Release on tags will be added later.
+#
+# Not in Ubuntu 24.04's apt, built from source once and cached:
+#   SDL3, KTX-Software, Vulkan-Headers (same versions as shell.nix)
+# plus the Discord Game SDK zip and GCC 15 (C++26) from the toolchain PPA.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for a manual build (default: 0.0.0-dev.<run>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SDL3_VERSION: "3.4.10"
+  KTX_VERSION: "4.4.2"
+  VULKAN_HEADERS_VERSION: "1.4.341.0"
+  DISCORD_SDK_VERSION: "3.2.1"
+  DEPS_PREFIX: /opt/ilmeee-deps
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
+          else
+            v="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+      - name: Install packages
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-15 g++-15 cmake ninja-build pkg-config patchelf file unzip imagemagick \
+            libsdl2-dev libglfw3-dev libglew-dev libgl-dev libglu1-mesa-dev libegl-dev \
+            libvulkan-dev libglm-dev libstb-dev \
+            ocl-icd-opencl-dev opencl-headers \
+            libgtk-3-dev libnotify-dev libxcb1-dev libx11-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
+            libcurl4-openssl-dev libssl-dev zlib1g-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libjack-jackd2-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
+            libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev \
+            libxinerama-dev libdrm-dev libgbm-dev libudev-dev libdbus-1-dev libibus-1.0-dev
+          echo "CC=gcc-15" >> "$GITHUB_ENV"
+          echo "CXX=g++-15" >> "$GITHUB_ENV"
+
+      - name: Cache source-built dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DEPS_PREFIX }}
+          key: linux-deps-noble-gcc15-sdl3-${{ env.SDL3_VERSION }}-ktx-${{ env.KTX_VERSION }}-vkh-${{ env.VULKAN_HEADERS_VERSION }}-discord-${{ env.DISCORD_SDK_VERSION }}
+
+      - name: Build dependencies (SDL3, KTX, Vulkan-Headers, Discord SDK)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          P=$DEPS_PREFIX
+          sudo mkdir -p "$P" && sudo chown "$USER" "$P"
+          mkdir -p /tmp/deps && cd /tmp/deps
+
+          git clone --depth 1 --branch "vulkan-sdk-$VULKAN_HEADERS_VERSION" \
+            https://github.com/KhronosGroup/Vulkan-Headers.git
+          cmake -S Vulkan-Headers -B vkh-build -G Ninja -DCMAKE_INSTALL_PREFIX="$P"
+          cmake --install vkh-build
+
+          git clone --depth 1 --branch "release-$SDL3_VERSION" https://github.com/libsdl-org/SDL.git
+          cmake -S SDL -B sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF -DSDL_SHARED=ON
+          cmake --build sdl-build --parallel
+          cmake --install sdl-build
+
+          git clone --depth 1 --branch "v$KTX_VERSION" https://github.com/KhronosGroup/KTX-Software.git
+          cmake -S KTX-Software -B ktx-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_TOOLS=OFF -DKTX_FEATURE_DOC=OFF \
+            -DKTX_FEATURE_JNI=OFF -DKTX_FEATURE_PY=OFF -DKTX_FEATURE_LOADTEST_APPS=OFF
+          cmake --build ktx-build --parallel
+          cmake --install ktx-build
+
+          curl -fsSL -o discord.zip \
+            "https://dl-game-sdk.discordapp.net/$DISCORD_SDK_VERSION/discord_game_sdk.zip"
+          unzip -q discord.zip -d discord
+          mkdir -p "$P/discord/include" "$P/discord/lib"
+          cp discord/c/discord_game_sdk.h "$P/discord/include/"
+          cp discord/lib/x86_64/discord_game_sdk.so "$P/discord/lib/"
+
+      - name: Configure
+        run: |
+          P=$DEPS_PREFIX
+          export PKG_CONFIG_PATH="$P/lib/pkgconfig:$P/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export DISCORD_SDK_PATH="$P/discord"
+          echo "LD_LIBRARY_PATH=$P/lib:$P/discord/lib" >> "$GITHUB_ENV"
+          $CXX --version | head -1; cmake --version | head -1
+          # Release build for distribution (local development stays Debug).
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$P" -DVulkan_INCLUDE_DIR="$P/include" \
+            -DBUILD_DOCUMENTATION=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # Same portable set as the Windows workflow: no GPU, display or audio.
+      - name: Test
+        run: |
+          set -uo pipefail
+          failed=0
+          for t in TestNetProtocol TestWsTransport TestCollabClient TestProjectSync \
+                   TestMcpServer TestSceneFormat TestTransformMath TestPhysics \
+                   TestMovementScripts TestProcess; do
+            echo "::group::$t"
+            if ./build/bin/$t; then echo "PASS $t"; else echo "::error::$t failed"; failed=1; fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+      - name: Package (tar.gz)
+        run: installer/linux/package.sh build "${{ steps.version.outputs.version }}" x86_64
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ilmeeeengine-${{ steps.version.outputs.version }}-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
