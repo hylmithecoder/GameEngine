@@ -56,12 +56,19 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Version: $v"
 
+      # The project needs CMake 4.1+ (cmake_minimum_required); the runner
+      # image and Ubuntu 24.04's apt only have 3.x.
+      - name: CMake 4
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "4.1.x"
+
       - name: Install packages
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-15 g++-15 cmake ninja-build pkg-config patchelf file unzip imagemagick \
+            gcc-15 g++-15 ninja-build pkg-config patchelf file unzip imagemagick \
             libsdl2-dev libglfw3-dev libglew-dev libgl-dev libglu1-mesa-dev libegl-dev \
             libvulkan-dev libglm-dev libstb-dev \
             ocl-icd-opencl-dev opencl-headers \
