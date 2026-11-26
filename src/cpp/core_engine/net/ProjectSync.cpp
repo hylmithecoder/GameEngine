@@ -673,6 +673,44 @@ SyncResult PublishProject(const std::string &wsUrl, const std::string &token,
   return res;
 }
 
+SyncResult PublishProjectLinked(const std::string &wsUrl, const std::string &token,
+                                const std::string &room, const fs::path &dir,
+                                const std::string &by, const SyncProgressFn &progress,
+                                const std::atomic<bool> *cancel) {
+  SyncResult res;
+  Http http;
+  http.token = token;
+  if (!http.Init(wsUrl)) {
+    res.error = http.error;
+    return res;
+  }
+  const auto files = ScanProject(dir, res.error, progress, cancel);
+  if (!res.error.empty())
+    return res;
+  res.files = files.size();
+  for (const auto &f : files)
+    res.bytes += f.size;
+  res.warnings = PortabilityWarnings(files);
+  std::error_code ec;
+  const fs::path abs = fs::absolute(dir, ec);
+  json manifest = {{"by", by}, {"linked_dir", PathToUtf8(ec ? dir : abs)},
+                   {"files", json::array()}};
+  for (const auto &f : files)
+    manifest["files"].push_back({{"path", f.path}, {"hash", f.hash}, {"size", f.size}});
+  if (progress) {
+    SyncStatus fin;
+    fin.phase = "Publishing";
+    progress(fin);
+  }
+  const auto r = http.Json("PUT", "/rooms/" + room + "/files", manifest.dump());
+  if (!r || r->statusCode != 200) {
+    res.error = Describe(r);
+    return res;
+  }
+  res.ok = true; // transferred stays 0: nothing was copied
+  return res;
+}
+
 SyncResult DownloadProject(const std::string &wsUrl, const std::string &token,
                            const std::string &room, const fs::path &dir,
                            const SyncProgressFn &progress, const std::atomic<bool> *cancel) {

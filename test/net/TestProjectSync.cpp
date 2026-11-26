@@ -186,6 +186,21 @@ int main() {
     CHECK(!none.ok);
     CHECK(none.error.find("no project files") != std::string::npos);
 
+    // Linked publish (server on this computer with RT_ALLOW_LINKED=1): no
+    // blob is uploaded, a fresh download still gets every file.
+    if (const char *lk = std::getenv("ILMEEE_RT_LINKED"); lk && *lk) {
+      const std::string room3 = room + "-linked";
+      auto pl = PublishProjectLinked(url, token, room3, src, "tester");
+      if (!pl.ok)
+        std::cerr << "  linked publish: " << pl.error << "\n";
+      CHECK(pl.ok);
+      CHECK(pl.files >= 5 && pl.transferred == 0);
+      const fs::path got = root / "linked-copy";
+      auto dl4 = DownloadProject(url, token, room3, got);
+      CHECK(dl4.ok && dl4.transferred == pl.files);
+      CHECK(ReadFile(got / "assets/textures/a.png") == ReadFile(src / "assets/textures/a.png"));
+    }
+
     // One file that cannot be fetched must not stop the others (it used to
     // abort the whole download). Needs the server's blob folder to break it.
     if (const char *fd = std::getenv("ILMEEE_RT_FILES_DIR"); fd && *fd) {

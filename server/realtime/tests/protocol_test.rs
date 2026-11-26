@@ -703,3 +703,46 @@ async fn lan_udp_discovery_answers_probe() {
     );
     s.stop().await;
 }
+
+#[tokio::test]
+async fn linked_manifest_serves_from_the_project_folder() {
+    let proj = std::env::temp_dir().join(format!("ilmeee-linked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&proj);
+    std::fs::create_dir_all(proj.join("Assets")).unwrap();
+    std::fs::write(proj.join("Assets").join("tex.png"), b"png bytes").unwrap();
+    let hash = sha256_hex(b"png bytes");
+    let body = json!({
+        "by": "host",
+        "linked_dir": proj.to_string_lossy(),
+        "files": [{"path": "Assets/tex.png", "hash": hash, "size": 9}],
+    })
+    .to_string();
+
+    // A server not started for it refuses (no copy of anyone's folder paths).
+    let plain = Server::start(cfg("tok")).await;
+    let (st, _) = http_req(plain.addr, "PUT", "/rooms/r/files", "tok", body.as_bytes()).await;
+    assert_eq!(st, 403);
+    plain.stop().await;
+
+    let s = Server::start(Config {
+        allow_linked: true,
+        ..cfg("tok")
+    })
+    .await;
+    let (st, out) = http_req(s.addr, "PUT", "/rooms/r/files", "tok", body.as_bytes()).await;
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&out));
+    // Downloaded straight from the folder; the manifest hides the folder.
+    let (st, out) = http_req(s.addr, "GET", &format!("/files/blob/{hash}"), "tok", b"").await;
+    assert_eq!(st, 200);
+    assert_eq!(out, b"png bytes");
+    let (_, out) = http_req(s.addr, "GET", "/rooms/r/files", "tok", b"").await;
+    let m: Value = serde_json::from_slice(&out).unwrap();
+    assert!(m.get("linked_dir").is_none());
+    assert_eq!(m["files"][0]["path"], "Assets/tex.png");
+    // Edited after sharing: not served (the host shares again).
+    std::fs::write(proj.join("Assets").join("tex.png"), b"changed!!!").unwrap();
+    let (st, _) = http_req(s.addr, "GET", &format!("/files/blob/{hash}"), "tok", b"").await;
+    assert_eq!(st, 404);
+    s.stop().await;
+    let _ = std::fs::remove_dir_all(&proj);
+}

@@ -1316,16 +1316,21 @@ private:
     logStore.Push("Hub", std::string(upload ? "Uploading " : "Downloading ") +
                              "project files for workspace '" + room + "' (" + t.label +
                              ")...");
-    syncJob.thread = std::thread([this, upload, url, token, by, room, project] {
+    // Our own LAN server reads the files from the project folder itself:
+    // sharing sends only the list, never a second copy on this disk.
+    const bool linked = upload && t.lan && t.serverId == lanServerId && LanHosting();
+    syncJob.thread = std::thread([this, upload, linked, url, token, by, room, project] {
       auto progress = [this](const ilmeee::net::SyncStatus &st) {
         std::lock_guard<std::mutex> lock(syncJob.mutex);
         syncJob.status = st;
       };
       const fs::path dir = ilmeee::net::PathFromUtf8(project);
-      auto res = upload ? ilmeee::net::PublishProject(url, token, room, dir, by, progress,
-                                                      &syncJob.cancel)
-                        : ilmeee::net::DownloadProject(url, token, room, dir, progress,
-                                                       &syncJob.cancel);
+      auto res = linked   ? ilmeee::net::PublishProjectLinked(url, token, room, dir, by,
+                                                              progress, &syncJob.cancel)
+                 : upload ? ilmeee::net::PublishProject(url, token, room, dir, by, progress,
+                                                        &syncJob.cancel)
+                          : ilmeee::net::DownloadProject(url, token, room, dir, progress,
+                                                         &syncJob.cancel);
       {
         std::lock_guard<std::mutex> lock(syncJob.mutex);
         syncJob.result = std::move(res);
@@ -1361,7 +1366,12 @@ private:
       return;
     }
     char buf[256];
-    if (syncJob.upload)
+    if (syncJob.upload && syncJob.target.lan && syncJob.target.serverId == lanServerId)
+      std::snprintf(buf, sizeof buf,
+                    "Shared '%s' on LAN: %zu files (%s), served from the project folder "
+                    "(no copy).",
+                    syncJob.room.c_str(), r.files, HumanBytes(r.bytes).c_str());
+    else if (syncJob.upload)
       std::snprintf(buf, sizeof buf, "Uploaded '%s': %zu files (%s), %zu new (%s).",
                     syncJob.room.c_str(), r.files, HumanBytes(r.bytes).c_str(), r.transferred,
                     HumanBytes(r.transferredBytes).c_str());
@@ -1459,7 +1469,10 @@ private:
              {"RT_SERVER_ID", lanServerId},
              {"RT_SERVER_NAME", std::string(onlineName)},
              {"ILMEEE_RT_TOKEN", std::string(lanPassword)},
-             {"RT_DATA_DIR", ilmeee::net::PathToUtf8(ilmeee::UserDataRoot() / "lan-server")}};
+             {"RT_DATA_DIR", ilmeee::net::PathToUtf8(ilmeee::UserDataRoot() / "lan-server")},
+             // Shared projects are served from their own folders (linked
+             // manifests), not copied into the server's data directory.
+             {"RT_ALLOW_LINKED", "1"}};
     auto host = std::make_shared<LanHostProc>();
     host->proc = std::make_shared<ilmeee::Process>();
     std::string error;
@@ -1823,8 +1836,8 @@ private:
     // ---- host ----
     ImGui::SeparatorText("Host a server on this computer");
     ImGui::TextWrapped(
-        "Everyone on the same WiFi/LAN can join, without internet. The project files stay "
-        "on this computer.");
+        "Everyone on the same WiFi/LAN can join, without internet. Shared projects are "
+        "served straight from their folders on this computer (no extra copy).");
     ImGui::SetNextItemWidth(260);
     ImGui::BeginDisabled(LanHosting());
     if (ImGui::InputText("LAN password (optional)", lanPassword, sizeof lanPassword,

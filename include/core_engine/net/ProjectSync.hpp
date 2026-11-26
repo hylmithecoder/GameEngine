@@ -107,6 +107,15 @@ SyncResult PublishProject(const std::string &wsUrl, const std::string &token,
                           const std::string &by, const SyncProgressFn &progress = {},
                           const std::atomic<bool> *cancel = nullptr);
 
+// Like PublishProject, for a server running on THIS computer (the Hub's
+// "Host on LAN"): only the manifest is sent, with `dir` as the folder the
+// server reads the files from. Nothing is copied, so the project does not
+// take its size twice on the same disk. Call it again after files change.
+SyncResult PublishProjectLinked(const std::string &wsUrl, const std::string &token,
+                                const std::string &room, const std::filesystem::path &dir,
+                                const std::string &by, const SyncProgressFn &progress = {},
+                                const std::atomic<bool> *cancel = nullptr);
+
 // Brings `dir` up to date with the room's published project. Files the
 // previous download created but the project no longer has are removed;
 // anything else already in `dir` is left alone unless the project has a file

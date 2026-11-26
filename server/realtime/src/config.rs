@@ -41,6 +41,9 @@ pub struct Config {
     /// Stable id + display name in discovery answers.
     pub server_id: String,
     pub server_name: String,
+    /// Accept linked manifests (files served from a project folder on this
+    /// computer, see files.rs) from loopback. The Hub's LAN server only.
+    pub allow_linked: bool,
 }
 
 impl Default for Config {
@@ -65,6 +68,7 @@ impl Default for Config {
             discovery_port: 0,
             server_id: String::new(),
             server_name: String::new(),
+            allow_linked: false,
         }
     }
 }
@@ -118,6 +122,10 @@ impl Config {
                 .ok()
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| "Ilmeee LAN server".into()),
+            allow_linked: matches!(
+                std::env::var("RT_ALLOW_LINKED").as_deref().map(str::trim),
+                Ok("1") | Ok("true")
+            ),
         }
     }
 }

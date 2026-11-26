@@ -460,7 +460,10 @@ async fn get_manifest(
         return http_error(StatusCode::BAD_REQUEST, "bad room name");
     }
     match store.manifest(&room) {
-        Some(m) => Json(m).into_response(),
+        Some(mut m) => {
+            m.linked_dir = None; // the host's folder is nobody else's business
+            Json(m).into_response()
+        }
         None => http_error(StatusCode::NOT_FOUND, "this workspace has no project files"),
     }
 }
@@ -468,6 +471,7 @@ async fn get_manifest(
 async fn put_manifest(
     State(app): State<Arc<AppState>>,
     Path(room): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(m): Json<Manifest>,
 ) -> Response {
@@ -492,7 +496,29 @@ async fn put_manifest(
     }
     let now = now_unix();
     let cfg = &app.cfg;
-    match store.put_manifest(&room, m, cfg.max_project_files, cfg.max_project_bytes, now) {
+    let result = match m.linked_dir.clone() {
+        // Serve from the publisher's own folder: only the computer the
+        // server runs on may ask (and only a LAN server started that way).
+        Some(dir) => {
+            if !cfg.allow_linked || !peer.ip().is_loopback() {
+                return http_error(
+                    StatusCode::FORBIDDEN,
+                    "linked project folders are only accepted from this computer",
+                );
+            }
+            store
+                .put_linked_manifest(
+                    &room,
+                    m,
+                    std::path::Path::new(&dir),
+                    cfg.max_project_files,
+                    now,
+                )
+                .map_err(|e| (vec![], e))
+        }
+        None => store.put_manifest(&room, m, cfg.max_project_files, cfg.max_project_bytes, now),
+    };
+    match result {
         Ok(saved) => {
             let summary = FilesSummary::of(&saved);
             let mut rooms = app.rooms();

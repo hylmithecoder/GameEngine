@@ -200,7 +200,11 @@ walau IP host berganti).
 - **Host on LAN** menjalankan `ilmeee-realtime` (ikut di paket Linux/Windows)
   di komputer ini: TCP **9230** (WebSocket + HTTP) dan UDP **9231** (discovery).
   *LAN password* opsional (kosong = semua orang di jaringan ini boleh join).
-  File project disimpan di komputer host (`~/.ilmeeeengine/lan-server/`).
+  Project yang di-share **tidak disalin**: Hub hanya mengirim daftar file
+  (*linked manifest*, `RT_ALLOW_LINKED=1`, hanya dari loopback) dan server
+  membaca file langsung dari folder project. Setelah file diubah, tekan
+  **Upload files** / **Share on LAN** lagi (cepat, hash di-cache). Blob salinan
+  lama di `~/.ilmeeeengine/lan-server/files/` dihapus GC (> 1 jam, tiap ~5 menit).
 - **Share a project on this computer's LAN server** = "Go online", tapi ke
   server LAN sendiri.
 - **Workspaces on this network** mencari otomatis tiap 10 detik:

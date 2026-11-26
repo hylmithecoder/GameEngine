@@ -11,14 +11,22 @@
 //!   joiner:    GET  /rooms/<room>/files       → manifest
 //!              GET  /files/blob/<hash>        (only what it does not have)
 //!
+//! Linked manifests (LAN server on the publisher's own computer): the
+//! publisher sends the manifest with `linked_dir` = its project folder and
+//! uploads nothing; blobs are then read straight from that folder, so the
+//! project is not copied a second time onto the same disk. Only accepted
+//! from loopback on a server started with `RT_ALLOW_LINKED=1` (the Hub's
+//! "Host on LAN"), and never shown to clients.
+//!
 //! Layout under `files_dir`: `blobs/<aa>/<hash>` and `manifests/<room>.json`.
 //! Blobs no manifest refers to are removed by `gc` once they are an hour old
 //! (younger ones may belong to a publish still in progress).
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
@@ -41,6 +49,10 @@ pub struct Manifest {
     pub updated_unix: u64,
     #[serde(default)]
     pub total: u64,
+    /// Project folder the files are served from (linked manifest); None =
+    /// uploaded blobs. Server-side only: stripped before a client sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_dir: Option<String>,
 }
 
 pub fn valid_hash(h: &str) -> bool {
@@ -65,6 +77,8 @@ pub struct Store {
     dir: PathBuf,
     used: AtomicU64,
     tmp_counter: AtomicU64,
+    /// hash -> (file in a linked project folder, size it had when linked).
+    linked: Mutex<HashMap<String, (PathBuf, u64)>>,
 }
 
 impl Store {
@@ -75,7 +89,9 @@ impl Store {
             dir,
             used: AtomicU64::new(0),
             tmp_counter: AtomicU64::new(0),
+            linked: Mutex::new(HashMap::new()),
         };
+        s.reindex_linked();
         let mut used = 0;
         s.for_each_blob(|_, _, len| used += len);
         s.used.store(used, Ordering::Relaxed);
@@ -98,9 +114,49 @@ impl Store {
         valid_hash(hash) && self.blob_path(hash).is_file()
     }
 
-    /// Path to read a stored blob from, if it exists.
+    /// Path to read a blob from: the stored copy, else the file of a linked
+    /// project (if it still has the size it was linked with; the client
+    /// verifies the hash, so an edited file is caught there).
     pub fn blob_file(&self, hash: &str) -> Option<PathBuf> {
-        self.has_blob(hash).then(|| self.blob_path(hash))
+        if self.has_blob(hash) {
+            return Some(self.blob_path(hash));
+        }
+        if !valid_hash(hash) {
+            return None;
+        }
+        let linked = self.linked.lock().unwrap_or_else(|e| e.into_inner());
+        let (path, size) = linked.get(hash)?;
+        let md = std::fs::metadata(path).ok()?;
+        (md.is_file() && md.len() == *size).then(|| path.clone())
+    }
+
+    fn manifests(&self) -> Vec<Manifest> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(self.dir.join("manifests")) {
+            for e in entries.flatten() {
+                if let Ok(bytes) = std::fs::read(e.path())
+                    && let Ok(m) = serde_json::from_slice::<Manifest>(&bytes)
+                {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+
+    /// Rebuilds the hash -> linked file index from the saved manifests.
+    fn reindex_linked(&self) {
+        let mut index = HashMap::new();
+        for m in self.manifests() {
+            let Some(dir) = m.linked_dir.as_deref() else {
+                continue;
+            };
+            for f in m.files {
+                let path = f.path.split('/').fold(PathBuf::from(dir), |p, c| p.join(c));
+                index.insert(f.hash, (path, f.size));
+            }
+        }
+        *self.linked.lock().unwrap_or_else(|e| e.into_inner()) = index;
     }
 
     pub fn missing(&self, hashes: &[String]) -> Vec<String> {
@@ -159,6 +215,50 @@ impl Store {
         max_total: u64,
         now: u64,
     ) -> Result<Manifest, (Vec<String>, String)> {
+        m.linked_dir = None;
+        let total = Self::check_manifest(&m, max_files, max_total)?;
+        let hashes: Vec<String> = m.files.iter().map(|f| f.hash.clone()).collect();
+        let missing = self.missing(&hashes);
+        if !missing.is_empty() {
+            return Err((missing, "upload the missing blobs first".into()));
+        }
+        self.save_manifest(room, m, total, now)
+    }
+
+    /// A manifest whose files stay in `dir` (see the module docs). Each file
+    /// must exist there with the listed size. The caller makes sure the
+    /// request comes from this computer.
+    pub fn put_linked_manifest(
+        &self,
+        room: &str,
+        mut m: Manifest,
+        dir: &Path,
+        max_files: usize,
+        now: u64,
+    ) -> Result<Manifest, String> {
+        if !dir.is_absolute() || !dir.is_dir() {
+            return Err("linked_dir must be an existing absolute folder".into());
+        }
+        // Linked files take no space here: no project size limit.
+        let total = Self::check_manifest(&m, max_files, u64::MAX).map_err(|e| e.1)?;
+        for f in &m.files {
+            let p = f.path.split('/').fold(dir.to_path_buf(), |p, c| p.join(c));
+            match std::fs::metadata(&p) {
+                Ok(md) if md.is_file() && md.len() == f.size => {}
+                _ => return Err(format!("{} changed or is missing; share again", f.path)),
+            }
+        }
+        m.linked_dir = Some(dir.to_string_lossy().into_owned());
+        let saved = self.save_manifest(room, m, total, now).map_err(|e| e.1)?;
+        self.reindex_linked();
+        Ok(saved)
+    }
+
+    fn check_manifest(
+        m: &Manifest,
+        max_files: usize,
+        max_total: u64,
+    ) -> Result<u64, (Vec<String>, String)> {
         if m.files.len() > max_files {
             return Err((vec![], format!("too many files (max {max_files})")));
         }
@@ -182,11 +282,16 @@ impl Store {
                 format!("project too large ({total} bytes, max {max_total})"),
             ));
         }
-        let hashes: Vec<String> = m.files.iter().map(|f| f.hash.clone()).collect();
-        let missing = self.missing(&hashes);
-        if !missing.is_empty() {
-            return Err((missing, "upload the missing blobs first".into()));
-        }
+        Ok(total)
+    }
+
+    fn save_manifest(
+        &self,
+        room: &str,
+        mut m: Manifest,
+        total: u64,
+        now: u64,
+    ) -> Result<Manifest, (Vec<String>, String)> {
         m.by.truncate(64);
         m.total = total;
         m.updated_unix = now;
@@ -201,6 +306,7 @@ impl Store {
 
     pub fn remove_manifest(&self, room: &str) {
         let _ = std::fs::remove_file(self.manifest_path(room));
+        self.reindex_linked();
     }
 
     fn for_each_blob(&self, mut f: impl FnMut(&Path, Option<SystemTime>, u64)) {
@@ -224,14 +330,12 @@ impl Store {
     /// Deletes blobs no manifest refers to (and stale upload temp files).
     /// Returns how many files were removed.
     pub fn gc(&self) -> usize {
+        // A linked manifest serves from its folder: a copy uploaded earlier
+        // for the same room is not needed any more.
         let mut keep = HashSet::new();
-        if let Ok(entries) = std::fs::read_dir(self.dir.join("manifests")) {
-            for e in entries.flatten() {
-                if let Ok(bytes) = std::fs::read(e.path())
-                    && let Ok(m) = serde_json::from_slice::<Manifest>(&bytes)
-                {
-                    keep.extend(m.files.into_iter().map(|f| f.hash));
-                }
+        for m in self.manifests() {
+            if m.linked_dir.is_none() {
+                keep.extend(m.files.into_iter().map(|f| f.hash));
             }
         }
         let now = SystemTime::now();
@@ -372,6 +476,34 @@ mod tests {
             .unwrap();
         assert_eq!(saved.total, 10);
         assert_eq!(s.manifest("r").unwrap().files, saved.files);
+
+        // Linked: served from the folder, never copied; refused when a file
+        // does not match.
+        let proj = dir.join("project");
+        std::fs::create_dir_all(proj.join("Assets")).unwrap();
+        std::fs::write(proj.join("Assets").join("big.bin"), b"linked data").unwrap();
+        let lh = sha(b"linked data");
+        let lm = Manifest {
+            files: vec![FileEntry {
+                path: "Assets/big.bin".into(),
+                hash: lh.clone(),
+                size: 11,
+            }],
+            ..Default::default()
+        };
+        assert!(
+            s.put_linked_manifest("l", lm.clone(), Path::new("rel"), 10, 1)
+                .is_err()
+        );
+        let mut wrong = lm.clone();
+        wrong.files[0].size = 3;
+        assert!(s.put_linked_manifest("l", wrong, &proj, 10, 1).is_err());
+        s.put_linked_manifest("l", lm, &proj, 10, 1).unwrap();
+        assert!(!s.has_blob(&lh)); // nothing copied
+        assert_eq!(s.blob_file(&lh), Some(proj.join("Assets").join("big.bin")));
+        std::fs::write(proj.join("Assets").join("big.bin"), b"edited").unwrap();
+        assert_eq!(s.blob_file(&lh), None); // changed since sharing
+        s.remove_manifest("l");
 
         // Referenced: kept. Unreferenced but young: kept (grace period).
         assert_eq!(s.gc(), 0);
