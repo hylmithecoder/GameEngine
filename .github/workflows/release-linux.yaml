@@ -102,7 +102,10 @@ jobs:
           cmake --build sdl-build --parallel
           cmake --install sdl-build
 
-          git clone --depth 1 --branch "v$KTX_VERSION" https://github.com/KhronosGroup/KTX-Software.git
+          # Its LFS objects are test images and Windows OpenCL libs, none of
+          # which the library build needs; GitHub LFS also times out at times.
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "v$KTX_VERSION" \
+            https://github.com/KhronosGroup/KTX-Software.git
           cmake -S KTX-Software -B ktx-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_INSTALL_LIBDIR=lib \
             -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_TOOLS=OFF -DKTX_FEATURE_DOC=OFF \
@@ -137,7 +140,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=0
-          for t in TestNetProtocol TestWsTransport TestCollabClient TestProjectSync \
+          for t in TestNetProtocol TestWsTransport TestCollabClient TestProjectSync TestLanDiscovery \
                    TestMcpServer TestSceneFormat TestTransformMath TestPhysics \
                    TestMovementScripts TestProcess; do
             echo "::group::$t"
@@ -145,6 +148,17 @@ jobs:
             echo "::endgroup::"
           done
           exit $failed
+
+      # The realtime server, shipped as bin/ilmeee-realtime for "Host on LAN".
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/realtime
+      - name: Build LAN server (server/realtime)
+        working-directory: server/realtime
+        run: |
+          cargo test --locked
+          cargo build --release --locked
 
       - name: Package (tar.gz)
         run: installer/linux/package.sh build "${{ steps.version.outputs.version }}" x86_64

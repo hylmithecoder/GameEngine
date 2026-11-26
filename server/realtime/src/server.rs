@@ -14,6 +14,9 @@
 //!   server: event lock {key, holder, queue} to the whole room (holder 0 = free);
 //!           the join reply carries locks[] (see locks.rs)
 //!
+//! LAN: `POST /lan/announce` + `GET /lan/nearby` (token like `/rooms`) are the
+//! rendezvous for servers on the caller's own network, see lan.rs.
+//!
 //! HTTP: `GET /rooms` (Authorization: Bearer <token>) lists the rooms for the
 //! Hub's "online workspaces" — name, who is in it, object count, last change,
 //! and the published project files (if any). The project-file endpoints
@@ -25,6 +28,7 @@
 
 use crate::config::Config;
 use crate::files::{self, Manifest, Store};
+use crate::lan;
 use crate::locks::Locks;
 use crate::persist;
 use crate::protocol::{self, Envelope, Kind, PROTOCOL_VERSION};
@@ -32,13 +36,14 @@ use crate::room::{OpIn, RoomState, now_unix};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -124,6 +129,8 @@ pub struct AppState {
     files: Option<Store>,
     next_conn: AtomicU32,
     started: Instant,
+    /// LAN servers announced from each public IP (rendezvous, lan.rs).
+    pub lan: lan::Directory,
 }
 
 impl AppState {
@@ -173,6 +180,7 @@ impl AppState {
             files,
             next_conn: AtomicU32::new(1),
             started: Instant::now(),
+            lan: lan::Directory::default(),
         })
     }
 
@@ -272,6 +280,11 @@ pub fn router(app: Arc<AppState>) -> Router {
             post(files_missing).layer(DefaultBodyLimit::max(MAX_MANIFEST_BYTES)),
         )
         .route("/files/blob/{hash}", get(get_blob).put(put_blob))
+        .route(
+            "/lan/announce",
+            post(lan_announce).layer(DefaultBodyLimit::max(16 << 10)),
+        )
+        .route("/lan/nearby", get(lan_nearby))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
 }
@@ -293,6 +306,68 @@ async fn health(State(app): State<Arc<AppState>>) -> Json<Value> {
         "peers": peers,
         "uptime_secs": app.started.elapsed().as_secs(),
     }))
+}
+
+/// Number of rooms (UDP discovery answer).
+impl AppState {
+    pub fn room_count(&self) -> usize {
+        self.rooms().len()
+    }
+}
+
+/// The address the request came from on the internet. Behind the tunnel /
+/// reverse proxy that is the first `X-Forwarded-For` entry (or `X-Real-IP`);
+/// a direct connection uses the socket address.
+fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+    let header_ip = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.trim().parse::<IpAddr>().ok())
+    };
+    let ip = header_ip("x-forwarded-for")
+        .or_else(|| header_ip("x-real-ip"))
+        .unwrap_or(peer.ip());
+    // ::ffff:a.b.c.d and a.b.c.d are the same network.
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    }
+}
+
+async fn lan_announce(
+    State(app): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let a: lan::Announce = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => return http_error(StatusCode::BAD_REQUEST, &format!("bad announcement: {e}")),
+    };
+    let ip = client_ip(&headers, peer);
+    match app.lan.announce(ip, a) {
+        Ok(()) => {
+            Json(json!({"ok": true, "ttl_secs": lan::ANNOUNCE_TTL.as_secs()})).into_response()
+        }
+        Err(msg) => http_error(StatusCode::BAD_REQUEST, msg),
+    }
+}
+
+async fn lan_nearby(
+    State(app): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = check_token(&app, &headers) {
+        return r;
+    }
+    let ip = client_ip(&headers, peer);
+    Json(json!({"hosts": app.lan.nearby(ip)})).into_response()
 }
 
 fn http_error(status: StatusCode, msg: &str) -> Response {
@@ -997,6 +1072,7 @@ pub async fn housekeeping(app: Arc<AppState>) {
             a.persist_dirty();
             if sweep {
                 a.sweep_idle();
+                a.lan.sweep();
             }
         })
         .await;

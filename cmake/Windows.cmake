@@ -97,10 +97,12 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
     src/cpp/core_engine/net/ProjectSync.cpp
+    src/cpp/core_engine/net/LanDiscovery.cpp
     src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(ilmeee_net PRIVATE ixwebsocket PUBLIC ws2_32)
+# iphlpapi: GetAdaptersAddresses (LAN discovery: interface netmasks).
+target_link_libraries(ilmeee_net PRIVATE ixwebsocket PUBLIC ws2_32 iphlpapi)
 if(ILMEEE_HAVE_TLS)
     target_compile_definitions(ilmeee_net PRIVATE ILMEEE_NET_HAVE_TLS=1)
 endif()
@@ -108,7 +110,7 @@ endif()
 # ---- stage 1: portable tests (run in CI) ------------------------------------
 
 set(ILMEEE_WINDOWS_TESTS
-    TestNetProtocol TestWsTransport TestCollabClient TestProjectSync TestMcpServer
+    TestNetProtocol TestWsTransport TestCollabClient TestProjectSync TestLanDiscovery TestMcpServer
     TestSceneFormat TestTransformMath TestPhysics TestMovementScripts TestProcess)
 
 add_executable(TestProcess test/TestProcess.cpp)
@@ -121,6 +123,8 @@ add_executable(TestCollabClient test/net/TestCollabClient.cpp)
 target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
 add_executable(TestProjectSync test/net/TestProjectSync.cpp)
 target_link_libraries(TestProjectSync PRIVATE ilmeee_net)
+add_executable(TestLanDiscovery test/net/TestLanDiscovery.cpp)
+target_link_libraries(TestLanDiscovery PRIVATE ilmeee_net)
 add_executable(TestMcpServer test/net/TestMcpServer.cpp)
 target_link_libraries(TestMcpServer PRIVATE ilmeee_net ixwebsocket)
 add_executable(TestSceneFormat test/TestSceneFormat.cpp)

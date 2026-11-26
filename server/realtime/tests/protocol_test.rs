@@ -605,3 +605,101 @@ async fn project_files_publish_and_fetch() {
     assert_eq!(alpha["peers"].as_array().unwrap().len(), 0);
     s.stop().await;
 }
+
+#[tokio::test]
+async fn lan_rendezvous_announce_and_nearby() {
+    let s = Server::start(cfg("tok")).await;
+    let body = json!({"id":"host-a","name":"Laptop A","port":9230,
+                      "addrs":["172.18.9.42","10.0.0.5"],"auth":false});
+    let (st, _) = http_req(
+        s.addr,
+        "POST",
+        "/lan/announce",
+        "wrong",
+        body.to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(st, 401);
+    let (st, out) = http_req(
+        s.addr,
+        "POST",
+        "/lan/announce",
+        "tok",
+        body.to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&out));
+    // A public address is refused (the directory only points into LANs).
+    let bad = json!({"id":"x","port":9230,"addrs":["8.8.8.8"]});
+    let (st, _) = http_req(
+        s.addr,
+        "POST",
+        "/lan/announce",
+        "tok",
+        bad.to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(st, 400);
+    // Same public IP (here: loopback) sees it.
+    let (st, out) = http_req(s.addr, "GET", "/lan/nearby", "tok", b"").await;
+    assert_eq!(st, 200);
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    let hosts = v["hosts"].as_array().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0]["id"], "host-a");
+    assert_eq!(hosts[0]["addrs"], json!(["172.18.9.42", "10.0.0.5"]));
+    let gone = json!({"id":"host-a","port":9230,"gone":true});
+    http_req(
+        s.addr,
+        "POST",
+        "/lan/announce",
+        "tok",
+        gone.to_string().as_bytes(),
+    )
+    .await;
+    let (_, out) = http_req(s.addr, "GET", "/lan/nearby", "tok", b"").await;
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert!(v["hosts"].as_array().unwrap().is_empty());
+    s.stop().await;
+}
+
+#[tokio::test]
+async fn lan_udp_discovery_answers_probe() {
+    const UDP: u16 = 39231;
+    let s = Server::start(Config {
+        discovery_port: UDP,
+        server_id: "lan-test".into(),
+        server_name: "Test host".into(),
+        ..cfg("")
+    })
+    .await;
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut buf = [0u8; 512];
+    let mut reply = None;
+    for _ in 0..20 {
+        // The responder starts with the server; retry until it is bound.
+        sock.send_to(ilmeee_realtime::lan::PROBE, ("127.0.0.1", UDP))
+            .await
+            .unwrap();
+        if let Ok(Ok((n, _))) =
+            tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut buf)).await
+        {
+            reply = Some(serde_json::from_slice::<Value>(&buf[..n]).unwrap());
+            break;
+        }
+    }
+    let r = reply.expect("no discovery answer");
+    assert_eq!(r["ilmeee"], "realtime");
+    assert_eq!(r["id"], "lan-test");
+    assert_eq!(r["name"], "Test host");
+    assert_eq!(r["port"], s.addr.port());
+    assert_eq!(r["auth"], false);
+    // Anything else is ignored.
+    sock.send_to(b"hello", ("127.0.0.1", UDP)).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), sock.recv_from(&mut buf))
+            .await
+            .is_err()
+    );
+    s.stop().await;
+}

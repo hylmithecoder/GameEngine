@@ -130,13 +130,18 @@ void MainWindow::SaveCollabSettings() {
     if (old.is_object())
       j = old;
   }
-  j["url"] = collabUrl;
-  j["token"] = collabToken;
+  // A LAN server from the Hub is for this session: keep the saved online
+  // server, token and room link (the Hub tracks LAN links itself).
+  if (!collabSessionServer) {
+    j["url"] = collabUrl;
+    j["token"] = collabToken;
+  }
   j["name"] = collabName;
   j["color"] = PackColor(collabColor);
   if (!j.contains("rooms") || !j["rooms"].is_object())
     j["rooms"] = ilmeee::net::json::object();
-  j["rooms"][projectHandler.projectPath] = collabRoom;
+  if (!collabSessionServer)
+    j["rooms"][projectHandler.projectPath] = collabRoom;
   {
     std::ofstream out(path, std::ios::trunc);
     out << j.dump(2);
@@ -229,6 +234,13 @@ void MainWindow::UpdateCollab(float deltaTime) {
         LoadCollabSettings();
       const std::string clean = SanitizeRoom(room);
       std::snprintf(collabRoom, sizeof collabRoom, "%s", clean.c_str());
+      // A workspace on a LAN server (Hub "On this network").
+      if (const char *url = std::getenv("ILMEEE_COLLAB_URL"); url && *url) {
+        const char *tok = std::getenv("ILMEEE_COLLAB_TOKEN");
+        std::snprintf(collabUrl, sizeof collabUrl, "%s", url);
+        std::snprintf(collabToken, sizeof collabToken, "%s", tok ? tok : "");
+        collabSessionServer = true;
+      }
       showCollab = true;
       PushMessage("Realtime collab: joining workspace '" + clean + "' (from the Hub)");
       StartCollab();

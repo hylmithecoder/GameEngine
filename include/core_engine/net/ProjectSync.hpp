@@ -119,5 +119,9 @@ SyncResult DownloadProject(const std::string &wsUrl, const std::string &token,
 // Where a downloaded workspace lives on this device:
 // <UserDataRoot>/workspaces/<server host>/<room>.
 std::filesystem::path WorkspaceCacheDir(const std::string &wsUrl, const std::string &room);
+// Same, under an explicit server key instead of the URL's host: LAN servers
+// use "lan-<server id>", so a copy survives the host getting a new DHCP address.
+std::filesystem::path WorkspaceCacheDirForKey(const std::string &serverKey,
+                                              const std::string &room);
 
 } // namespace ilmeee::net

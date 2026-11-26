@@ -35,6 +35,12 @@ pub struct Config {
     pub max_project_files: usize,
     /// Disk budget for all stored files together.
     pub max_storage_bytes: u64,
+    /// UDP port answering LAN discovery probes; 0 = off (the public server).
+    /// The Hub's "Host on LAN" sets 9231.
+    pub discovery_port: u16,
+    /// Stable id + display name in discovery answers.
+    pub server_id: String,
+    pub server_name: String,
 }
 
 impl Default for Config {
@@ -56,6 +62,9 @@ impl Default for Config {
             max_project_bytes: 4 << 30,
             max_project_files: 100_000,
             max_storage_bytes: 16 << 30,
+            discovery_port: 0,
+            server_id: String::new(),
+            server_name: String::new(),
         }
     }
 }
@@ -100,6 +109,15 @@ impl Config {
             max_project_bytes: env_or("RT_MAX_PROJECT_BYTES", d.max_project_bytes),
             max_project_files: env_or("RT_MAX_PROJECT_FILES", d.max_project_files),
             max_storage_bytes: env_or("RT_MAX_STORAGE_BYTES", d.max_storage_bytes),
+            discovery_port: env_or("RT_DISCOVERY_PORT", d.discovery_port),
+            server_id: std::env::var("RT_SERVER_ID")
+                .ok()
+                .filter(|v| crate::lan::valid_id(v))
+                .unwrap_or_else(|| format!("rt-{:x}", std::process::id())),
+            server_name: std::env::var("RT_SERVER_NAME")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "Ilmeee LAN server".into()),
         }
     }
 }

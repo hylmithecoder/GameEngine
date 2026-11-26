@@ -32,6 +32,18 @@ cmake --install "$BUILD" --prefix "$STAGE"
 # Dev-only programs that the install rules also pick up.
 rm -f "$STAGE/bin/TestBackground" "$STAGE/bin/ViewPort3D"
 
+# LAN server for the Hub's "Host on LAN" (server/realtime). Rust links only
+# libc dynamically, so it needs nothing from lib/.
+RT_BIN=${RT_SERVER_BIN:-$ROOT/server/realtime/target/release/ilmeee-realtime}
+if [ -f "$RT_BIN" ]; then
+    install -m 755 "$RT_BIN" "$STAGE/bin/ilmeee-realtime"
+    echo "  + bin/ilmeee-realtime"
+elif [ -n "${CI:-}" ]; then
+    echo "::error::$RT_BIN not found (cargo build --release in server/realtime)"; exit 1
+else
+    echo "ilmeee-realtime not built: Host on LAN will be unavailable"
+fi
+
 echo "Bundling shared libraries"
 bash "$ROOT/scripts/bundle-deps.sh" "$STAGE"
 

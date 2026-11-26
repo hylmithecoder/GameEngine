@@ -323,6 +323,9 @@ public:
   size_t collabOpsSent = 0, collabOpsApplied = 0;
   bool showCollab = false;
   bool collabSettingsLoaded = false;
+  // Joined a LAN server handed over by the Hub (ILMEEE_COLLAB_URL): its URL
+  // and token are for this session only, collab.json keeps the online ones.
+  bool collabSessionServer = false;
   char collabUrl[256] = {};
   char collabToken[128] = {};
   char collabRoom[64] = {};

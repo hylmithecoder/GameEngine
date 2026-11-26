@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -43,6 +44,7 @@
 
 #include <core_engine/Process.hpp>
 #include <core_engine/UserDataDir.hpp>
+#include <core_engine/net/LanDiscovery.hpp>
 #include <core_engine/net/CollabClient.hpp>
 #include <core_engine/net/ProjectSync.hpp>
 #include <json.hpp>
@@ -241,6 +243,7 @@ struct ChildProc {
   std::string mcpToken;
   std::string publicHost; // --mcp-public-host given at launch
   std::string collabRoom;  // online workspace it was opened for ("" = none)
+  std::string collabServer; // LAN server URL it joined ("" = the online server)
   std::thread reader;
   std::atomic<bool> alive{false};
 };
@@ -473,6 +476,9 @@ public:
     }
     if (roomFetch.joinable())
       roomFetch.join();
+    StopLanServer();
+    if (lanScan.joinable())
+      lanScan.join();
     syncJob.cancel = true;
     if (syncJob.thread.joinable())
       syncJob.thread.join();
@@ -492,8 +498,11 @@ public:
   // stdout+stderr into a pipe whose reader thread feeds logStore. The
   // process is intentionally kept in the same process group so the
   // user can quit everything by closing Hub.
+  // collabUrl/collabToken: a LAN server for this session (else the editor
+  // uses the online server saved in collab.json).
   bool LaunchEditor(const std::string &projectPath, bool mcpEnabled,
-                    const std::string &collabRoom = {}) {
+                    const std::string &collabRoom = {}, const std::string &collabUrl = {},
+                    const std::string &collabToken = {}) {
     if (projectPath.empty()) {
       logStore.Push("Hub", "LaunchEditor: empty project path.");
       return false;
@@ -537,6 +546,11 @@ public:
     if (!collabRoom.empty()) {
       o.args.push_back("--collab-room");
       o.args.push_back(collabRoom);
+      if (!collabUrl.empty()) {
+        // Environment, not argv: the token stays out of process listings.
+        o.env.emplace_back("ILMEEE_COLLAB_URL", collabUrl);
+        o.env.emplace_back("ILMEEE_COLLAB_TOKEN", collabToken);
+      }
     }
 
     auto proc = std::make_shared<ilmeee::Process>();
@@ -553,6 +567,7 @@ public:
     child->projectPath = projectPath;
     child->mcpEnabled = mcpEnabled;
     child->collabRoom = collabRoom;
+    child->collabServer = collabUrl;
     if (mcpEnabled) {
       // A configured token is never logged by the editor, so remember it.
       child->mcpToken = mcpSettings.token;
@@ -769,7 +784,17 @@ private:
   ilmeee::net::CollabRoomList roomList; // guarded by roomMutex
   bool roomListValid = false;           // guarded by roomMutex
   double lastFetch = -1000.0;
+  struct WsTarget {
+    std::string url;      // ws://... or wss://...
+    std::string token;
+    std::string cacheKey; // WorkspaceCacheDirForKey; "" = derive from url
+    std::string label;    // shown on cards / messages
+    bool lan = false;
+    std::string serverId; // LAN only
+  };
+
   std::string pickForRoom; // workspace waiting for "which local project?"
+  WsTarget pickTarget;     // ... and the server it is on
   int hostProjectIdx = 0;
   char hostRoom[64] = "";
   bool hostUploadFiles = true; // "Go online" also publishes the project files
@@ -786,7 +811,35 @@ private:
     bool upload = false;
     bool openAfter = false;
     std::string room, project;
+    WsTarget target; // server the job talks to
   } syncJob;
+
+  // LAN: the server this Hub hosts (Host on LAN) and the ones found nearby.
+  struct LanHostProc {
+    std::shared_ptr<ilmeee::Process> proc;
+    std::thread reader;
+    std::atomic<bool> alive{false};
+    std::atomic<int> exitCode{0};
+  };
+  struct LanEntry {
+    ilmeee::net::LanServer server;
+    ilmeee::net::CollabRoomList rooms;
+  };
+  char lanPassword[64] = "";
+  std::string lanServerId; // stable id of this computer's LAN server
+  std::shared_ptr<LanHostProc> lanHost;
+  std::string lanHostError;
+  std::thread lanAnnouncer;
+  std::atomic<bool> lanAnnounceStop{false};
+  std::condition_variable lanCv;
+  std::mutex lanMutex;                 // guards the fields below + lanCv
+  std::string lanAnnounceStatus;
+  std::vector<LanEntry> lanFound;
+  std::string lanRendezvousError;
+  bool lanScanned = false;
+  std::thread lanScan;
+  std::atomic<bool> lanScanning{false};
+  double lastLanScan = -1000.0;
   std::string syncMessage; // last outcome, shown on the Online page
   bool syncMessageError = false;
 
@@ -1057,10 +1110,40 @@ private:
     ImGui::Dummy(ImVec2(0, 8));
   }
 
-  // ---------------- Online workspaces ----------------
+  // ---------------- Online + LAN workspaces ----------------
+  //
+  // A workspace lives on a realtime server: the online one (Settings below)
+  // or a server on this network (Host on LAN, or found by LAN discovery).
+  // Everything that joins, downloads or uploads takes the WsTarget it is for.
+  WsTarget OnlineTarget() const {
+    return {onlineUrl, onlineToken, "", "online server", false, ""};
+  }
+
+  WsTarget LanTargetFor(const ilmeee::net::LanServer &s) const {
+    return {s.WsUrl(), lanPassword, "lan-" + s.id,
+            (s.name.empty() ? s.id : s.name) + " (" + s.host + ")", true, s.id};
+  }
+
+  // The LAN server this Hub runs (Host on LAN), reached over loopback.
+  WsTarget OwnLanTarget() const {
+    ilmeee::net::LanServer s;
+    s.id = lanServerId;
+    s.name = std::string(onlineName) + " (this computer)";
+    s.host = "127.0.0.1";
+    s.port = ilmeee::net::kLanServerPort;
+    WsTarget t = LanTargetFor(s);
+    t.label = "this computer (LAN)";
+    return t;
+  }
+
+  fs::path CacheDirFor(const WsTarget &t, const std::string &room) const {
+    return t.cacheKey.empty() ? ilmeee::net::WorkspaceCacheDir(t.url, room)
+                              : ilmeee::net::WorkspaceCacheDirForKey(t.cacheKey, room);
+  }
+
   void LoadOnlineSettings() {
     onlineLoaded = true;
-    const json j = ReadCollabJson();
+    json j = ReadCollabJson();
     std::snprintf(onlineUrl, sizeof onlineUrl, "%s",
                   j.value("url", std::string(ilmeee::net::kCollabDefaultUrl)).c_str());
     std::snprintf(onlineToken, sizeof onlineToken, "%s", j.value("token", std::string()).c_str());
@@ -1072,6 +1155,23 @@ private:
       name = u && *u ? u : "editor";
     }
     std::snprintf(onlineName, sizeof onlineName, "%s", name.c_str());
+    std::snprintf(lanPassword, sizeof lanPassword, "%s",
+                  j.value("lanPassword", std::string()).c_str());
+    lanServerId = j.value("lanServerId", std::string());
+    const bool idOk = lanServerId.size() >= 8 &&
+                      std::all_of(lanServerId.begin(), lanServerId.end(),
+                                  [](unsigned char c) { return std::isalnum(c); });
+    if (!idOk) {
+      // Stable id of this computer's LAN server: copies downloaded from it
+      // are found again after the router hands out a new address.
+      static const char *hex = "0123456789abcdef";
+      std::random_device rd;
+      lanServerId = "h";
+      for (int i = 0; i < 15; ++i)
+        lanServerId += hex[rd() & 15];
+      j["lanServerId"] = lanServerId;
+      WriteCollabJson(j);
+    }
   }
 
   void SaveOnlineSettings() {
@@ -1079,31 +1179,42 @@ private:
     j["url"] = std::string(onlineUrl);
     j["token"] = std::string(onlineToken);
     j["name"] = std::string(onlineName);
+    j["lanPassword"] = std::string(lanPassword);
     WriteCollabJson(j);
   }
 
-  // Local project linked to a workspace (collab.json rooms[path] == room).
-  std::string LocalCopyOf(const std::string &room) {
+  // collab.json links a local folder to a workspace: rooms[path] = room for
+  // the online server (the editor uses the same map), lanRooms[path] =
+  // "<server id>/<room>" for LAN servers.
+  static std::string LinkValue(const WsTarget &t, const std::string &room) {
+    return t.lan ? t.serverId + "/" + room : room;
+  }
+  static const char *LinkMap(const WsTarget &t) { return t.lan ? "lanRooms" : "rooms"; }
+
+  std::string LocalCopyOf(const std::string &room, const WsTarget &t) {
     const json j = ReadCollabJson();
-    if (auto r = j.find("rooms"); r != j.end() && r->is_object())
+    const std::string want = LinkValue(t, room);
+    if (auto r = j.find(LinkMap(t)); r != j.end() && r->is_object())
       for (auto it = r->begin(); it != r->end(); ++it) {
         std::error_code ec;
-        if (it->is_string() && it->get<std::string>() == room && fs::is_directory(it.key(), ec))
+        if (it->is_string() && it->get<std::string>() == want && fs::is_directory(it.key(), ec))
           return it.key();
       }
     return {};
   }
 
-  void LinkLocalCopy(const std::string &path, const std::string &room) {
+  void LinkLocalCopy(const std::string &path, const std::string &room, const WsTarget &t) {
     json j = ReadCollabJson();
-    if (!j.contains("rooms") || !j["rooms"].is_object())
-      j["rooms"] = json::object();
+    const char *map = LinkMap(t);
+    const std::string value = LinkValue(t, room);
+    if (!j.contains(map) || !j[map].is_object())
+      j[map] = json::object();
     // One folder per workspace: linking a new one replaces the old link.
-    for (auto it = j["rooms"].begin(); it != j["rooms"].end();)
-      it = (it->is_string() && it->get<std::string>() == room && it.key() != path)
-               ? j["rooms"].erase(it)
+    for (auto it = j[map].begin(); it != j[map].end();)
+      it = (it->is_string() && it->get<std::string>() == value && it.key() != path)
+               ? j[map].erase(it)
                : std::next(it);
-    j["rooms"][path] = room;
+    j[map][path] = value;
     WriteCollabJson(j);
   }
 
@@ -1126,13 +1237,18 @@ private:
     });
   }
 
-  void OpenWorkspace(const std::string &projectPath, const std::string &room) {
-    LinkLocalCopy(projectPath, room);
+  void OpenWorkspace(const std::string &projectPath, const std::string &room,
+                     const WsTarget &t) {
+    LinkLocalCopy(projectPath, room, t);
     AddOrUpdateProject(projectPath, "");
     const size_t idx = IndexOf(projectPath);
     const bool mcp = idx < projects.size() && projects[idx].mcpEnabled;
     hostProjectIdx = 0; // AddOrUpdateProject moved it to the top
-    if (LaunchEditor(projectPath, mcp, room) && idx < projects.size()) {
+    // The online server is the editor's saved default; a LAN server is
+    // handed over for this session only.
+    if (LaunchEditor(projectPath, mcp, room, t.lan ? t.url : std::string(),
+                     t.lan ? t.token : std::string()) &&
+        idx < projects.size()) {
       projects[idx].lastOpened = TodayIsoDate();
       SaveRecentProjects(projects);
     }
@@ -1167,18 +1283,17 @@ private:
     return buf;
   }
 
-  // True for folders the Hub downloaded (WorkspaceCacheDir), as opposed to a
-  // project the user made: only those are refreshed from the server on Join.
-  bool IsDownloadedCopy(const std::string &path, const std::string &room) {
+  // True for folders the Hub downloaded (the workspace cache), as opposed to
+  // a project the user made: only those are refreshed from the server on Join.
+  bool IsDownloadedCopy(const std::string &path, const std::string &room, const WsTarget &t) {
     std::error_code ec;
-    const fs::path cache = ilmeee::net::WorkspaceCacheDir(onlineUrl, room);
-    return fs::equivalent(fs::path(path), cache, ec) && !ec;
+    return fs::equivalent(fs::path(path), CacheDirFor(t, room), ec) && !ec;
   }
 
   // Runs PublishProject / DownloadProject on a worker; PollSyncJob opens the
   // editor when it is done (if openAfter).
   void StartSync(bool upload, const std::string &project, const std::string &room,
-                 bool openAfter) {
+                 bool openAfter, const WsTarget &t) {
     if (syncJob.running)
       return;
     if (syncJob.thread.joinable())
@@ -1187,6 +1302,7 @@ private:
     syncJob.openAfter = openAfter;
     syncJob.room = room;
     syncJob.project = project;
+    syncJob.target = t;
     syncJob.cancel = false;
     syncJob.finished = false;
     {
@@ -1196,9 +1312,10 @@ private:
     }
     syncMessage.clear();
     syncJob.running = true;
-    const std::string url = onlineUrl, token = onlineToken, by = onlineName;
+    const std::string url = t.url, token = t.token, by = onlineName;
     logStore.Push("Hub", std::string(upload ? "Uploading " : "Downloading ") +
-                             "project files for workspace '" + room + "'...");
+                             "project files for workspace '" + room + "' (" + t.label +
+                             ")...");
     syncJob.thread = std::thread([this, upload, url, token, by, room, project] {
       auto progress = [this](const ilmeee::net::SyncStatus &st) {
         std::lock_guard<std::mutex> lock(syncJob.mutex);
@@ -1239,7 +1356,7 @@ private:
       if (!syncJob.upload && !r.failed.empty() && r.failed.size() < r.files &&
           syncJob.openAfter) {
         syncMessage += " - opening with the files that did arrive (see Logs)";
-        OpenWorkspace(syncJob.project, syncJob.room);
+        OpenWorkspace(syncJob.project, syncJob.room, syncJob.target);
       }
       return;
     }
@@ -1260,8 +1377,9 @@ private:
     syncMessageError = false;
     logStore.Push("Hub", syncMessage);
     lastFetch = -1000.0; // show the new file info right away
+    lastLanScan = -1000.0;
     if (syncJob.openAfter)
-      OpenWorkspace(syncJob.project, syncJob.room);
+      OpenWorkspace(syncJob.project, syncJob.room, syncJob.target);
   }
 
   void DrawSyncProgress() {
@@ -1296,17 +1414,364 @@ private:
     }
   }
 
+  // ---- LAN server hosted by this Hub ----------------------------------------
+
+  // ilmeee-realtime next to the Hub (installed), else the cargo build in the
+  // repo (development: build/bin -> server/realtime/target/...).
+  static std::string FindRealtimeServerBinary() {
+    const std::string sib = ilmeee::SiblingExecutable("ilmeee-realtime");
+    std::error_code ec;
+    if (fs::exists(sib, ec))
+      return sib;
+    const fs::path exe = ilmeee::ExecutableDir();
+#ifdef _WIN32
+    const char *name = "ilmeee-realtime.exe";
+#else
+    const char *name = "ilmeee-realtime";
+#endif
+    for (const char *profile : {"release", "debug"}) {
+      const fs::path p = exe / ".." / ".." / "server" / "realtime" / "target" / profile / name;
+      if (fs::exists(p, ec))
+        return fs::weakly_canonical(p, ec).string();
+    }
+    return {};
+  }
+
+  bool LanHosting() const { return lanHost && lanHost->alive; }
+
+  void StartLanServer() {
+    if (LanHosting())
+      return;
+    StopLanServer();
+    lanHostError.clear();
+    const std::string bin = FindRealtimeServerBinary();
+    if (bin.empty()) {
+      lanHostError = "ilmeee-realtime was not found next to the Hub (or in "
+                     "server/realtime/target: run `cargo build --release` there).";
+      logStore.Push("Hub", lanHostError);
+      return;
+    }
+    ilmeee::ProcessOptions o;
+    o.program = bin;
+    o.env = {{"HOST", "0.0.0.0"},
+             {"PORT", std::to_string(ilmeee::net::kLanServerPort)},
+             {"RT_DISCOVERY_PORT", std::to_string(ilmeee::net::kLanDiscoveryPort)},
+             {"RT_SERVER_ID", lanServerId},
+             {"RT_SERVER_NAME", std::string(onlineName)},
+             {"ILMEEE_RT_TOKEN", std::string(lanPassword)},
+             {"RT_DATA_DIR", ilmeee::net::PathToUtf8(ilmeee::UserDataRoot() / "lan-server")}};
+    auto host = std::make_shared<LanHostProc>();
+    host->proc = std::make_shared<ilmeee::Process>();
+    std::string error;
+    if (!host->proc->Start(o, error)) {
+      lanHostError = "Could not start the LAN server: " + error;
+      logStore.Push("Hub", lanHostError);
+      return;
+    }
+    host->alive = true;
+    LogStore *store = &logStore;
+    host->reader = std::thread([host, store] {
+      // Drain the pipe (a full pipe would block the server) into the log.
+      std::string buf;
+      char chunk[4096];
+      long n;
+      while ((n = host->proc->Read(chunk, sizeof chunk)) > 0) {
+        buf.append(chunk, (size_t)n);
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+          std::string line = StripAnsi(buf.substr(0, pos));
+          buf.erase(0, pos + 1);
+          if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+          if (!line.empty())
+            store->Push("LAN server", line);
+        }
+      }
+      int code = 0;
+      host->proc->TryWait(code);
+      host->exitCode = code;
+      host->alive = false;
+    });
+    lanHost = host;
+    logStore.Push("Hub", "LAN server started on port " +
+                             std::to_string(ilmeee::net::kLanServerPort) + " (" +
+                             (lanPassword[0] ? "password protected" : "open to this network") +
+                             ")");
+    // Announce on the online server so devices on another subnet of this
+    // network find it too (only when an online token is configured).
+    lanAnnounceStop = false;
+    const std::string url = onlineUrl, token = onlineToken;
+    ilmeee::net::LanAnnouncement ann{lanServerId, onlineName, ilmeee::net::kLanServerPort,
+                                     lanPassword[0] != '\0', {}};
+    lanAnnouncer = std::thread([this, url, token, ann]() mutable {
+      if (token.empty() || url.empty()) {
+        std::lock_guard<std::mutex> lock(lanMutex);
+        lanAnnounceStatus = "not announced online (no online server token)";
+        return;
+      }
+      std::unique_lock<std::mutex> lock(lanMutex);
+      while (!lanAnnounceStop) {
+        ann.addrs = ilmeee::net::LocalLanAddresses(); // the address may change
+        lock.unlock();
+        std::string err;
+        const bool ok = !ann.addrs.empty() &&
+                        ilmeee::net::AnnounceLan(url, token, ann, false, err);
+        lock.lock();
+        lanAnnounceStatus = ok ? "also announced on the online server (other subnets)"
+                          : ann.addrs.empty() ? "no LAN address on this computer"
+                                              : "online announce failed: " + err;
+        lanCv.wait_for(lock, std::chrono::seconds(60), [this] { return lanAnnounceStop.load(); });
+      }
+      lock.unlock();
+      std::string err;
+      ilmeee::net::AnnounceLan(url, token, ann, true, err);
+    });
+    lastLanScan = ImGui::GetTime() - 8.0; // rescan shortly: show it in the list
+  }
+
+  void StopLanServer() {
+    {
+      std::lock_guard<std::mutex> lock(lanMutex);
+      lanAnnounceStop = true;
+    }
+    lanCv.notify_all();
+    if (lanAnnouncer.joinable())
+      lanAnnouncer.join();
+    if (lanHost) {
+      if (lanHost->alive && lanHost->proc)
+        lanHost->proc->Terminate();
+      if (lanHost->reader.joinable())
+        lanHost->reader.join();
+      lanHost.reset();
+      logStore.Push("Hub", "LAN server stopped.");
+    }
+  }
+
+  // ---- LAN discovery --------------------------------------------------------
+
+  void ScanLan() {
+    if (lanScanning)
+      return;
+    if (lanScan.joinable())
+      lanScan.join();
+    lanScanning = true;
+    lastLanScan = ImGui::GetTime();
+    const std::string url = onlineToken[0] ? std::string(onlineUrl) : std::string();
+    const std::string token = onlineToken, password = lanPassword;
+    lanScan = std::thread([this, url, token, password] {
+      auto found = ilmeee::net::DiscoverLanServers(url, token);
+      std::vector<LanEntry> entries;
+      for (auto &s : found.servers) {
+        LanEntry e;
+        e.server = s;
+        e.rooms = ilmeee::net::FetchCollabRooms(s.WsUrl(), password, 4);
+        entries.push_back(std::move(e));
+      }
+      {
+        std::lock_guard<std::mutex> lock(lanMutex);
+        lanFound = std::move(entries);
+        lanRendezvousError = found.rendezvousError;
+        lanScanned = true;
+      }
+      lanScanning = false;
+    });
+  }
+
+  // ---- drawing --------------------------------------------------------------
+
+  // "ONLINE" / "LAN" chip in front of a workspace name.
+  static void Badge(bool lan) {
+    const ImVec4 bg = lan ? ImVec4(0.16f, 0.42f, 0.28f, 1.0f) : ImVec4(0.18f, 0.33f, 0.55f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, bg);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 1));
+    ImGui::SmallButton(lan ? "LAN" : "ONLINE");
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine(0, 8);
+  }
+
+  // Project picker + workspace name + the button that puts it on `t`.
+  void DrawShareProject(const char *id, const WsTarget &t, bool enabled,
+                        const char *disabledWhy) {
+    ImGui::PushID(id);
+    if (projects.empty()) {
+      ImGui::TextDisabled("Add a project on the Projects page first.");
+      ImGui::PopID();
+      return;
+    }
+    hostProjectIdx = std::clamp(hostProjectIdx, 0, (int)projects.size() - 1);
+    ImGui::SetNextItemWidth(260);
+    if (ImGui::BeginCombo("##hostProject", projects[(size_t)hostProjectIdx].name.c_str())) {
+      for (int i = 0; i < (int)projects.size(); ++i)
+        if (ImGui::Selectable(projects[(size_t)i].name.c_str(), i == hostProjectIdx)) {
+          hostProjectIdx = i;
+          hostRoom[0] = '\0';
+        }
+      ImGui::EndCombo();
+    }
+    const ProjectEntry &hp = projects[(size_t)hostProjectIdx];
+    if (hostRoom[0] == '\0') {
+      const json j = ReadCollabJson();
+      std::string room = SanitizeRoomName(fs::path(hp.path).filename().string());
+      if (auto r = j.find("rooms"); r != j.end() && r->is_object())
+        if (auto it = r->find(hp.path); it != r->end() && it->is_string())
+          room = it->get<std::string>();
+      std::snprintf(hostRoom, sizeof hostRoom, "%s", room.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220);
+    ImGui::InputText("Workspace name", hostRoom, sizeof hostRoom,
+                     ImGuiInputTextFlags_CharsNoBlank);
+    ImGui::SameLine();
+    const std::string room = SanitizeRoomName(hostRoom);
+    ImGui::BeginDisabled(room.empty() || !enabled || syncJob.running);
+    if (ImGui::Button(t.lan ? "Share on LAN" : "Go online")) {
+      if (hostUploadFiles) {
+        LinkLocalCopy(hp.path, room, t);
+        StartSync(true, hp.path, room, /*openAfter=*/true, t);
+      } else {
+        OpenWorkspace(hp.path, room, t);
+      }
+      lastFetch = ImGui::GetTime() - 3.0; // refresh soon to show it
+      lastLanScan = ImGui::GetTime() - 8.0;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("%s", !enabled ? disabledWhy
+                                       : "Opens the project and joins the workspace. A new "
+                                         "(empty) workspace takes this project's current scene.");
+    ImGui::Checkbox("Upload the project files, so people without a copy can join",
+                    &hostUploadFiles);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Only files the server does not have yet are sent. Skipped: "
+                        "build/, .git/, compiled scripts, and anything listed in the "
+                        "project's .ilmeeeignore (one folder/ or *.ext per line).");
+    ImGui::PopID();
+  }
+
+  // One workspace card (online or LAN).
+  void DrawRoomCard(const ilmeee::net::CollabRoomInfo &room, const WsTarget &t) {
+    ImGui::PushID((t.url + "|" + room.name).c_str());
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, t.lan ? ImVec4(0.115f, 0.145f, 0.13f, 1.0f)
+                                                  : ImVec4(0.125f, 0.135f, 0.151f, 1.0f));
+    ImGui::BeginChild("##ws", ImVec2(0, 112), true, ImGuiWindowFlags_NoScrollbar);
+    Badge(t.lan);
+    ImGui::TextUnformatted(room.name.c_str());
+    ImGui::SameLine(0, 12);
+    ImGui::TextDisabled("%s%zu objects  -  active %s",
+                        t.lan ? ("on " + t.label + "  -  ").c_str() : "", room.objects,
+                        Ago(room.updatedUnix).c_str());
+    if (room.peers.empty()) {
+      ImGui::TextDisabled("Nobody online");
+    } else {
+      for (size_t i = 0; i < room.peers.size(); ++i) {
+        if (i)
+          ImGui::SameLine(0, 10);
+        ImGui::ColorButton("##pc", Rgb(room.peers[i].second), ImGuiColorEditFlags_NoTooltip,
+                           ImVec2(10, 10));
+        ImGui::SameLine(0, 4);
+        ImGui::TextUnformatted(room.peers[i].first.c_str());
+      }
+    }
+    if (room.hasFiles)
+      ImGui::TextDisabled("Project files: %zu (%s), uploaded %s", room.fileCount,
+                          HumanBytes(room.fileBytes).c_str(), Ago(room.filesUpdatedUnix).c_str());
+    else
+      ImGui::TextDisabled("No project files on the server: joining needs your own copy");
+    const std::string local = LocalCopyOf(room.name, t);
+    const bool downloaded = !local.empty() && IsDownloadedCopy(local, room.name, t);
+    bool openHere = false;
+    for (const auto &c : children)
+      openHere |= c->alive && c->collabRoom == room.name &&
+                  c->collabServer == (t.lan ? t.url : std::string());
+    if (local.empty())
+      ImGui::TextDisabled(room.hasFiles ? "Not on this computer yet: Join downloads it"
+                                        : "No local copy linked yet");
+    else
+      ImGui::TextDisabled("%s: %s", downloaded ? "Downloaded copy" : "Your copy", local.c_str());
+
+    const bool busy = syncJob.running;
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 26));
+    ImGui::BeginDisabled(openHere || busy);
+    if (ImGui::Button(openHere ? "Open" : "Join", ImVec2(110, 30))) {
+      if (!local.empty() && downloaded && room.hasFiles)
+        StartSync(false, local, room.name, true, t); // fetch what changed, then open
+      else if (!local.empty())
+        OpenWorkspace(local, room.name, t);
+      else if (room.hasFiles)
+        StartSync(false, ilmeee::net::PathToUtf8(CacheDirFor(t, room.name)), room.name, true, t);
+      else {
+        pickForRoom = room.name;
+        pickTarget = t;
+      }
+    }
+    ImGui::EndDisabled();
+    if (openHere && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Already open in an editor started from this Hub");
+    else if (!openHere && !busy && ImGui::IsItemHovered())
+      ImGui::SetTooltip(local.empty() && room.hasFiles
+                            ? "Downloads the project into this computer's workspace cache "
+                              "and opens it"
+                        : downloaded ? "Downloads what changed, then opens it"
+                                     : "Opens your copy and joins the workspace");
+    // Secondary actions, under the main button.
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 62));
+    ImGui::BeginDisabled(busy);
+    if (!local.empty() && !downloaded) {
+      if (ImGui::SmallButton("Upload files"))
+        StartSync(true, local, room.name, false, t);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Send your copy's current files to the server, so people "
+                          "who join get them (only changed files are sent)");
+    } else if (local.empty() || downloaded) {
+      if (ImGui::SmallButton("Use my own copy")) {
+        pickForRoom = room.name;
+        pickTarget = t;
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Link a project folder you already have instead of downloading");
+    }
+    ImGui::EndDisabled();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopID();
+    ImGui::Dummy(ImVec2(0, 4));
+  }
+
   void DrawOnlinePane() {
     if (!onlineLoaded)
       LoadOnlineSettings();
     ImGui::BeginChild("##OnlineScroll", ImVec2(0, 0), false);
     ImGui::TextWrapped(
-        "Edit a scene together in realtime. The scene is shared live; the project files "
-        "(models, textures, audio, scripts) are uploaded once by whoever puts the "
-        "project online, and downloaded by everyone who joins without a copy. Joining a "
-        "workspace that already has a scene replaces the scene of your copy with it.");
+        "Edit a scene together in realtime, through the online server or a server on "
+        "this network (LAN). The scene is shared live; the project files (models, "
+        "textures, audio, scripts) are uploaded once by whoever shares the project and "
+        "downloaded by everyone who joins without a copy.");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(420);
+    if (ImGui::InputText("Your name", onlineName, sizeof onlineName))
+      SaveOnlineSettings(); // the editor reads the same file when it joins
+    DrawSyncProgress();
     ImGui::Spacing();
 
+    if (ImGui::BeginTabBar("##wsTabs")) {
+      if (ImGui::BeginTabItem("Online server")) {
+        DrawOnlineTab();
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("On this network (LAN)")) {
+        DrawLanTab();
+        ImGui::EndTabItem();
+      }
+      ImGui::EndTabBar();
+    }
+    ImGui::EndChild();
+    DrawPickLocalCopyPopup();
+  }
+
+  void DrawOnlineTab() {
     ImGui::SetNextItemWidth(420);
     bool changed = ImGui::InputText("Server", onlineUrl, sizeof onlineUrl);
     ImGui::SetNextItemWidth(420);
@@ -1314,10 +1779,8 @@ private:
                                 showOnlineToken ? 0 : ImGuiInputTextFlags_Password);
     ImGui::SameLine();
     ImGui::Checkbox("Show##onlineToken", &showOnlineToken);
-    ImGui::SetNextItemWidth(420);
-    changed |= ImGui::InputText("Your name", onlineName, sizeof onlineName);
     if (changed)
-      SaveOnlineSettings(); // the editor reads the same file when it joins
+      SaveOnlineSettings();
 
     const bool canFetch = onlineToken[0] != '\0' && onlineUrl[0] != '\0';
     ImGui::BeginDisabled(!canFetch || fetching);
@@ -1342,146 +1805,139 @@ private:
     else if (valid)
       ImGui::TextDisabled("%zu workspace(s)", list.rooms.size());
 
-    // ---- host one of my projects ----
     ImGui::Spacing();
     ImGui::SeparatorText("Put a project online");
-    if (projects.empty()) {
-      ImGui::TextDisabled("Add a project on the Projects page first.");
-    } else {
-      hostProjectIdx = std::clamp(hostProjectIdx, 0, (int)projects.size() - 1);
-      ImGui::SetNextItemWidth(260);
-      if (ImGui::BeginCombo("##hostProject", projects[(size_t)hostProjectIdx].name.c_str())) {
-        for (int i = 0; i < (int)projects.size(); ++i)
-          if (ImGui::Selectable(projects[(size_t)i].name.c_str(), i == hostProjectIdx)) {
-            hostProjectIdx = i;
-            hostRoom[0] = '\0';
-          }
-        ImGui::EndCombo();
-      }
-      const ProjectEntry &hp = projects[(size_t)hostProjectIdx];
-      if (hostRoom[0] == '\0') {
-        const json j = ReadCollabJson();
-        std::string room = SanitizeRoomName(fs::path(hp.path).filename().string());
-        if (auto r = j.find("rooms"); r != j.end() && r->is_object())
-          if (auto it = r->find(hp.path); it != r->end() && it->is_string())
-            room = it->get<std::string>();
-        std::snprintf(hostRoom, sizeof hostRoom, "%s", room.c_str());
-      }
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(220);
-      ImGui::InputText("Workspace name", hostRoom, sizeof hostRoom,
-                       ImGuiInputTextFlags_CharsNoBlank);
-      ImGui::SameLine();
-      const std::string room = SanitizeRoomName(hostRoom);
-      ImGui::BeginDisabled(room.empty() || !canFetch || syncJob.running);
-      if (ImGui::Button("Go online")) {
-        if (hostUploadFiles) {
-          LinkLocalCopy(hp.path, room);
-          StartSync(true, hp.path, room, /*openAfter=*/true);
-        } else {
-          OpenWorkspace(hp.path, room);
-        }
-        lastFetch = ImGui::GetTime() - 3.0; // refresh soon to show it
-      }
-      ImGui::EndDisabled();
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Opens the project and joins the workspace. A new (empty) "
-                          "workspace takes this project's current scene.");
-      ImGui::Checkbox("Upload the project files, so people without a copy can join",
-                      &hostUploadFiles);
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Only files the server does not have yet are sent. Skipped: "
-                          "build/, .git/, compiled scripts, and anything listed in the "
-                          "project's .ilmeeeignore (one folder/ or *.ext per line).");
-    }
-    DrawSyncProgress();
+    DrawShareProject("online", OnlineTarget(), canFetch,
+                     "Enter the online server token first");
 
-    // ---- workspaces on the server ----
     ImGui::Spacing();
-    ImGui::SeparatorText("Workspaces on the server");
+    ImGui::SeparatorText("Workspaces on the online server");
     if (valid && list.ok && list.rooms.empty())
       ImGui::TextDisabled("No workspaces yet. Put a project online above.");
-    for (const auto &room : list.rooms) {
-      ImGui::PushID(room.name.c_str());
-      ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.135f, 0.151f, 1.0f));
-      ImGui::BeginChild("##ws", ImVec2(0, 112), true, ImGuiWindowFlags_NoScrollbar);
-      ImGui::TextUnformatted(room.name.c_str());
-      ImGui::SameLine(0, 12);
-      ImGui::TextDisabled("%zu objects  -  active %s", room.objects, Ago(room.updatedUnix).c_str());
-      if (room.peers.empty()) {
-        ImGui::TextDisabled("Nobody online");
-      } else {
-        for (size_t i = 0; i < room.peers.size(); ++i) {
-          if (i)
-            ImGui::SameLine(0, 10);
-          ImGui::ColorButton("##pc", Rgb(room.peers[i].second), ImGuiColorEditFlags_NoTooltip,
-                             ImVec2(10, 10));
-          ImGui::SameLine(0, 4);
-          ImGui::TextUnformatted(room.peers[i].first.c_str());
-        }
-      }
-      if (room.hasFiles)
-        ImGui::TextDisabled("Project files: %zu (%s), uploaded %s", room.fileCount,
-                            HumanBytes(room.fileBytes).c_str(), Ago(room.filesUpdatedUnix).c_str());
-      else
-        ImGui::TextDisabled("No project files on the server: joining needs your own copy");
-      const std::string local = LocalCopyOf(room.name);
-      const bool downloaded = !local.empty() && IsDownloadedCopy(local, room.name);
-      bool openHere = false;
-      for (const auto &c : children)
-        openHere |= c->alive && c->collabRoom == room.name;
-      if (local.empty())
-        ImGui::TextDisabled(room.hasFiles ? "Not on this computer yet: Join downloads it"
-                                          : "No local copy linked yet");
-      else
-        ImGui::TextDisabled("%s: %s", downloaded ? "Downloaded copy" : "Your copy", local.c_str());
+    const WsTarget online = OnlineTarget();
+    for (const auto &room : list.rooms)
+      DrawRoomCard(room, online);
+  }
 
-      const bool busy = syncJob.running;
-      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 26));
-      ImGui::BeginDisabled(openHere || busy);
-      if (ImGui::Button(openHere ? "Open" : "Join", ImVec2(110, 30))) {
-        if (!local.empty() && downloaded && room.hasFiles)
-          StartSync(false, local, room.name, true); // fetch what changed, then open
-        else if (!local.empty())
-          OpenWorkspace(local, room.name);
-        else if (room.hasFiles) {
-          const fs::path dir = ilmeee::net::WorkspaceCacheDir(onlineUrl, room.name);
-          StartSync(false, ilmeee::net::PathToUtf8(dir), room.name, true);
-        } else
-          pickForRoom = room.name;
-      }
-      ImGui::EndDisabled();
-      if (openHere && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Already open in an editor started from this Hub");
-      else if (!openHere && !busy && ImGui::IsItemHovered())
-        ImGui::SetTooltip(local.empty() && room.hasFiles
-                              ? "Downloads the project into this computer's workspace cache "
-                                "and opens it"
-                          : downloaded ? "Downloads what changed, then opens it"
-                                       : "Opens your copy and joins the workspace");
-      // Secondary actions, under the main button.
-      ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 132, 62));
-      ImGui::BeginDisabled(busy);
-      if (!local.empty() && !downloaded) {
-        if (ImGui::SmallButton("Upload files"))
-          StartSync(true, local, room.name, false);
-        if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("Send your copy's current files to the server, so people "
-                            "who join get them (only changed files are sent)");
-      } else if (local.empty() || downloaded) {
-        if (ImGui::SmallButton("Use my own copy"))
-          pickForRoom = room.name;
-        if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("Link a project folder you already have instead of downloading");
-      }
-      ImGui::EndDisabled();
-      ImGui::EndChild();
-      ImGui::PopStyleColor();
-      ImGui::PopID();
-      ImGui::Dummy(ImVec2(0, 4));
+  void DrawLanTab() {
+    // ---- host ----
+    ImGui::SeparatorText("Host a server on this computer");
+    ImGui::TextWrapped(
+        "Everyone on the same WiFi/LAN can join, without internet. The project files stay "
+        "on this computer.");
+    ImGui::SetNextItemWidth(260);
+    ImGui::BeginDisabled(LanHosting());
+    if (ImGui::InputText("LAN password (optional)", lanPassword, sizeof lanPassword,
+                         ImGuiInputTextFlags_Password))
+      SaveOnlineSettings();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Empty = anyone on this network can join. Others type the same "
+                        "password here to see and join its workspaces.");
+    if (lanHost && !lanHost->alive) {
+      // It stopped by itself: most likely the port is taken.
+      lanHostError = "The LAN server stopped (exit " + std::to_string(lanHost->exitCode.load()) +
+                     "). Is port " + std::to_string(ilmeee::net::kLanServerPort) +
+                     " already used? See Logs.";
+      StopLanServer();
     }
-    ImGui::EndChild();
-    DrawPickLocalCopyPopup();
+    if (!LanHosting()) {
+      if (ImGui::Button("Host on LAN", ImVec2(150, 0)))
+        StartLanServer();
+      if (!lanHostError.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", lanHostError.c_str());
+      }
+    } else {
+      if (ImGui::Button("Stop hosting", ImVec2(150, 0)))
+        StopLanServer();
+      ImGui::SameLine();
+      std::string addrs;
+      for (const auto &a : ilmeee::net::LocalLanAddresses())
+        addrs += (addrs.empty() ? "" : ", ") + a + ":" +
+                 std::to_string(ilmeee::net::kLanServerPort);
+      ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f), "Hosting at %s",
+                         addrs.empty() ? "(no LAN address)" : addrs.c_str());
+      std::string status;
+      {
+        std::lock_guard<std::mutex> lock(lanMutex);
+        status = lanAnnounceStatus;
+      }
+      if (!status.empty())
+        ImGui::TextDisabled("%s", status.c_str());
+      ImGui::TextDisabled("If others cannot find it: allow TCP %u and UDP %u in this "
+                          "computer's firewall.",
+                          (unsigned)ilmeee::net::kLanServerPort,
+                          (unsigned)ilmeee::net::kLanDiscoveryPort);
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Share a project on this computer's LAN server");
+    DrawShareProject("lan", OwnLanTarget(), LanHosting(), "Press 'Host on LAN' first");
+
+    // ---- discovered ----
+    ImGui::Spacing();
+    ImGui::SeparatorText("Workspaces on this network");
+    ImGui::BeginDisabled(lanScanning);
+    if (ImGui::Button(lanScanning ? "Searching..." : "Search again"))
+      ScanLan();
+    ImGui::EndDisabled();
+    if (!lanScanning && ImGui::GetTime() - lastLanScan > 10.0)
+      ScanLan(); // keep it live while the tab is open
+
+    std::vector<LanEntry> found;
+    std::string rendezvousError;
+    bool scanned;
+    {
+      std::lock_guard<std::mutex> lock(lanMutex);
+      found = lanFound;
+      rendezvousError = lanRendezvousError;
+      scanned = lanScanned;
+    }
+    ImGui::SameLine();
+    if (!scanned)
+      ImGui::TextDisabled("Looking for servers on this network...");
+    else
+      ImGui::TextDisabled("%zu server(s) found", found.size());
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Found by broadcast on this subnet%s. Only servers this computer can "
+                        "actually reach are listed.",
+                        onlineToken[0] ? " and through the online server (other subnets of "
+                                         "the same WiFi)"
+                                       : "");
+    if (!onlineToken[0])
+      ImGui::TextDisabled("Tip: with an online server token set, hosts on another subnet of "
+                          "this WiFi (e.g. 172.18.9.x vs 172.18.10.x) are found too.");
+    else if (!rendezvousError.empty())
+      ImGui::TextDisabled("Online lookup unavailable (%s): only this subnet is searched.",
+                          rendezvousError.c_str());
+
+    if (scanned && found.empty())
+      ImGui::TextDisabled("No LAN server found. Someone has to press 'Host on LAN' (or the "
+                          "network blocks device-to-device traffic: use the online server).");
+    for (const auto &e : found) {
+      const WsTarget t = LanTargetFor(e.server);
+      ImGui::Spacing();
+      ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.65f, 1.0f), "%s",
+                         (e.server.name.empty() ? e.server.id : e.server.name).c_str());
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s:%u%s%s", e.server.host.c_str(), (unsigned)e.server.port,
+                          e.server.id == lanServerId ? "  (this computer)" : "",
+                          e.server.viaRendezvous && !e.server.viaBroadcast
+                              ? "  (other subnet, via online server)"
+                              : "");
+      if (!e.rooms.ok) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "  %s",
+                           e.rooms.status == 401
+                               ? "Password protected: type its password in 'LAN password' above"
+                               : e.rooms.error.c_str());
+        continue;
+      }
+      if (e.rooms.rooms.empty())
+        ImGui::TextDisabled("  No workspaces on it yet.");
+      for (const auto &room : e.rooms.rooms)
+        DrawRoomCard(room, t);
+    }
   }
 
   // "Which folder is your copy of <workspace>?"
@@ -1492,8 +1948,8 @@ private:
     if (!ImGui::BeginPopupModal("Choose your copy", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
       return;
     ImGui::TextWrapped("Which folder on this computer is your copy of the project for "
-                       "workspace '%s'? Its scene will be replaced by the workspace's.",
-                       pickForRoom.c_str());
+                       "workspace '%s' (%s)? Its scene will be replaced by the workspace's.",
+                       pickForRoom.c_str(), pickTarget.label.c_str());
     ImGui::Spacing();
     std::string chosen;
     for (const auto &p : projects)
@@ -1513,7 +1969,7 @@ private:
       ImGui::CloseCurrentPopup();
     }
     if (!chosen.empty()) {
-      OpenWorkspace(chosen, pickForRoom);
+      OpenWorkspace(chosen, pickForRoom, pickTarget);
       pickForRoom.clear();
       ImGui::CloseCurrentPopup();
     }

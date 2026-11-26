@@ -46,6 +46,18 @@ copy_deps() {
         done < <(find "$STAGE" -maxdepth 1 \( -iname '*.exe' -o -iname '*.dll' \) -print0)
     done
 }
+# LAN server for the Hub's "Host on LAN" (server/realtime, built by cargo in
+# CI with a static C runtime, so it needs no extra DLL).
+RT_BIN=${RT_SERVER_BIN:-$ROOT/server/realtime/target/release/ilmeee-realtime.exe}
+if [ -f "$RT_BIN" ]; then
+    cp "$RT_BIN" "$STAGE/ilmeee-realtime.exe"
+    echo "  + ilmeee-realtime.exe"
+elif [ -n "${CI:-}" ]; then
+    echo "::error::$RT_BIN not found (cargo build --release in server/realtime)"; exit 1
+else
+    echo "ilmeee-realtime.exe not built: Host on LAN will be unavailable"
+fi
+
 echo "Bundling DLL dependencies"
 copy_deps
 

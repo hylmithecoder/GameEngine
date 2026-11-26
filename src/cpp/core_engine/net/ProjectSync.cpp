@@ -903,6 +903,10 @@ fs::path WorkspaceCacheDir(const std::string &wsUrl, const std::string &room) {
   std::string host = CollabHttpBase(wsUrl);
   if (auto p = host.find("://"); p != std::string::npos)
     host = host.substr(p + 3);
+  return WorkspaceCacheDirForKey(host, room);
+}
+
+fs::path WorkspaceCacheDirForKey(const std::string &host, const std::string &room) {
   std::string safeHost;
   for (char c : host)
     safeHost += (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-') ? c : '_';

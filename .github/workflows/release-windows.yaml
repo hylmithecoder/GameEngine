@@ -93,6 +93,21 @@ jobs:
           done
           exit $failed
 
+      # The realtime server, shipped as ilmeee-realtime.exe for "Host on LAN".
+      # MSVC target (preinstalled rustup) with a static C runtime: no
+      # vcruntime140.dll needed on the user's PC.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/realtime
+      - name: Build LAN server (server/realtime)
+        shell: pwsh
+        working-directory: server/realtime
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: |
+          rustup default stable
+          cargo build --release --locked
+
       # Inno Setup is not part of every runner image; choco is a no-op when present.
       - name: Install Inno Setup
         shell: pwsh

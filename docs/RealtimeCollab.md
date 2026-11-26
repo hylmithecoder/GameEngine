@@ -189,6 +189,44 @@ bisa langsung join:
   cache akan ditimpa versi server saat Join berikutnya (scene tetap aman, karena
   scene datang dari room). Upload hanya dari salinan asli.
 
+### Di jaringan lokal (LAN) tanpa internet
+
+Hub → **Online Workspaces** punya dua tab: **Online server** dan **On this
+network (LAN)**. Kartu workspace diberi label `ONLINE` (biru) atau `LAN`
+(hijau), dan salinan hasil download disimpan terpisah
+(`~/.ilmeeeengine/workspaces/lan-<id server>/<workspace>/`, jadi tetap ketemu
+walau IP host berganti).
+
+- **Host on LAN** menjalankan `ilmeee-realtime` (ikut di paket Linux/Windows)
+  di komputer ini: TCP **9230** (WebSocket + HTTP) dan UDP **9231** (discovery).
+  *LAN password* opsional (kosong = semua orang di jaringan ini boleh join).
+  File project disimpan di komputer host (`~/.ilmeeeengine/lan-server/`).
+- **Share a project on this computer's LAN server** = "Go online", tapi ke
+  server LAN sendiri.
+- **Workspaces on this network** mencari otomatis tiap 10 detik:
+  1. *Broadcast UDP* ke alamat broadcast tiap interface, dihitung dari netmask
+     asli (WiFi `/16` → `172.18.255.255`, bukan tebakan `x.x.x.255`), plus
+     `255.255.255.255`. Menjangkau satu subnet, tanpa internet.
+  2. *Rendezvous* lewat server online (kalau token online diisi): host LAN
+     mengumumkan IP LAN-nya tiap menit ke `POST /lan/announce`; server
+     mengelompokkannya per IP publik. Device lain di WiFi yang sama (IP publik
+     sama) mendapat daftarnya dari `GET /lan/nearby` lalu konek **langsung** ke
+     IP LAN itu. Ini yang menemukan host di subnet lain, mis. `172.18.9.42` ↔
+     `172.18.10.4` yang masing-masing `/24`. Server online hanya menyimpan
+     alamat, bukan data/asset.
+  3. Tiap alamat dicek `GET /health` dulu; yang tidak bisa dijangkau (AP
+     *client isolation*) tidak ditampilkan → pakai server online.
+- Editor yang dibuka dari kartu LAN mendapat URL/token server LAN lewat
+  environment (`ILMEEE_COLLAB_URL`, `ILMEEE_COLLAB_TOKEN`) hanya untuk sesi itu;
+  setting server online di `collab.json` tidak berubah.
+- Firewall: buka TCP 9230 + UDP 9231 di komputer host (Windows menanyakannya
+  saat pertama kali Host on LAN; NixOS: `networking.firewall.allowedTCPPorts`
+  / `allowedUDPPorts`).
+
+Server: `RT_DISCOVERY_PORT` (0 = mati, default; Hub memakai 9231),
+`RT_SERVER_ID`, `RT_SERVER_NAME`. Kode: `server/realtime/src/lan.rs`,
+`include/core_engine/net/LanDiscovery.hpp`.
+
 ## 3. Jalankan lokal (dev)
 
 ```bash
@@ -207,6 +245,8 @@ ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestCollabC
 ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ./build/bin/TestProjectSync
 # + cek "1 file gagal tidak menghentikan yang lain" (menghapus blob di server):
 ILMEEE_RT_URL=... ILMEEE_RT_TOKEN=dev ILMEEE_RT_FILES_DIR=server/realtime/data/files ./build/bin/TestProjectSync
+# LAN: server dengan RT_DISCOVERY_PORT=9231 RT_SERVER_ID=lan-test, lalu
+ILMEEE_RT_URL=ws://127.0.0.1:9230/ws ILMEEE_RT_TOKEN=dev ILMEEE_LAN_UDP=9231 ./build/bin/TestLanDiscovery
 ```
 
 ## 4. Protokol (untuk tool lain)

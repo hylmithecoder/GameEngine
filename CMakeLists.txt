@@ -222,6 +222,7 @@ add_library(ilmeee_net STATIC
     src/cpp/core_engine/net/McpServer.cpp
     src/cpp/core_engine/net/CollabClient.cpp
     src/cpp/core_engine/net/ProjectSync.cpp
+    src/cpp/core_engine/net/LanDiscovery.cpp
     src/cpp/core_engine/Process.cpp
 )
 target_include_directories(ilmeee_net PUBLIC ${CMAKE_SOURCE_DIR}/include)
@@ -245,6 +246,8 @@ add_executable(TestCollabClient test/net/TestCollabClient.cpp)
 target_link_libraries(TestCollabClient PRIVATE ilmeee_net glm::glm)
 add_executable(TestProjectSync test/net/TestProjectSync.cpp)
 target_link_libraries(TestProjectSync PRIVATE ilmeee_net)
+add_executable(TestLanDiscovery test/net/TestLanDiscovery.cpp)
+target_link_libraries(TestLanDiscovery PRIVATE ilmeee_net)
 
 # Portable child process (Hub -> editor launch); spawns itself as the child.
 add_executable(TestProcess test/TestProcess.cpp)
